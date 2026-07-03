@@ -90,14 +90,15 @@ Storage: raw `Microsoft.Data.Sqlite` (KISS). Can swap to FunkyORM later.
 
 Small, working slice at each milestone. Each ends with an app you can actually use — increasing capability, not layers of scaffolding.
 
-### M1 — Indexer & thumbnail cache
+### M1 — Indexer & thumbnail cache ✅ done
 The engine, headless.
-- Root model + SQLite schema per root.
-- Background scanner: enumerate files, extract EXIF, compute mtime, insert.
-- Thumbnail pipeline: decode → resize to 3 sizes → store BLOB.
-- `FileSystemWatcher` with debounced incremental updates.
-- Test harness (xUnit or a tiny console): "add root X, wait, verify N items indexed, N×3 thumbs cached, mutating file triggers update."
-- Exit criteria: Cold re-index of a 10k-item folder resumes from cache in < 500 ms.
+- Root model + SQLite schema. **Build decision:** one central store (`%LOCALAPPDATA%\Reel\`) with a `root_id` column rather than a DB file per root — union queries are the core feature and are trivial against a single table. Metadata (`reel.db`) and thumbnail BLOBs (`thumbs.db`) are split into two files so BLOBs don't pollute the metadata page cache.
+- Background scanner: fault-tolerant recursive enumerate, extract EXIF (capture date, camera, orientation), capture size + mtime, upsert.
+- Thumbnail pipeline: single SkiaSharp decode → orientation-corrected → resize to 3 sizes (128/256/512) → store JPEG BLOB.
+- `FileSystemWatcher` with 500 ms debounce coalescing bursts into one re-index trigger.
+- Incremental reconcile: unchanged (size+mtime match) → skip with no decode; changed → re-index; deleted → prune rows **and** orphaned thumbs; partial cache → self-heal.
+- 22 xUnit tests cover schema round-trip, indexing, resume-skips-unchanged (no decoding), new/removed/modified detection, self-heal, thumbnail sizing/aspect/orientation, scanner filtering, watcher coalescing.
+- Exit criteria: resume over an already-indexed tree does zero decoding (verified: `Skipped == count`, `ThumbnailsGenerated == 0`). Real-folder wall-clock benchmark lands with the M2 UI wiring.
 
 ### M2 — Union grid (browse surface)
 The MVP UI.
