@@ -34,6 +34,10 @@ public sealed class MediaItem
 
     public DateTime IndexedUtc { get; init; }
 
+    public MediaKind Kind { get; init; } = MediaKind.Image;
+
+    public bool IsVideo => Kind == MediaKind.Video;
+
     /// <summary>The date to group and sort by: EXIF taken date if present, else file mtime.</summary>
     public DateTime BestDate => TakenUtc ?? MTimeUtc;
 }

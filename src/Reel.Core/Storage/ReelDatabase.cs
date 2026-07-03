@@ -64,14 +64,19 @@ public sealed class ReelDatabase
         return connection;
     }
 
-    /// <summary>Creates the schema in both files if it does not already exist.</summary>
+    /// <summary>Creates the schema in both files if it does not already exist, then applies migrations.</summary>
     public void Initialize()
     {
         using (var meta = OpenMetadata())
-        using (var cmd = meta.CreateCommand())
         {
-            cmd.CommandText = MetadataSchema;
-            cmd.ExecuteNonQuery();
+            using (var cmd = meta.CreateCommand())
+            {
+                cmd.CommandText = MetadataSchema;
+                cmd.ExecuteNonQuery();
+            }
+
+            // Migrations for databases created by earlier versions.
+            EnsureColumn(meta, "items", "kind", "INTEGER NOT NULL DEFAULT 0");
         }
 
         using (var thumbs = OpenThumbnails())
@@ -80,6 +85,21 @@ public sealed class ReelDatabase
             cmd.CommandText = ThumbnailSchema;
             cmd.ExecuteNonQuery();
         }
+    }
+
+    private static void EnsureColumn(SqliteConnection conn, string table, string column, string definition)
+    {
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = @c;";
+            check.Parameters.AddWithValue("@c", column);
+            if ((long)check.ExecuteScalar()! > 0)
+                return;
+        }
+
+        using var alter = conn.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
+        alter.ExecuteNonQuery();
     }
 
     private const string MetadataSchema = """
@@ -106,6 +126,7 @@ public sealed class ReelDatabase
             camera        TEXT,
             orientation   INTEGER,
             indexed_ticks INTEGER NOT NULL,
+            kind          INTEGER NOT NULL DEFAULT 0,
             UNIQUE(root_id, rel_path)
         );
 

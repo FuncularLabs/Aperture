@@ -68,6 +68,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public double TileSize => ZoomSizes[_zoom];
 
+    /// <summary>Index and show video files. Toggling re-indexes every root to add or drop videos.</summary>
+    public bool IncludeVideos
+    {
+        get => _library.Settings.Current.IncludeVideos;
+        set
+        {
+            if (value == _library.Settings.Current.IncludeVideos)
+                return;
+            _library.Settings.Update(s => s.IncludeVideos = value);
+            OnPropertyChanged();
+            foreach (var rootVm in Roots.ToList())
+                _ = IndexRootAsync(rootVm.Model, watchAfter: false);
+        }
+    }
+
     public string StatusText
     {
         get => _statusText;
@@ -174,8 +189,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void UpdateStatus()
     {
         StatusText = Items.Count == 0
-            ? (Roots.Count == 0 ? "No folders yet — add one to begin." : "No images in the included folders.")
-            : $"{Items.Count:n0} images";
+            ? (Roots.Count == 0 ? "No folders yet — add one to begin." : "No items in the included folders.")
+            : $"{Items.Count:n0} items";
     }
 
     // --- Indexing -----------------------------------------------------------

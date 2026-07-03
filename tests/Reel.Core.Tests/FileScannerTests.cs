@@ -23,13 +23,28 @@ public class FileScannerTests
         using var lib = new TempDir();
         TestImages.Write(lib.Combine("keep.jpg"), 100, 100);
         File.WriteAllText(lib.Combine("readme.txt"), "x");
-        File.WriteAllText(lib.Combine("movie.mp4"), "x");
         File.WriteAllText(lib.Combine("photo.heic"), "x"); // deferred format, not v1
 
         var files = FileScanner.Scan(lib.Path);
 
         var file = Assert.Single(files);
         Assert.EndsWith("keep.jpg", file.FullPath);
+    }
+
+    [Fact]
+    public void Scan_IncludesVideos_WhenEnabled()
+    {
+        using var lib = new TempDir();
+        TestImages.Write(lib.Combine("photo.jpg"), 100, 100);
+        File.WriteAllText(lib.Combine("clip.mp4"), "x"); // extension-only; scanner filters by extension
+
+        var withVideos = FileScanner.Scan(lib.Path, includeVideos: true);
+        var withoutVideos = FileScanner.Scan(lib.Path, includeVideos: false);
+
+        Assert.Equal(2, withVideos.Count);
+        Assert.Contains(withVideos, f => f.Kind == Reel.Core.Models.MediaKind.Video);
+        Assert.Single(withoutVideos);
+        Assert.DoesNotContain(withoutVideos, f => f.Kind == Reel.Core.Models.MediaKind.Video);
     }
 
     [Fact]

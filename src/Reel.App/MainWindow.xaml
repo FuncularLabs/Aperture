@@ -15,6 +15,7 @@
     </Window.InputBindings>
 
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
@@ -49,6 +50,33 @@
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="b" Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Toolbar toggle button (settings) -->
+        <Style x:Key="ToolToggle" TargetType="ToggleButton">
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="b" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                                BorderThickness="1" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#F0F3FA" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#E6EEFF" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -104,19 +132,48 @@
         <!-- Toolbar -->
         <Border DockPanel.Dock="Top" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
                 BorderThickness="0,0,0,1">
-            <StackPanel Orientation="Horizontal" Margin="12,10">
-                <Button Content="＋  Add Folder" Style="{StaticResource ToolButton}" Command="{Binding AddRootCommand}" />
-                <Button Content="Remove" Style="{StaticResource ToolButton}"
-                        Command="{Binding RemoveRootCommand}"
-                        CommandParameter="{Binding SelectedItem, ElementName=RootsList}" />
-                <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
-                <Button Content="－" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"
-                        ToolTip="Zoom out (Ctrl+-)" MinWidth="36" />
-                <Button Content="＋" Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}"
-                        ToolTip="Zoom in (Ctrl++)" MinWidth="36" />
-                <TextBlock Text="Ctrl + scroll to zoom" Foreground="{StaticResource Muted}"
-                           VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12" />
-            </StackPanel>
+            <DockPanel Margin="12,10">
+                <!-- Settings (right) -->
+                <ToggleButton x:Name="SettingsToggle" DockPanel.Dock="Right" Content="⚙  Settings"
+                              Style="{StaticResource ToolToggle}" Margin="6,0,0,0" />
+                <Popup IsOpen="{Binding IsChecked, ElementName=SettingsToggle}"
+                       PlacementTarget="{Binding ElementName=SettingsToggle}" Placement="Bottom"
+                       StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-160">
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="8" Padding="16" Width="280"
+                            Margin="8" SnapsToDevicePixels="True">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#22000000" BlurRadius="16" ShadowDepth="2" Direction="270" />
+                        </Border.Effect>
+                        <StackPanel>
+                            <TextBlock Text="SETTINGS" Foreground="{StaticResource Muted}" FontSize="11"
+                                       FontWeight="SemiBold" Margin="0,0,0,10" />
+                            <CheckBox Content="Include videos" IsChecked="{Binding IncludeVideos}"
+                                      ToolTip="Index video files and show a thumbnail from the OS shell." />
+                            <TextBlock Text="Uses the same frame Explorer shows. Re-indexes when toggled."
+                                       Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
+                                       Margin="22,2,0,0" />
+                            <TextBlock Text="More settings coming — captions, sort, cache." Foreground="{StaticResource Muted}"
+                                       FontSize="11" FontStyle="Italic" Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Popup>
+
+                <!-- Actions (left) -->
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="＋  Add Folder" Style="{StaticResource ToolButton}" Command="{Binding AddRootCommand}" />
+                    <Button Content="Remove" Style="{StaticResource ToolButton}"
+                            Command="{Binding RemoveRootCommand}"
+                            CommandParameter="{Binding SelectedItem, ElementName=RootsList}" />
+                    <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
+                    <Button Content="－" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"
+                            ToolTip="Zoom out (Ctrl+-)" MinWidth="36" />
+                    <Button Content="＋" Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}"
+                            ToolTip="Zoom in (Ctrl++)" MinWidth="36" />
+                    <TextBlock Text="Ctrl + scroll to zoom" Foreground="{StaticResource Muted}"
+                               VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12" />
+                </StackPanel>
+            </DockPanel>
         </Border>
 
         <!-- Status bar -->
@@ -167,7 +224,7 @@
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="{Binding Alias}" Foreground="{StaticResource Ink}"
                                                    FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding Count, StringFormat={}{0:n0} images}"
+                                        <TextBlock Text="{Binding Count, StringFormat={}{0:n0} items}"
                                                    Foreground="{StaticResource Muted}" FontSize="11"
                                                    TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding Status}" Style="{StaticResource RootStatus}" />
@@ -219,9 +276,19 @@
                             <Border Background="{StaticResource ThumbBg}" CornerRadius="6"
                                     Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
-                                <Image Stretch="Uniform" Margin="3"
-                                       RenderOptions.BitmapScalingMode="HighQuality"
-                                       Source="{Binding Thumbnail}" />
+                                <Grid>
+                                    <Image Stretch="Uniform" Margin="3"
+                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                           Source="{Binding Thumbnail}" />
+                                    <!-- Video badge -->
+                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="7"
+                                            Background="#B0000000" CornerRadius="10" Width="20" Height="20"
+                                            Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="▶" Foreground="White" FontSize="9"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Margin="2,0,0,0" />
+                                    </Border>
+                                </Grid>
                             </Border>
                             <TextBlock Text="{Binding Caption}" Foreground="{StaticResource Muted}"
                                        FontSize="11" TextAlignment="Center" TextTrimming="CharacterEllipsis"

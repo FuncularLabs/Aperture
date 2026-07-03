@@ -52,14 +52,7 @@ public sealed class ThumbnailGenerator
         var upright = ApplyOrigin(decoded, origin);
         try
         {
-            var thumbs = new Dictionary<ThumbSize, ThumbnailData>();
-            foreach (var size in sizes)
-            {
-                var data = Encode(upright, ThumbSizes.LongestEdge(size));
-                if (data is not null)
-                    thumbs[size] = data;
-            }
-
+            var thumbs = EncodeSizes(upright, sizes);
             if (thumbs.Count == 0)
                 return null;
 
@@ -76,6 +69,43 @@ public sealed class ThumbnailGenerator
             if (!ReferenceEquals(upright, decoded))
                 upright.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Produces thumbnails for a video (or any file the OS shell can render) by
+    /// asking the Windows shell for a frame, then downscaling it to our sizes.
+    /// Returns null if the shell can't produce a thumbnail.
+    /// </summary>
+    public ThumbnailSet? GenerateFromShell(string path, IEnumerable<ThumbSize> sizes)
+    {
+        var largest = ThumbSizes.All.Max(ThumbSizes.LongestEdge);
+        using var frame = ShellThumbnailProvider.GetBitmap(path, largest);
+        if (frame is null)
+            return null;
+
+        var thumbs = EncodeSizes(frame, sizes);
+        if (thumbs.Count == 0)
+            return null;
+
+        return new ThumbnailSet
+        {
+            SourceWidth = frame.Width,
+            SourceHeight = frame.Height,
+            Orientation = null, // shell frames are already upright
+            Thumbs = thumbs,
+        };
+    }
+
+    private static Dictionary<ThumbSize, ThumbnailData> EncodeSizes(SKBitmap upright, IEnumerable<ThumbSize> sizes)
+    {
+        var thumbs = new Dictionary<ThumbSize, ThumbnailData>();
+        foreach (var size in sizes)
+        {
+            var data = Encode(upright, ThumbSizes.LongestEdge(size));
+            if (data is not null)
+                thumbs[size] = data;
+        }
+        return thumbs;
     }
 
     private static ThumbnailData? Encode(SKBitmap upright, int longestEdge)

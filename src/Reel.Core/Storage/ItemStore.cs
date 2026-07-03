@@ -44,7 +44,7 @@ public sealed class ItemStore(ReelDatabase database)
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, root_id, rel_path, file_name, ext, size_bytes, mtime_ticks,
-                   taken_ticks, width, height, camera, orientation, indexed_ticks
+                   taken_ticks, width, height, camera, orientation, indexed_ticks, kind
             FROM items
             WHERE root_id = @root
             ORDER BY COALESCE(taken_ticks, mtime_ticks) DESC;
@@ -65,7 +65,7 @@ public sealed class ItemStore(ReelDatabase database)
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT i.id, i.root_id, i.rel_path, i.file_name, i.ext, i.size_bytes, i.mtime_ticks,
-                   i.taken_ticks, i.width, i.height, i.camera, i.orientation, i.indexed_ticks,
+                   i.taken_ticks, i.width, i.height, i.camera, i.orientation, i.indexed_ticks, i.kind,
                    r.alias, r.color_tag, r.path
             FROM items i
             JOIN roots r ON r.id = i.root_id
@@ -79,9 +79,9 @@ public sealed class ItemStore(ReelDatabase database)
             rows.Add(new LibraryRow
             {
                 Item = ReadItem(reader),
-                RootAlias = reader.GetString(13),
-                RootColor = reader.IsDBNull(14) ? null : reader.GetString(14),
-                RootPath = reader.GetString(15),
+                RootAlias = reader.GetString(14),
+                RootColor = reader.IsDBNull(15) ? null : reader.GetString(15),
+                RootPath = reader.GetString(16),
             });
         }
         return rows;
@@ -102,6 +102,7 @@ public sealed class ItemStore(ReelDatabase database)
         Camera = reader.IsDBNull(10) ? null : reader.GetString(10),
         Orientation = reader.IsDBNull(11) ? null : reader.GetInt32(11),
         IndexedUtc = new DateTime(reader.GetInt64(12), DateTimeKind.Utc),
+        Kind = (MediaKind)reader.GetInt32(13),
     };
 
     private static List<MediaItem> Read(SqliteCommand cmd)

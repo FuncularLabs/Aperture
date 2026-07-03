@@ -19,12 +19,13 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
     private readonly ThumbnailGenerator _thumbnails = thumbnails;
     private readonly MetadataReader _metadata = metadata;
 
-    public IndexResult IndexRoot(Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default)
+    public IndexResult IndexRoot(
+        Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default, bool includeVideos = true)
     {
         var nowTicks = DateTime.UtcNow.Ticks;
 
         progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning });
-        var files = FileScanner.Scan(root.Path, ct);
+        var files = FileScanner.Scan(root.Path, includeVideos, ct);
 
         var existing = new ItemStore(_db).GetExisting(root.Id);
         var thumbCounts = new ThumbnailStore(_db).GetCounts();
@@ -59,7 +60,7 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
                     // Unchanged. Only touch disk if thumbnails are incomplete.
                     if (!thumbCounts.TryGetValue(row.Id, out var count) || count < expectedThumbs)
                     {
-                        var set = _thumbnails.Generate(file.FullPath, ThumbSizes.All);
+                        var set = GenerateThumbnails(file);
                         if (set is null)
                             failed++;
                         else
@@ -69,8 +70,9 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
                 }
                 else
                 {
-                    var md = _metadata.Read(file.FullPath);
-                    var set = _thumbnails.Generate(file.FullPath, ThumbSizes.All);
+                    // Videos carry no EXIF we rely on; use file times.
+                    var md = file.Kind == MediaKind.Video ? default : _metadata.Read(file.FullPath);
+                    var set = GenerateThumbnails(file);
                     if (set is null)
                         failed++;
 
@@ -152,13 +154,18 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
         };
     }
 
+    private ThumbnailSet? GenerateThumbnails(ScannedFile file) =>
+        file.Kind == MediaKind.Video
+            ? _thumbnails.GenerateFromShell(file.FullPath, ThumbSizes.All)
+            : _thumbnails.Generate(file.FullPath, ThumbSizes.All);
+
     private static long UpsertItem(
         SqliteCommand cmd, long rootId, ScannedFile file, ImageMetadata md, ThumbnailSet? set, long nowTicks)
     {
         cmd.Parameters["@root"].Value = rootId;
         cmd.Parameters["@rel"].Value = file.RelPath;
         cmd.Parameters["@name"].Value = Path.GetFileName(file.RelPath);
-        cmd.Parameters["@ext"].Value = Path.GetExtension(file.RelPath).ToLowerInvariant();
+        cmd.Parameters["@ext"].Value = file.Ext;
         cmd.Parameters["@size"].Value = file.SizeBytes;
         cmd.Parameters["@mtime"].Value = file.MTimeTicks;
         cmd.Parameters["@taken"].Value = (object?)md.TakenLocal?.Ticks ?? DBNull.Value;
@@ -167,6 +174,7 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
         cmd.Parameters["@cam"].Value = (object?)md.Camera ?? DBNull.Value;
         cmd.Parameters["@orient"].Value = (object?)(md.Orientation ?? set?.Orientation) ?? DBNull.Value;
         cmd.Parameters["@indexed"].Value = nowTicks;
+        cmd.Parameters["@kind"].Value = (int)file.Kind;
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -211,8 +219,8 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
         var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO items (root_id, rel_path, file_name, ext, size_bytes, mtime_ticks,
-                               taken_ticks, width, height, camera, orientation, indexed_ticks)
-            VALUES (@root, @rel, @name, @ext, @size, @mtime, @taken, @w, @h, @cam, @orient, @indexed)
+                               taken_ticks, width, height, camera, orientation, indexed_ticks, kind)
+            VALUES (@root, @rel, @name, @ext, @size, @mtime, @taken, @w, @h, @cam, @orient, @indexed, @kind)
             ON CONFLICT(root_id, rel_path) DO UPDATE SET
                 file_name = excluded.file_name,
                 ext = excluded.ext,
@@ -223,10 +231,11 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
                 height = excluded.height,
                 camera = excluded.camera,
                 orientation = excluded.orientation,
-                indexed_ticks = excluded.indexed_ticks
+                indexed_ticks = excluded.indexed_ticks,
+                kind = excluded.kind
             RETURNING id;
             """;
-        foreach (var name in new[] { "@root", "@size", "@mtime", "@taken", "@w", "@h", "@orient", "@indexed" })
+        foreach (var name in new[] { "@root", "@size", "@mtime", "@taken", "@w", "@h", "@orient", "@indexed", "@kind" })
             cmd.Parameters.Add(name, SqliteType.Integer);
         foreach (var name in new[] { "@rel", "@name", "@ext", "@cam" })
             cmd.Parameters.Add(name, SqliteType.Text);

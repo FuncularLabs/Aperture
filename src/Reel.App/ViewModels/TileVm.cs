@@ -23,6 +23,7 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails) : Observ
     public long ItemId => Item.Id;
     public string FileName => Item.FileName;
     public string FullPath => Row.FullPath;
+    public bool IsVideo => Item.IsVideo;
 
     /// <summary>
     /// The tile image. Reading it (which the binding does on realization) kicks a

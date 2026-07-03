@@ -1,6 +1,7 @@
 using Reel.Core.Indexing;
 using Reel.Core.Media;
 using Reel.Core.Models;
+using Reel.Core.Settings;
 using Reel.Core.Storage;
 using Reel.Core.Watching;
 
@@ -25,6 +26,9 @@ public sealed class LibraryService : IDisposable
     /// <summary>Raised (on a background thread) when a watched root's files change on disk. Argument is the root id.</summary>
     public event EventHandler<long>? RootChanged;
 
+    /// <summary>User settings (video inclusion, caption format, sort, etc.).</summary>
+    public SettingsService Settings { get; }
+
     public LibraryService() : this(ReelPaths.DefaultDataDir) { }
 
     public LibraryService(string dataDir)
@@ -35,6 +39,7 @@ public sealed class LibraryService : IDisposable
         _items = new ItemStore(_db);
         _thumbnails = new ThumbnailStore(_db);
         _indexer = new Indexer(_db, new ThumbnailGenerator(), new MetadataReader());
+        Settings = new SettingsService(dataDir);
     }
 
     // --- Roots ---------------------------------------------------------------
@@ -69,7 +74,7 @@ public sealed class LibraryService : IDisposable
 
     /// <summary>Runs a full reconcile of a root. Call on a background thread.</summary>
     public IndexResult IndexRoot(Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default) =>
-        _indexer.IndexRoot(root, progress, ct);
+        _indexer.IndexRoot(root, progress, ct, Settings.Current.IncludeVideos);
 
     // --- Watching ------------------------------------------------------------
 
