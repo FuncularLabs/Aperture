@@ -1,0 +1,33 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+*.pdb
+*.dll.config
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets
+
+## Rider
+.idea/
+
+## Publish
+publish/
+out/
+
+## Local runtime
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+appdata/
+thumbcache/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
