@@ -27,6 +27,9 @@ out/
 appdata/
 thumbcache/
 
+## Local sample data (not part of the repo)
+.sample/
+
 ## OS
 Thumbs.db
 Desktop.ini

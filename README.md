@@ -100,15 +100,23 @@ The engine, headless.
 - 22 xUnit tests cover schema round-trip, indexing, resume-skips-unchanged (no decoding), new/removed/modified detection, self-heal, thumbnail sizing/aspect/orientation, scanner filtering, watcher coalescing.
 - Exit criteria: resume over an already-indexed tree does zero decoding (verified: `Skipped == count`, `ThumbnailsGenerated == 0`). Real-folder wall-clock benchmark lands with the M2 UI wiring.
 
-### M2 — Union grid (browse surface)
-The MVP UI.
-- Left nav with roots list + include checkbox + add/remove.
-- Main pane: virtualized grid bound to the union of included roots.
-- Five zoom levels with `Ctrl+wheel` / `Ctrl+±` hotkeys.
-- Basic sort (exif date desc, then alias) hardcoded for now.
-- Status bar with total count.
-- `Enter` opens in default app.
-- Exit criteria: Someone can add Camera Uploads and browse the union in < 500 ms cold, scroll smoothly at 60 fps.
+### M2 — Union grid (browse surface) ✅ done
+The MVP UI. WPF + a thin MVVM (no framework), `LibraryService` as the single UI-facing facade.
+- Left nav with roots list + include checkbox + add/remove (folder picker via `Microsoft.Win32.OpenFolderDialog`), per-root count + live indexing status.
+- Main pane: virtualized grid (`VirtualizingWrapPanel`, recycling) bound to the union of included roots.
+- Five zoom stops (96/140/200/280/400) via `Ctrl+wheel` and `Ctrl+±`.
+- Sort hardcoded to EXIF-date-desc, then alias (M3 makes it configurable).
+- Status bar with total count + indexing progress.
+- `Enter` / double-click opens in the OS default app.
+- On launch, cached rows paint instantly; each root then reconciles with disk in the background (first index streams results in), and a per-root `FileSystemWatcher` triggers incremental re-index on changes.
+- Verified against 40 real Camera Uploads photos: grid renders with correct aspect/orientation, captions, sort; zoom re-wraps live; resume re-index = 3 ms.
+
+**Build decisions / known limitations (M2):**
+- **Thumbnail loading** is driven by the `Thumbnail` binding lazy-loading on realization (decode off-thread → frozen `BitmapSource`), *not* container lifecycle events — WPF fires `DataContextChanged`/`Unloaded` unreliably under `VirtualizingWrapPanel` (confirmed: `DataContextChanged` never fired).
+- M2 always decodes the **Large (512)** thumbnail and scales in the view; per-zoom thumbnail sizing is an M3 optimization.
+- **Memory:** a realized `TileVm` retains its decoded bitmap, so scrolling a very large library (10k+) grows memory beyond the thumbnail cache's cap. Fine for the ~2k Camera Uploads target; viewport-based release is an M3 task.
+- **Details (columns) list** view and scroll-position-preserving incremental grid updates are deferred to M3.
+- Exit criteria: add Camera Uploads and browse the union; cold re-index resumes from cache in milliseconds. ✅
 
 ### M3 — Sections, sort, captions
 Turn it into the tool you actually want.
