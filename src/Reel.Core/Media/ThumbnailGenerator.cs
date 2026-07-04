@@ -72,9 +72,36 @@ public sealed class ThumbnailGenerator
     }
 
     /// <summary>
-    /// Produces thumbnails for a video (or any file the OS shell can render) by
-    /// asking the Windows shell for a frame, then downscaling it to our sizes.
-    /// Returns null if the shell can't produce a thumbnail.
+    /// Produces thumbnails for a video: a real decoded frame via ffmpeg when
+    /// available, otherwise the Windows shell's thumbnail/icon. Returns null only
+    /// if neither can produce anything.
+    /// </summary>
+    public ThumbnailSet? GenerateVideo(string path, IEnumerable<ThumbSize> sizes)
+    {
+        var largest = ThumbSizes.All.Max(ThumbSizes.LongestEdge);
+        using var frame = VideoFrameExtractor.Extract(path, largest);
+        if (frame is not null)
+        {
+            var thumbs = EncodeSizes(frame, sizes);
+            if (thumbs.Count > 0)
+            {
+                return new ThumbnailSet
+                {
+                    SourceWidth = frame.Width,
+                    SourceHeight = frame.Height,
+                    Orientation = null,
+                    Thumbs = thumbs,
+                };
+            }
+        }
+
+        // No real frame — fall back to the shell (icon).
+        return GenerateFromShell(path, sizes);
+    }
+
+    /// <summary>
+    /// Produces thumbnails for any file the OS shell can render by asking the shell
+    /// for an image, then downscaling. Returns null if the shell produces nothing.
     /// </summary>
     public ThumbnailSet? GenerateFromShell(string path, IEnumerable<ThumbSize> sizes)
     {

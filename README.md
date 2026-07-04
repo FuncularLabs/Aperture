@@ -119,7 +119,12 @@ The MVP UI. WPF + a thin MVVM (no framework), `LibraryService` as the single UI-
 - Exit criteria: add Camera Uploads and browse the union; cold re-index resumes from cache in milliseconds. ✅
 
 ### Video thumbnails ✅ done
-Added on top of M2. Video files (`.mp4/.mov/.mkv/.webm/...`) are indexed and thumbnailed via the Windows shell (`IShellItemImageFactory`, on an STA thread) — the same frame Explorer shows. On by default, toggle in Settings; toggling re-indexes. Video tiles carry a play badge; a `kind` column (with migration) distinguishes image/video. **Limitation:** real frame thumbnails require a registered Windows thumbnail handler for the format; where none exists (e.g. VLC-associated files that ship no thumbnail provider) Reel falls back to the file-type icon. A Media Foundation frame extractor would remove that dependency (future).
+Added on top of M2. Video files (`.mp4/.mov/.mkv/.webm/...`) are indexed and thumbnailed, on by default (toggle in Settings; toggling re-indexes). Video tiles carry a play badge; a `kind` column (with migration) distinguishes image/video. Thumbnail source, in order:
+1. **A real decoded frame via ffmpeg** (`VideoFrameExtractor`) — ffmpeg carries its own codecs, so this produces frames even for files the Windows shell won't thumbnail (e.g. H.264 clips where VLC took over the association without providing a thumbnail handler — the common Android-via-Dropbox case). ffmpeg is found via `REEL_FFMPEG`, then PATH, then a copy next to the app.
+2. **The Windows shell** (`IShellItemImageFactory`, STA thread) when ffmpeg is unavailable.
+3. **The file-type icon** as a last resort, so a video tile is never blank.
+
+Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its real frame in Reel. **Note:** step 1 needs an ffmpeg binary present; bundling one with the app (or `winget install ffmpeg`) makes video frames work on any machine. Deferred: bundle ffmpeg in the publish output; smarter frame selection (skip near-black opening frames).
 
 ### M3 — Sections, sort, captions ✅ done
 - Collapsible date sections via `CollectionView` grouping + grouped `VirtualizingWrapPanel`. Header shows label + subtotal + chevron; click or `Space` toggles. Smart default collapse expands the newest ~2 screens; older sections collapsed. Bucket granularity (week/month/year) chosen from item density and **re-chosen on the filtered set**.

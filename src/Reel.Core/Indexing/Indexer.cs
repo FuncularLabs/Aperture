@@ -156,7 +156,7 @@ public sealed class Indexer(ReelDatabase database, ThumbnailGenerator thumbnails
 
     private ThumbnailSet? GenerateThumbnails(ScannedFile file) =>
         file.Kind == MediaKind.Video
-            ? _thumbnails.GenerateFromShell(file.FullPath, ThumbSizes.All)
+            ? _thumbnails.GenerateVideo(file.FullPath, ThumbSizes.All)
             : _thumbnails.Generate(file.FullPath, ThumbSizes.All);
 
     private static long UpsertItem(
