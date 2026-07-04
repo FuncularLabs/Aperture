@@ -118,25 +118,28 @@ The MVP UI. WPF + a thin MVVM (no framework), `LibraryService` as the single UI-
 - **Details (columns) list** view and scroll-position-preserving incremental grid updates are deferred to M3.
 - Exit criteria: add Camera Uploads and browse the union; cold re-index resumes from cache in milliseconds. ✅
 
-### M3 — Sections, sort, captions
-Turn it into the tool you actually want.
-- Collapsible date sections with subtotals and smart default collapse.
-- Section keyboard nav (`Ctrl+→/←`, `Space`).
-- Tokenized caption format string, editable per zoom level.
-- Multi-level sort UI with token pickers.
-- Right-click subfolder → exclude from union.
-- Filter box (`/`).
-- Exit criteria: Can browse a 50k-item union, jump by year, and switch caption format without a restart.
+### Video thumbnails ✅ done
+Added on top of M2. Video files (`.mp4/.mov/.mkv/.webm/...`) are indexed and thumbnailed via the Windows shell (`IShellItemImageFactory`, on an STA thread) — the same frame Explorer shows. On by default, toggle in Settings; toggling re-indexes. Video tiles carry a play badge; a `kind` column (with migration) distinguishes image/video. **Limitation:** real frame thumbnails require a registered Windows thumbnail handler for the format; where none exists (e.g. VLC-associated files that ship no thumbnail provider) Reel falls back to the file-type icon. A Media Foundation frame extractor would remove that dependency (future).
 
-### M4 — Polish for daily-driver status
-The "ditch File Explorer" milestone.
-- First-run wizard with auto-detection of common photo folders.
-- Root aliases (rename on demand), color tags.
-- Sort/caption presets, saved and switchable.
-- Settings pane for cache cap, thumb sizes, default zoom.
-- Persist window layout, per-root zoom, section expansion state.
-- Optional: `Space` quick-look overlay (single-image, arrows to navigate).
-- Optional: MSIX packaging or single-file `dotnet publish` script.
+### M3 — Sections, sort, captions ✅ done
+- Collapsible date sections via `CollectionView` grouping + grouped `VirtualizingWrapPanel`. Header shows label + subtotal + chevron; click or `Space` toggles. Smart default collapse expands the newest ~2 screens; older sections collapsed. Bucket granularity (week/month/year) chosen from item density and **re-chosen on the filtered set**.
+- Tokenized caption format (`{date:fmt}`, `{alias}`, `{size}`, `{dim}`, `{camera}`, `??` fallback), editable in Settings.
+- Multi-level sort engine (`SortSectioned`: date-section primary, user sort within); exposed via presets (newest/oldest/name/largest/camera).
+- Right-click tile → **hide its folder** from the view (persisted exclusions, "Show all" reset).
+- Filter box, `/` to focus, live over name/alias/camera.
+- Verified on 103 photos spanning 2013–2026: year sections with older auto-collapsed, click-collapse, filter → re-bucketed to month.
+
+**Deferred/refinement:** full sort token-picker editor (presets ship instead); folder-tree exclude UI (tile-based hide ships instead); `Ctrl+→/←` section jump (Space toggle ships).
+
+### M4 — Polish for daily-driver status ✅ done
+- **First-run welcome**: auto-detects common photo folders (Pictures, OneDrive Pictures/Camera Roll, Dropbox Camera Uploads, iCloud Photos, Screenshots) and offers them with checkboxes.
+- **Quick-look overlay** (`Space`): full-res image on a dim backdrop, `←/→` to move, `Esc`/click to close; videos show their large thumbnail.
+- Root **alias rename** (double-click or right-click → Rename), persisted; captions update.
+- **Settings pane** (popup): video toggle, date grouping, caption format, sort presets, hidden-folder reset.
+- **Persistence**: window size/position/maximized and zoom restored across runs (`settings.json`). `REEL_DATA_DIR` env var relocates the store.
+- `publish.ps1` — framework-dependent (default) or `-SelfContained` single-file publish.
+
+**Deferred/refinement:** color tags, section-expansion persistence, per-root zoom, cache-cap/thumb-size settings, MSIX packaging.
 
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
@@ -163,4 +166,14 @@ tests/
 dotnet build
 dotnet test
 dotnet run --project src\Reel.App
+
+# Build a distributable exe (needs .NET 10 Desktop Runtime on the target):
+pwsh ./publish.ps1                 # framework-dependent
+pwsh ./publish.ps1 -SelfContained  # bundles the runtime
 ```
+
+Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). Delete that folder to reset. Set `REEL_DATA_DIR` to relocate it.
+
+## Status
+
+M1–M4 complete plus video thumbnails. 42 xUnit tests over the Core engine (indexer, thumbnails, watcher, union, formatting, settings). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings). See each milestone above for what shipped and what was deferred.

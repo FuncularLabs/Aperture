@@ -52,11 +52,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SetSortCommand = new RelayCommand<string>(ApplySortPreset);
         HideFolderCommand = new RelayCommand<TileVm>(HideFolder);
         ClearExclusionsCommand = new RelayCommand(ClearExclusions);
+        OpenQuickLookCommand = new RelayCommand(OpenQuickLook, () => _tiles.Count > 0);
+        CloseQuickLookCommand = new RelayCommand(CloseQuickLook);
+        QuickLookNextCommand = new RelayCommand(() => MoveQuickLook(1));
+        QuickLookPrevCommand = new RelayCommand(() => MoveQuickLook(-1));
+
+        AddChosenFoldersCommand = new RelayCommand(AddChosenFolders);
+        SkipFirstRunCommand = new RelayCommand(SkipFirstRun);
 
         _library.RootChanged += OnRootChanged;
 
         LoadRoots();
         BuildView();
+        MaybeStartFirstRun();
     }
 
     public ThumbnailService Thumbnails { get; }
@@ -149,6 +157,134 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand SetSortCommand { get; }
     public ICommand HideFolderCommand { get; }
     public ICommand ClearExclusionsCommand { get; }
+    public ICommand OpenQuickLookCommand { get; }
+    public ICommand CloseQuickLookCommand { get; }
+    public ICommand QuickLookNextCommand { get; }
+    public ICommand QuickLookPrevCommand { get; }
+    public ICommand AddChosenFoldersCommand { get; }
+    public ICommand SkipFirstRunCommand { get; }
+
+    // --- First run ----------------------------------------------------------
+
+    private bool _showFirstRun;
+
+    public ObservableCollection<FirstRunCandidateVm> FirstRunCandidates { get; } = [];
+
+    public bool ShowFirstRun
+    {
+        get => _showFirstRun;
+        private set => SetProperty(ref _showFirstRun, value);
+    }
+
+    private void MaybeStartFirstRun()
+    {
+        if (Roots.Count > 0 || _library.Settings.Current.FirstRunDone)
+            return;
+
+        var candidates = Reel.Core.Library.FolderDetection.DetectCandidates();
+        if (candidates.Count == 0)
+        {
+            _library.Settings.Update(s => s.FirstRunDone = true);
+            return;
+        }
+
+        foreach (var c in candidates)
+            FirstRunCandidates.Add(new FirstRunCandidateVm(c.Path, c.Alias));
+        ShowFirstRun = true;
+    }
+
+    private void AddChosenFolders()
+    {
+        foreach (var candidate in FirstRunCandidates.Where(c => c.IsChosen))
+            AddRootPath(candidate.Path, candidate.Alias);
+        FinishFirstRun();
+    }
+
+    private void SkipFirstRun() => FinishFirstRun();
+
+    private void FinishFirstRun()
+    {
+        _library.Settings.Update(s => s.FirstRunDone = true);
+        FirstRunCandidates.Clear();
+        ShowFirstRun = false;
+    }
+
+    // --- Quick look ---------------------------------------------------------
+
+    private int _quickLookIndex = -1;
+    private bool _quickLookOpen;
+    private System.Windows.Media.Imaging.BitmapSource? _quickLookImage;
+    private string _quickLookCaption = "";
+
+    public bool QuickLookOpen
+    {
+        get => _quickLookOpen;
+        private set => SetProperty(ref _quickLookOpen, value);
+    }
+
+    public System.Windows.Media.Imaging.BitmapSource? QuickLookImage
+    {
+        get => _quickLookImage;
+        private set => SetProperty(ref _quickLookImage, value);
+    }
+
+    public string QuickLookCaption
+    {
+        get => _quickLookCaption;
+        private set => SetProperty(ref _quickLookCaption, value);
+    }
+
+    private void OpenQuickLook()
+    {
+        if (_tiles.Count == 0)
+            return;
+        var start = _selectedTile is not null ? _tiles.IndexOf(_selectedTile) : 0;
+        QuickLookOpen = true;
+        ShowQuickLookAt(start < 0 ? 0 : start);
+    }
+
+    private void CloseQuickLook()
+    {
+        QuickLookOpen = false;
+        QuickLookImage = null;
+        _quickLookIndex = -1;
+    }
+
+    private void MoveQuickLook(int delta)
+    {
+        if (!_quickLookOpen)
+            return;
+        ShowQuickLookAt(Math.Clamp(_quickLookIndex + delta, 0, _tiles.Count - 1));
+    }
+
+    private void ShowQuickLookAt(int index)
+    {
+        if (index < 0 || index >= _tiles.Count)
+            return;
+        _quickLookIndex = index;
+        var tile = _tiles[index];
+        SelectedTile = tile;
+        QuickLookCaption = $"{tile.FileName}   ·   {index + 1} / {_tiles.Count:n0}";
+        QuickLookImage = null;
+        LoadQuickLook(index, tile);
+    }
+
+    private async void LoadQuickLook(int index, TileVm tile)
+    {
+        var image = await Task.Run(() => tile.IsVideo
+            ? DecodeThumbnail(tile.ItemId)
+            : ImageLoading.LoadFullImage(tile.FullPath));
+
+        // Ignore if the user moved on while we decoded.
+        if (_quickLookOpen && _quickLookIndex == index)
+            QuickLookImage = image;
+    }
+
+    private System.Windows.Media.Imaging.BitmapSource? DecodeThumbnail(long itemId)
+    {
+        var bytes = _library.GetThumbnail(itemId, ThumbSize.Large);
+        return bytes is null ? null : ImageLoading.Decode(bytes, 0);
+    }
 
     public string ExclusionsSummary
     {
@@ -240,6 +376,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _zoom++;
             OnPropertyChanged(nameof(TileSize));
+            _library.Settings.Update(s => s.DefaultZoom = _zoom);
         }
     }
 
@@ -249,7 +386,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _zoom--;
             OnPropertyChanged(nameof(TileSize));
+            _library.Settings.Update(s => s.DefaultZoom = _zoom);
         }
+    }
+
+    // --- Window layout persistence ------------------------------------------
+
+    public (double? Width, double? Height, double? Left, double? Top, bool Maximized) RestoreWindow()
+    {
+        var s = _library.Settings.Current;
+        return (s.WindowWidth, s.WindowHeight, s.WindowLeft, s.WindowTop, s.WindowMaximized);
+    }
+
+    public void SaveWindow(double width, double height, double left, double top, bool maximized)
+    {
+        _library.Settings.Update(s =>
+        {
+            s.WindowWidth = width;
+            s.WindowHeight = height;
+            s.WindowLeft = left;
+            s.WindowTop = top;
+            s.WindowMaximized = maximized;
+        });
     }
 
     // --- Roots --------------------------------------------------------------
@@ -259,9 +417,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Roots.Clear();
         foreach (var root in _library.GetRoots())
         {
-            var vm = new RootVm(root, OnRootIncludedChanged) { Count = _library.CountForRoot(root.Id) };
+            var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged) { Count = _library.CountForRoot(root.Id) };
             Roots.Add(vm);
         }
+    }
+
+    private void OnRootAliasChanged(RootVm rootVm, string alias)
+    {
+        _library.SetAlias(rootVm.Id, alias);
+        BuildView(); // captions reference {alias}
     }
 
     private void AddRoot()
@@ -274,8 +438,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (Roots.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
             return; // already added
 
-        var root = _library.AddRoot(path, DeriveAlias(path));
-        var vm = new RootVm(root, OnRootIncludedChanged);
+        AddRootPath(path, DeriveAlias(path));
+    }
+
+    private void AddRootPath(string path, string alias)
+    {
+        var root = _library.AddRoot(path, alias);
+        var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged);
         Roots.Add(vm);
         _ = IndexRootAsync(root, watchAfter: true);
     }

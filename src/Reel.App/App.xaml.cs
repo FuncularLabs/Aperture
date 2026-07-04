@@ -20,7 +20,10 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += (_, args) => LogCrash(args.ExceptionObject as Exception);
 
-        _library = new LibraryService(ReelPaths.DefaultDataDir);
+        // REEL_DATA_DIR relocates the index/thumbnail store (handy for testing or
+        // pointing at a different drive); otherwise the default under LOCALAPPDATA.
+        var dataDir = Environment.GetEnvironmentVariable("REEL_DATA_DIR");
+        _library = new LibraryService(string.IsNullOrWhiteSpace(dataDir) ? ReelPaths.DefaultDataDir : dataDir);
         var thumbnails = new ThumbnailService(_library);
         _viewModel = new MainViewModel(_library, thumbnails);
 

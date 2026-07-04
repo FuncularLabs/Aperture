@@ -149,6 +149,7 @@
         </Style>
     </Window.Resources>
 
+    <Grid>
     <DockPanel>
 
         <!-- Toolbar -->
@@ -310,8 +311,27 @@
                                               VerticalAlignment="Center" Margin="0,0,8,0"
                                               ToolTip="Include in the combined view" />
                                     <StackPanel Grid.Column="1">
+                                        <!-- Alias: label (double-click to rename) + inline editor -->
                                         <TextBlock Text="{Binding Alias}" Foreground="{StaticResource Ink}"
-                                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Path}"
+                                                   MouseLeftButtonDown="OnAliasClick">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBox Text="{Binding Alias, UpdateSourceTrigger=LostFocus}"
+                                                 Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}"
+                                                 FontWeight="SemiBold" Padding="2,0" BorderBrush="{StaticResource Accent}"
+                                                 BorderThickness="1" IsVisibleChanged="OnAliasEditVisibleChanged"
+                                                 KeyDown="OnAliasEditKeyDown" LostFocus="OnAliasEditLostFocus" />
                                         <TextBlock Text="{Binding Count, StringFormat={}{0:n0} items}"
                                                    Foreground="{StaticResource Muted}" FontSize="11"
                                                    TextTrimming="CharacterEllipsis" />
@@ -319,6 +339,8 @@
                                     </StackPanel>
                                     <Grid.ContextMenu>
                                         <ContextMenu>
+                                            <MenuItem Header="Rename"
+                                                      Command="{Binding BeginRenameCommand}" />
                                             <MenuItem Header="Remove folder"
                                                       Command="{Binding DataContext.RemoveRootCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                       CommandParameter="{Binding}" />
@@ -434,4 +456,61 @@
             </ListBox>
         </Grid>
     </DockPanel>
+
+        <!-- Quick-look overlay -->
+        <Grid x:Name="QuickLookOverlay" Background="#EE0E1014" MouseDown="OnQuickLookBackgroundClick"
+              Visibility="{Binding QuickLookOpen, Converter={StaticResource BoolToVis}}">
+            <Image Source="{Binding QuickLookImage}" Stretch="Uniform" Margin="72,60,72,72"
+                   RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" />
+
+            <TextBlock Text="{Binding QuickLookCaption}" Foreground="#F0FFFFFF" FontSize="13"
+                       HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,20" IsHitTestVisible="False" />
+
+            <Button Content="‹" Command="{Binding QuickLookPrevCommand}" HorizontalAlignment="Left"
+                    VerticalAlignment="Center" Width="52" Height="72" Margin="8,0" FontSize="34"
+                    Foreground="White" Background="#33FFFFFF" BorderThickness="0" Cursor="Hand" />
+            <Button Content="›" Command="{Binding QuickLookNextCommand}" HorizontalAlignment="Right"
+                    VerticalAlignment="Center" Width="52" Height="72" Margin="8,0" FontSize="34"
+                    Foreground="White" Background="#33FFFFFF" BorderThickness="0" Cursor="Hand" />
+            <Button Content="✕" Command="{Binding CloseQuickLookCommand}" HorizontalAlignment="Right"
+                    VerticalAlignment="Top" Width="40" Height="40" Margin="16" FontSize="18"
+                    Foreground="White" Background="#33FFFFFF" BorderThickness="0" Cursor="Hand" />
+            <TextBlock Text="Space or Esc to close  ·  ← → to move" Foreground="#99FFFFFF" FontSize="12"
+                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,24" IsHitTestVisible="False" />
+        </Grid>
+
+        <!-- First-run welcome -->
+        <Grid Background="#CC0E1014" Visibility="{Binding ShowFirstRun, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource Panel}" CornerRadius="12" Width="460" Padding="28"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border.Effect>
+                    <DropShadowEffect Color="#44000000" BlurRadius="30" ShadowDepth="4" Direction="270" />
+                </Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="Welcome to Reel" FontSize="22" FontWeight="Bold" Foreground="{StaticResource Ink}" />
+                    <TextBlock Text="Add your photo folders to get started. We found these — pick the ones you want."
+                               Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,16" />
+                    <ItemsControl ItemsSource="{Binding FirstRunCandidates}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsChosen}" Margin="0,4">
+                                    <StackPanel Margin="4,0,0,0">
+                                        <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
+                                        <TextBlock Text="{Binding Path}" Foreground="{StaticResource Muted}" FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                        <Button Content="Not now" Style="{StaticResource ToolButton}" Command="{Binding SkipFirstRunCommand}" />
+                        <Button Content="Add selected" Style="{StaticResource ToolButton}"
+                                Command="{Binding AddChosenFoldersCommand}"
+                                Background="#E6EEFF" BorderBrush="{StaticResource Accent}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
 </Window>

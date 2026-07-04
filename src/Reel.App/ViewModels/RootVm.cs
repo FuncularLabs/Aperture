@@ -3,38 +3,52 @@ using Reel.Core.Models;
 
 namespace Reel.App.ViewModels;
 
-/// <summary>A root in the left nav: alias, path, item count, and its include checkbox.</summary>
+/// <summary>A root in the left nav: alias, path, item count, include checkbox, inline rename.</summary>
 public sealed class RootVm : ObservableObject
 {
     private readonly Action<RootVm, bool> _onIncludedChanged;
+    private readonly Action<RootVm, string> _onAliasChanged;
     private bool _included;
     private int _count;
     private string _status = "";
+    private bool _isEditing;
 
-    public RootVm(Root root, Action<RootVm, bool> onIncludedChanged)
+    public RootVm(Root root, Action<RootVm, bool> onIncludedChanged, Action<RootVm, string> onAliasChanged)
     {
         Model = root;
         _included = root.Included;
         _onIncludedChanged = onIncludedChanged;
+        _onAliasChanged = onAliasChanged;
+        BeginRenameCommand = new RelayCommand(() => IsEditing = true);
     }
 
     public Root Model { get; }
     public long Id => Model.Id;
     public string Path => Model.Path;
 
+    public RelayCommand BeginRenameCommand { get; }
+
     public string Alias
     {
         get => Model.Alias;
         set
         {
-            if (Model.Alias == value)
+            var trimmed = value?.Trim();
+            if (string.IsNullOrEmpty(trimmed) || Model.Alias == trimmed)
                 return;
-            Model.Alias = value;
+            Model.Alias = trimmed;
             OnPropertyChanged();
+            _onAliasChanged(this, trimmed);
         }
     }
 
-    /// <summary>Bound to the checkbox; toggling re-filters the union.</summary>
+    /// <summary>True while the alias is being edited inline in the nav.</summary>
+    public bool IsEditing
+    {
+        get => _isEditing;
+        set => SetProperty(ref _isEditing, value);
+    }
+
     public bool IsIncluded
     {
         get => _included;
@@ -54,7 +68,6 @@ public sealed class RootVm : ObservableObject
         set => SetProperty(ref _count, value);
     }
 
-    /// <summary>Per-root status line (e.g. "indexing 1,204 / 8,900").</summary>
     public string Status
     {
         get => _status;
