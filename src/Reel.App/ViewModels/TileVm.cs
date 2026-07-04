@@ -1,6 +1,7 @@
 using System.Windows.Media.Imaging;
 using Reel.App.Mvvm;
 using Reel.App.Services;
+using Reel.Core.Formatting;
 using Reel.Core.Models;
 
 namespace Reel.App.ViewModels;
@@ -11,14 +12,18 @@ namespace Reel.App.ViewModels;
 /// on-screen tiles ever trigger a decode. No reliance on container lifecycle
 /// events, which virtualization fires unreliably.
 /// </summary>
-public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails) : ObservableObject
+public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string captionFormat) : ObservableObject
 {
     private readonly ThumbnailService _thumbnails = thumbnails;
+    private readonly string _captionFormat = captionFormat;
     private BitmapSource? _thumbnail;
     private bool _loadStarted;
 
     public LibraryRow Row { get; } = row;
     public MediaItem Item => Row.Item;
+
+    /// <summary>The date section this tile belongs to (set by the view model when grouping).</summary>
+    public SectionVm? Section { get; set; }
 
     public long ItemId => Item.Id;
     public string FileName => Item.FileName;
@@ -44,8 +49,8 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails) : Observ
         private set => SetProperty(ref _thumbnail, value);
     }
 
-    /// <summary>Default caption: capture/mtime date, then the root alias.</summary>
-    public string Caption => $"{DisplayDate:yyyy-MM-dd HH:mm} · {Row.RootAlias}";
+    /// <summary>Caption rendered from the user's tokenized format string.</summary>
+    public string Caption => CaptionFormatter.Format(_captionFormat, Item, Row.RootAlias);
 
     public string Tooltip =>
         $"{FileName}\n{DisplayDate:yyyy-MM-dd HH:mm}\n{Dimensions}\n{SizeText}\n{Row.RootAlias}";

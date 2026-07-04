@@ -114,6 +114,28 @@
             </Setter>
         </Style>
 
+        <!-- Collapsible date-section header -->
+        <Style x:Key="SectionHeader" TargetType="ToggleButton">
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="True" />
+            <Setter Property="Margin" Value="2,10,2,2" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="b" Background="Transparent" CornerRadius="6" Padding="6,5">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#EEF1F6" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Per-root status line: hidden when empty -->
         <Style x:Key="RootStatus" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Accent}" />
@@ -136,6 +158,33 @@
                 <!-- Settings (right) -->
                 <ToggleButton x:Name="SettingsToggle" DockPanel.Dock="Right" Content="⚙  Settings"
                               Style="{StaticResource ToolToggle}" Margin="6,0,0,0" />
+
+                <!-- Search (right, left of settings) -->
+                <Border DockPanel.Dock="Right" Width="230" Height="30" Background="#F3F4F7"
+                        BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="6"
+                        Margin="0,0,6,0" VerticalAlignment="Center">
+                    <Grid>
+                        <TextBlock Text="🔍  Search  ( / )" Foreground="{StaticResource Muted}" FontSize="12"
+                                   Margin="9,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SearchText}" Value="">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBox x:Name="SearchBox" Background="Transparent" BorderThickness="0"
+                                 VerticalContentAlignment="Center" Margin="7,0,26,0" FontSize="12"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Content="✕" Command="{Binding ClearSearchCommand}" HorizontalAlignment="Right"
+                                Width="24" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Muted}"
+                                Cursor="Hand" />
+                    </Grid>
+                </Border>
                 <Popup IsOpen="{Binding IsChecked, ElementName=SettingsToggle}"
                        PlacementTarget="{Binding ElementName=SettingsToggle}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-160">
@@ -148,13 +197,52 @@
                         <StackPanel>
                             <TextBlock Text="SETTINGS" Foreground="{StaticResource Muted}" FontSize="11"
                                        FontWeight="SemiBold" Margin="0,0,0,10" />
+
                             <CheckBox Content="Include videos" IsChecked="{Binding IncludeVideos}"
                                       ToolTip="Index video files and show a thumbnail from the OS shell." />
                             <TextBlock Text="Uses the same frame Explorer shows. Re-indexes when toggled."
                                        Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
-                                       Margin="22,2,0,0" />
-                            <TextBlock Text="More settings coming — captions, sort, cache." Foreground="{StaticResource Muted}"
-                                       FontSize="11" FontStyle="Italic" Margin="0,14,0,0" />
+                                       Margin="22,2,0,10" />
+
+                            <CheckBox Content="Group into date sections" IsChecked="{Binding GroupByDate}"
+                                      Margin="0,0,0,12" />
+
+                            <TextBlock Text="Caption format" Foreground="{StaticResource Ink}" FontSize="12"
+                                       FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding CaptionFormat, UpdateSourceTrigger=LostFocus}" Padding="6,4"
+                                     BorderBrush="{StaticResource Line}" BorderThickness="1" />
+                            <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,12"
+                                       Text="Tokens: {name} {date:fmt} {mtime} {alias} {size} {dim} {camera} {ext}. Use ?? for fallback." />
+
+                            <TextBlock Text="Sort" Foreground="{StaticResource Ink}" FontSize="12"
+                                       FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <WrapPanel>
+                                <Button Content="Newest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
+                                        Command="{Binding SetSortCommand}" CommandParameter="newest" />
+                                <Button Content="Oldest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
+                                        Command="{Binding SetSortCommand}" CommandParameter="oldest" />
+                                <Button Content="Name" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
+                                        Command="{Binding SetSortCommand}" CommandParameter="name" />
+                                <Button Content="Largest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
+                                        Command="{Binding SetSortCommand}" CommandParameter="largest" />
+                                <Button Content="Camera" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
+                                        Command="{Binding SetSortCommand}" CommandParameter="camera" />
+                            </WrapPanel>
+                            <TextBlock Text="{Binding SortSummary, StringFormat=Sorting by: {0}}"
+                                       Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0" />
+
+                            <StackPanel Margin="0,12,0,0"
+                                        Visibility="{Binding HasExclusions, Converter={StaticResource BoolToVis}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding ExclusionsSummary}" Foreground="{StaticResource Ink}"
+                                               FontSize="12" VerticalAlignment="Center" />
+                                    <Button Content="Show all" Style="{StaticResource ToolButton}" Margin="8,0,0,0"
+                                            Command="{Binding ClearExclusionsCommand}" />
+                                </StackPanel>
+                                <TextBlock Text="Right-click a tile → “Hide this folder” to carve folders out."
+                                           Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
+                                           Margin="0,3,0,0" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Popup>
@@ -248,7 +336,7 @@
 
             <!-- Thumbnail grid -->
             <ListBox x:Name="ItemsList" Grid.Column="2"
-                     ItemsSource="{Binding Items}"
+                     ItemsSource="{Binding ItemsView}"
                      SelectedItem="{Binding SelectedTile, Mode=TwoWay}"
                      Background="Transparent" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
@@ -259,6 +347,7 @@
                      VirtualizingPanel.ScrollUnit="Pixel"
                      VirtualizingPanel.CacheLength="1,2"
                      VirtualizingPanel.CacheLengthUnit="Page"
+                     VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                      MouseDoubleClick="OnItemsDoubleClick"
                      PreviewMouseWheel="OnItemsPreviewMouseWheel">
                 <ListBox.InputBindings>
@@ -269,10 +358,55 @@
                         <vwp:VirtualizingWrapPanel Orientation="Horizontal" SpacingMode="Uniform" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
+                <ListBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.ContainerStyle>
+                            <Style TargetType="GroupItem">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="GroupItem">
+                                            <StackPanel>
+                                                <ToggleButton IsChecked="{Binding Name.IsExpanded, Mode=TwoWay}"
+                                                              Style="{StaticResource SectionHeader}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock x:Name="chev" Text="▾" FontSize="12"
+                                                                   Foreground="{StaticResource Muted}"
+                                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                        <TextBlock Text="{Binding Name.Label}" FontSize="14"
+                                                                   FontWeight="SemiBold" Foreground="{StaticResource Ink}"
+                                                                   VerticalAlignment="Center" />
+                                                        <TextBlock Text="{Binding ItemCount, StringFormat=  ·  {0:n0}}"
+                                                                   FontSize="13" Foreground="{StaticResource Muted}"
+                                                                   VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </ToggleButton>
+                                                <ItemsPresenter Visibility="{Binding Name.IsExpanded, Converter={StaticResource BoolToVis}}" />
+                                            </StackPanel>
+                                            <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Name.IsExpanded}" Value="False">
+                                                    <Setter TargetName="chev" Property="Text" Value="▸" />
+                                                </DataTrigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </GroupStyle.ContainerStyle>
+                    </GroupStyle>
+                </ListBox.GroupStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate DataType="{x:Type vm:TileVm}">
                         <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     ToolTip="{Binding Tooltip}">
+                            <StackPanel.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Open"
+                                              Command="{Binding DataContext.OpenSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                    <MenuItem Header="Hide this folder from the view"
+                                              Command="{Binding DataContext.HideFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                </ContextMenu>
+                            </StackPanel.ContextMenu>
                             <Border Background="{StaticResource ThumbBg}" CornerRadius="6"
                                     Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">

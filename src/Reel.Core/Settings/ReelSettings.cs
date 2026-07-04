@@ -33,6 +33,12 @@ public sealed class ReelSettings
     /// <summary>Multi-level sort. Default: newest first, then alias.</summary>
     public List<SortLevel> Sort { get; set; } = [new("date", true), new("alias", false)];
 
+    /// <summary>Group the grid into collapsible date sections. On by default.</summary>
+    public bool GroupByDate { get; set; } = true;
+
+    /// <summary>Absolute folder paths excluded from the unioned view (surgical carve-outs).</summary>
+    public List<string> ExcludedFolders { get; set; } = [];
+
     /// <summary>Soft cap on the on-disk thumbnail cache, in megabytes.</summary>
     public long ThumbnailCacheCapMb { get; set; } = 2048;
 

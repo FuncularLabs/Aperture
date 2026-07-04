@@ -9,9 +9,22 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        PreviewKeyDown += OnWindowPreviewKeyDown;
     }
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;
+
+    /// <summary>"/" focuses the search box (unless the user is already typing in a text field).</summary>
+    private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Oem2 && Keyboard.Modifiers == ModifierKeys.None
+            && Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
+        {
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+            e.Handled = true;
+        }
+    }
 
     private void OnItemsDoubleClick(object sender, MouseButtonEventArgs e)
     {

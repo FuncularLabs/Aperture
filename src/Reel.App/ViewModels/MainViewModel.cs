@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Windows.Data;
 using System.Windows.Input;
 using Microsoft.Win32;
 using Reel.App.Mvvm;
 using Reel.App.Services;
+using Reel.Core.Formatting;
 using Reel.Core.Library;
 using Reel.Core.Models;
 
@@ -14,17 +17,22 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 {
     // Five zoom stops: tile longest-edge in device-independent pixels.
     private static readonly double[] ZoomSizes = [96, 140, 200, 280, 400];
-    private const int DefaultZoom = 2;
+
+    // Roughly two screens of tiles — how many newest-section items to auto-expand.
+    private const int ExpandTargetItems = 60;
 
     private readonly LibraryService _library;
     private readonly SynchronizationContext _ui;
     private readonly Lock _indexLock = new();
+    private readonly CollectionViewSource _view = new();
+    private readonly Dictionary<long, SectionVm> _sections = [];
     private int _activeIndexers;
     private long _lastStreamRefreshTick;
 
-    private IReadOnlyList<TileVm> _items = [];
+    private List<TileVm> _tiles = [];
     private TileVm? _selectedTile;
-    private int _zoom = DefaultZoom;
+    private int _zoom;
+    private string _searchText = "";
     private string _statusText = "No folders yet — add one to begin.";
     private string _indexingText = "";
 
@@ -33,32 +41,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library = library;
         Thumbnails = thumbnails;
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
+        _zoom = Math.Clamp(_library.Settings.Current.DefaultZoom, 0, ZoomSizes.Length - 1);
 
         AddRootCommand = new RelayCommand(AddRoot);
         RemoveRootCommand = new RelayCommand<RootVm>(RemoveRoot);
         ZoomInCommand = new RelayCommand(ZoomIn, () => _zoom < ZoomSizes.Length - 1);
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
         OpenSelectedCommand = new RelayCommand(OpenSelected, () => _selectedTile is not null);
+        ClearSearchCommand = new RelayCommand(() => SearchText = "");
+        SetSortCommand = new RelayCommand<string>(ApplySortPreset);
+        HideFolderCommand = new RelayCommand<TileVm>(HideFolder);
+        ClearExclusionsCommand = new RelayCommand(ClearExclusions);
 
         _library.RootChanged += OnRootChanged;
 
         LoadRoots();
-        RefreshUnion();
+        BuildView();
     }
 
     public ThumbnailService Thumbnails { get; }
 
     public ObservableCollection<RootVm> Roots { get; } = [];
 
-    public IReadOnlyList<TileVm> Items
-    {
-        get => _items;
-        private set
-        {
-            _items = value;
-            OnPropertyChanged();
-        }
-    }
+    /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
+    public ICollectionView? ItemsView => _view.View;
 
     public TileVm? SelectedTile
     {
@@ -67,6 +73,45 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     public double TileSize => ZoomSizes[_zoom];
+
+    /// <summary>Live text filter over file name, folder alias and camera.</summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (SetProperty(ref _searchText, value))
+                BuildView();
+        }
+    }
+
+    /// <summary>Tokenized caption format string. Editing rebuilds tile captions.</summary>
+    public string CaptionFormat
+    {
+        get => _library.Settings.Current.CaptionFormat;
+        set
+        {
+            if (value == _library.Settings.Current.CaptionFormat)
+                return;
+            _library.Settings.Update(s => s.CaptionFormat = value);
+            OnPropertyChanged();
+            BuildView();
+        }
+    }
+
+    /// <summary>Group the grid into collapsible date sections.</summary>
+    public bool GroupByDate
+    {
+        get => _library.Settings.Current.GroupByDate;
+        set
+        {
+            if (value == _library.Settings.Current.GroupByDate)
+                return;
+            _library.Settings.Update(s => s.GroupByDate = value);
+            OnPropertyChanged();
+            BuildView();
+        }
+    }
 
     /// <summary>Index and show video files. Toggling re-indexes every root to add or drop videos.</summary>
     public bool IncludeVideos
@@ -100,6 +145,85 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
     public ICommand OpenSelectedCommand { get; }
+    public ICommand ClearSearchCommand { get; }
+    public ICommand SetSortCommand { get; }
+    public ICommand HideFolderCommand { get; }
+    public ICommand ClearExclusionsCommand { get; }
+
+    public string ExclusionsSummary
+    {
+        get
+        {
+            var n = _library.Settings.Current.ExcludedFolders.Count;
+            return n == 0 ? "" : $"{n} folder{(n == 1 ? "" : "s")} hidden";
+        }
+    }
+
+    public bool HasExclusions => _library.Settings.Current.ExcludedFolders.Count > 0;
+
+    private void HideFolder(TileVm? tile)
+    {
+        var dir = tile is null ? null : Path.GetDirectoryName(tile.FullPath);
+        if (string.IsNullOrEmpty(dir))
+            return;
+
+        _library.Settings.Update(s =>
+        {
+            if (!s.ExcludedFolders.Contains(dir, StringComparer.OrdinalIgnoreCase))
+                s.ExcludedFolders.Add(dir);
+        });
+        OnPropertyChanged(nameof(ExclusionsSummary));
+        OnPropertyChanged(nameof(HasExclusions));
+        BuildView();
+    }
+
+    private void ClearExclusions()
+    {
+        _library.Settings.Update(s => s.ExcludedFolders.Clear());
+        OnPropertyChanged(nameof(ExclusionsSummary));
+        OnPropertyChanged(nameof(HasExclusions));
+        BuildView();
+    }
+
+    private static bool IsExcluded(string fullPath, List<string> excluded)
+    {
+        var dir = Path.GetDirectoryName(fullPath) ?? "";
+        foreach (var e in excluded)
+        {
+            if (dir.Equals(e, StringComparison.OrdinalIgnoreCase)
+                || dir.StartsWith(e + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Human-readable summary of the active sort, for the settings UI.</summary>
+    public string SortSummary
+    {
+        get
+        {
+            var levels = _library.Settings.Current.Sort;
+            return levels.Count == 0
+                ? "unsorted"
+                : string.Join(", ", levels.Select(l => $"{l.Token} {(l.Descending ? "↓" : "↑")}"));
+        }
+    }
+
+    private void ApplySortPreset(string? preset)
+    {
+        List<Reel.Core.Settings.SortLevel> spec = preset switch
+        {
+            "newest" => [new("date", true)],
+            "oldest" => [new("date", false)],
+            "name" => [new("name", false)],
+            "largest" => [new("size", true)],
+            "camera" => [new("camera", false), new("date", true)],
+            _ => _library.Settings.Current.Sort,
+        };
+        _library.Settings.Update(s => s.Sort = spec);
+        OnPropertyChanged(nameof(SortSummary));
+        BuildView();
+    }
 
     /// <summary>Kick a background reconcile of every root, then watch it. Cached rows are already on screen.</summary>
     public void StartBackgroundRefresh()
@@ -162,13 +286,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         _library.RemoveRoot(rootVm.Id);
         Roots.Remove(rootVm);
-        RefreshUnion();
+        BuildView();
     }
 
     private void OnRootIncludedChanged(RootVm rootVm, bool included)
     {
         _library.SetIncluded(rootVm.Id, included);
-        RefreshUnion();
+        BuildView();
     }
 
     private static string DeriveAlias(string path)
@@ -177,20 +301,113 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return string.IsNullOrWhiteSpace(name) ? path : name;
     }
 
-    // --- Union / status -----------------------------------------------------
+    // --- Union / sections / status ------------------------------------------
 
-    private void RefreshUnion()
+    private void BuildView()
     {
         var rows = _library.GetUnion();
-        Items = rows.Select(r => new TileVm(r, Thumbnails)).ToList();
+
+        var excluded = _library.Settings.Current.ExcludedFolders;
+        if (excluded.Count > 0)
+            rows = rows.Where(r => !IsExcluded(r.FullPath, excluded)).ToList();
+
+        var query = _searchText.Trim();
+        if (query.Length > 0)
+            rows = rows.Where(r => Matches(r, query)).ToList();
+
+        var format = _library.Settings.Current.CaptionFormat;
+        var levels = _library.Settings.Current.Sort;
+
+        List<TileVm> tiles;
+        if (GroupByDate && rows.Count > 0)
+            tiles = BuildSectioned(rows, format, levels);
+        else
+        {
+            LibrarySorter.Sort(rows, levels);
+            tiles = rows.Select(r => new TileVm(r, Thumbnails, format)).ToList();
+            _sections.Clear();
+        }
+
+        _tiles = tiles;
+        _view.Source = tiles;
+        _view.GroupDescriptions.Clear();
+        if (GroupByDate && rows.Count > 0)
+            _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(TileVm.Section)));
+
+        OnPropertyChanged(nameof(ItemsView));
         UpdateStatus();
     }
 
+    private List<TileVm> BuildSectioned(List<LibraryRow> rows, string format, IReadOnlyList<Reel.Core.Settings.SortLevel> levels)
+    {
+        var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList());
+
+        var bucketByItem = new Dictionary<long, DateBucket>(rows.Count);
+        foreach (var r in rows)
+            bucketByItem[r.Item.Id] = DateBuckets.Bucket(r.Item.BestDate, mode);
+
+        LibrarySorter.SortSectioned(rows, r => bucketByItem[r.Item.Id].Key, levels);
+
+        var tiles = new List<TileVm>(rows.Count);
+        var counts = new Dictionary<long, int>();
+        var order = new List<SectionVm>();
+        var seen = new HashSet<long>();
+        var newlyCreated = new HashSet<long>();
+
+        foreach (var r in rows)
+        {
+            var bucket = bucketByItem[r.Item.Id];
+            counts[bucket.Key] = counts.GetValueOrDefault(bucket.Key) + 1;
+
+            if (!_sections.TryGetValue(bucket.Key, out var section))
+            {
+                section = new SectionVm { Key = bucket.Key, Label = bucket.Label };
+                _sections[bucket.Key] = section;
+                newlyCreated.Add(bucket.Key);
+            }
+
+            if (seen.Add(bucket.Key))
+                order.Add(section);
+
+            tiles.Add(new TileVm(r, Thumbnails, format) { Section = section });
+        }
+
+        foreach (var section in order)
+            section.Count = counts[section.Key];
+
+        // Only newly-created sections get a default expansion; user toggles on
+        // existing sections survive a rebuild.
+        long cumulative = 0;
+        foreach (var section in order)
+        {
+            if (newlyCreated.Contains(section.Key))
+                section.IsExpanded = cumulative < ExpandTargetItems;
+            cumulative += section.Count;
+        }
+
+        // Drop sections that no longer have any items.
+        foreach (var key in _sections.Keys.Where(k => !seen.Contains(k)).ToList())
+            _sections.Remove(key);
+
+        return tiles;
+    }
+
+    private static bool Matches(LibraryRow r, string query) =>
+        r.Item.FileName.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || r.RootAlias.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || (r.Item.Camera?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
+
     private void UpdateStatus()
     {
-        StatusText = Items.Count == 0
-            ? (Roots.Count == 0 ? "No folders yet — add one to begin." : "No items in the included folders.")
-            : $"{Items.Count:n0} items";
+        var visible = _tiles.Count;
+        if (visible == 0)
+        {
+            StatusText = Roots.Count == 0
+                ? "No folders yet — add one to begin."
+                : _searchText.Length > 0 ? "No matches." : "No items in the included folders.";
+            return;
+        }
+        StatusText = _searchText.Length > 0 ? $"{visible:n0} matches" : $"{visible:n0} items";
     }
 
     // --- Indexing -----------------------------------------------------------
@@ -200,7 +417,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Stream partial results into the grid only on the initial population, so a
         // watcher-triggered re-index never yanks the scroll position out from under
         // someone who is browsing.
-        var streaming = Items.Count == 0;
+        var streaming = _tiles.Count == 0;
 
         lock (_indexLock)
         {
@@ -233,7 +450,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     rootVm.Status = "";
                 }
                 UpdateIndexingText();
-                RefreshUnion();
+                BuildView();
             });
 
             if (watchAfter)
@@ -263,7 +480,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (now - _lastStreamRefreshTick > 1200)
             {
                 _lastStreamRefreshTick = now;
-                RefreshUnion();
+                BuildView();
             }
         }
     }
