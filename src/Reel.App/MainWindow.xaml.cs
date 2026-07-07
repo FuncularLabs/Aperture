@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using Reel.App.ViewModels;
 
 namespace Reel.App;
@@ -81,6 +82,23 @@ public partial class MainWindow : Window
                     break;
             }
             return;
+        }
+
+        // Ctrl +/- zoom (anchored to the centre item).
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (e.Key is Key.OemPlus or Key.Add)
+            {
+                ZoomWithAnchor(true);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key is Key.OemMinus or Key.Subtract)
+            {
+                ZoomWithAnchor(false);
+                e.Handled = true;
+                return;
+            }
         }
 
         var focused = Keyboard.FocusedElement;
@@ -168,9 +186,94 @@ public partial class MainWindow : Window
             return;
 
         e.Handled = true;
-        if (e.Delta > 0)
-            ViewModel?.ZoomIn();
+        ZoomWithAnchor(e.Delta > 0);
+    }
+
+    private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomWithAnchor(true);
+
+    private void OnZoomOutClick(object sender, RoutedEventArgs e) => ZoomWithAnchor(false);
+
+    /// <summary>Zoom while keeping the item near the viewport centre in view.</summary>
+    private void ZoomWithAnchor(bool zoomIn)
+    {
+        if (ViewModel is null)
+            return;
+
+        var anchor = ItemNearCenter() ?? ViewModel.SelectedTile;
+
+        if (zoomIn)
+            ViewModel.ZoomIn();
         else
-            ViewModel?.ZoomOut();
+            ViewModel.ZoomOut();
+
+        if (anchor is not null)
+        {
+            // Re-scroll after the new tile size has been laid out.
+            Dispatcher.BeginInvoke(
+                new Action(() => { try { ItemsList.ScrollIntoView(anchor); } catch { } }),
+                System.Windows.Threading.DispatcherPriority.Background);
+        }
+    }
+
+    private TileVm? ItemNearCenter()
+    {
+        if (ItemsList.ActualWidth <= 0 || ItemsList.ActualHeight <= 0)
+            return null;
+
+        var point = new Point(ItemsList.ActualWidth / 2, ItemsList.ActualHeight / 2);
+        var hit = VisualTreeHelper.HitTest(ItemsList, point)?.VisualHit as DependencyObject;
+        while (hit is not null and not System.Windows.Controls.ListBoxItem)
+            hit = VisualTreeHelper.GetParent(hit);
+        return (hit as System.Windows.Controls.ListBoxItem)?.DataContext as TileVm;
+    }
+
+    /// <summary>Explorer-style arrow navigation over the grid, plus Ctrl+C / Ctrl+X on the selection.</summary>
+    private void OnGridKeyDown(object sender, KeyEventArgs e)
+    {
+        if (ViewModel is null || ViewModel.QuickLookOpen)
+            return;
+
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (e.Key == Key.C)
+            {
+                ViewModel.CopyFileCommand.Execute(ViewModel.SelectedTile);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.X)
+            {
+                ViewModel.CutFileCommand.Execute(ViewModel.SelectedTile);
+                e.Handled = true;
+            }
+            return; // leave Ctrl+arrows / Ctrl+wheel alone
+        }
+
+        int delta;
+        switch (e.Key)
+        {
+            case Key.Left: delta = -1; break;
+            case Key.Right: delta = 1; break;
+            case Key.Up: delta = -ColumnsPerRow(); break;
+            case Key.Down: delta = ColumnsPerRow(); break;
+            default: return;
+        }
+
+        var tile = ViewModel.MoveSelection(delta);
+        if (tile is not null)
+        {
+            ItemsList.ScrollIntoView(tile);
+            Dispatcher.BeginInvoke(
+                new Action(() => (ItemsList.ItemContainerGenerator.ContainerFromItem(tile)
+                    as System.Windows.Controls.ListBoxItem)?.Focus()),
+                System.Windows.Threading.DispatcherPriority.Background);
+        }
+        e.Handled = true;
+    }
+
+    private int ColumnsPerRow()
+    {
+        var tileOuter = (ViewModel?.TileSize ?? 200) + 20; // tile + margin/padding/spacing
+        var columns = (int)((ItemsList.ActualWidth - 12) / Math.Max(1, tileOuter));
+        return Math.Max(1, columns);
     }
 }

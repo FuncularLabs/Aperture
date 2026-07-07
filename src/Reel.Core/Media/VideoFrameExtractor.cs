@@ -28,10 +28,16 @@ public static class VideoFrameExtractor
         if (ffmpeg is null || !File.Exists(videoPath))
             return null;
 
-        // Seek ~1s in to dodge a black/opening frame; retry at 0 for very short clips.
-        var bytes = Run(ffmpeg, videoPath, 1.0, maxEdge);
+        var scale = $"scale=w={maxEdge}:h={maxEdge}:force_original_aspect_ratio=decrease";
+
+        // 1) Let ffmpeg's thumbnail filter pick the most representative frame from the
+        //    opening ~300 frames — it avoids blank/black/transitional frames.
+        // 2..3) Fall back to a plain seek for clips the filter can't process.
+        var bytes = Run(ffmpeg, videoPath, seekSeconds: null, videoFilter: $"thumbnail=300,{scale}");
         if (bytes is null || bytes.Length == 0)
-            bytes = Run(ffmpeg, videoPath, 0.0, maxEdge);
+            bytes = Run(ffmpeg, videoPath, seekSeconds: 1.0, videoFilter: scale);
+        if (bytes is null || bytes.Length == 0)
+            bytes = Run(ffmpeg, videoPath, seekSeconds: 0.0, videoFilter: scale);
         if (bytes is null || bytes.Length == 0)
             return null;
 
@@ -45,10 +51,8 @@ public static class VideoFrameExtractor
         }
     }
 
-    private static byte[]? Run(string ffmpeg, string input, double seekSeconds, int maxEdge)
+    private static byte[]? Run(string ffmpeg, string input, double? seekSeconds, string videoFilter)
     {
-        var scale = $"scale=w={maxEdge}:h={maxEdge}:force_original_aspect_ratio=decrease";
-
         var psi = new ProcessStartInfo(ffmpeg)
         {
             RedirectStandardOutput = true,
@@ -56,13 +60,20 @@ public static class VideoFrameExtractor
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        psi.ArgumentList.Add("-nostdin");
+        psi.ArgumentList.Add("-loglevel");
+        psi.ArgumentList.Add("error");
+        if (seekSeconds is { } seek)
+        {
+            psi.ArgumentList.Add("-ss");
+            psi.ArgumentList.Add(seek.ToString(CultureInfo.InvariantCulture));
+        }
         foreach (var arg in new[]
                  {
-                     "-nostdin", "-loglevel", "error",
-                     "-ss", seekSeconds.ToString(CultureInfo.InvariantCulture),
                      "-i", input,
                      "-frames:v", "1",
-                     "-vf", scale,
+                     "-vf", videoFilter,
                      "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
                      "-",
                  })

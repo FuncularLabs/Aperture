@@ -4,6 +4,7 @@ namespace Reel.Core.Formatting;
 
 public enum BucketMode
 {
+    Day,
     Week,
     Month,
     Year,
@@ -13,38 +14,46 @@ public enum BucketMode
 public readonly record struct DateBucket(long Key, string Label);
 
 /// <summary>
-/// Groups items into date sections and picks a sensible granularity based on how
-/// densely the library is populated, so the first screen shows a couple of
-/// sections rather than thousands of loose tiles.
+/// Groups items into date sections. Granularity is chosen so the number of
+/// sections lands near a target (~12) — coarse enough to stay scannable, fine
+/// enough to be useful — rather than by a fixed density rule.
 /// </summary>
 public static class DateBuckets
 {
-    /// <summary>
-    /// Picks week/month/year buckets from item density. Heavy shooters (many per
-    /// week) get week sections; sparse libraries collapse to years.
-    /// </summary>
+    /// <summary>Preferred number of sections. The coarsest granularity nearest this wins.</summary>
+    public const int TargetSections = 12;
+
+    // Coarsest first, so ties (equal distance to target) favour fewer, broader sections.
+    private static readonly BucketMode[] CoarseToFine = [BucketMode.Year, BucketMode.Month, BucketMode.Week, BucketMode.Day];
+
+    /// <summary>Picks the granularity whose section count is closest to <see cref="TargetSections"/>.</summary>
     public static BucketMode ChooseMode(IReadOnlyList<DateTime> dates)
     {
-        if (dates.Count < 8)
+        if (dates.Count == 0)
             return BucketMode.Year;
 
-        var min = dates[0];
-        var max = dates[0];
-        foreach (var d in dates)
+        var best = BucketMode.Year;
+        var bestDistance = int.MaxValue;
+
+        foreach (var mode in CoarseToFine)
         {
-            if (d < min) min = d;
-            if (d > max) max = d;
+            var count = CountSections(dates, mode);
+            var distance = Math.Abs(count - TargetSections);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = mode;
+            }
         }
+        return best;
+    }
 
-        var weeks = Math.Max(1.0, (max - min).TotalDays / 7.0);
-        var perWeek = dates.Count / weeks;
-
-        return perWeek switch
-        {
-            >= 40 => BucketMode.Week,
-            >= 8 => BucketMode.Month,
-            _ => BucketMode.Year,
-        };
+    private static int CountSections(IReadOnlyList<DateTime> dates, BucketMode mode)
+    {
+        var keys = new HashSet<long>();
+        foreach (var date in dates)
+            keys.Add(Bucket(date, mode).Key);
+        return keys.Count;
     }
 
     /// <summary>Maps a date to its bucket. Keys increase with time so newest sorts first when descending.</summary>
@@ -52,6 +61,9 @@ public static class DateBuckets
     {
         switch (mode)
         {
+            case BucketMode.Day:
+                return new DateBucket(date.Date.Ticks, date.ToString("dddd, MMM d, yyyy", CultureInfo.CurrentCulture));
+
             case BucketMode.Week:
                 var monday = StartOfWeek(date);
                 return new DateBucket(monday.Ticks, $"Week of {monday:MMM d, yyyy}");

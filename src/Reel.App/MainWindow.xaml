@@ -3,19 +3,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vwp="clr-namespace:WpfToolkit.Controls;assembly=VirtualizingWrapPanel"
         xmlns:vm="clr-namespace:Reel.App.ViewModels"
+        xmlns:mvvm="clr-namespace:Reel.App.Mvvm"
         Title="Reel" Height="820" Width="1280"
         Background="#F5F6F8"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
-    <Window.InputBindings>
-        <KeyBinding Modifiers="Control" Key="OemPlus" Command="{Binding ZoomInCommand}" />
-        <KeyBinding Modifiers="Control" Key="Add" Command="{Binding ZoomInCommand}" />
-        <KeyBinding Modifiers="Control" Key="OemMinus" Command="{Binding ZoomOutCommand}" />
-        <KeyBinding Modifiers="Control" Key="Subtract" Command="{Binding ZoomOutCommand}" />
-    </Window.InputBindings>
-
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <mvvm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
@@ -255,9 +250,9 @@
                             Command="{Binding RemoveRootCommand}"
                             CommandParameter="{Binding SelectedItem, ElementName=RootsList}" />
                     <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
-                    <Button Content="－" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"
+                    <Button Content="－" Style="{StaticResource ToolButton}" Click="OnZoomOutClick"
                             ToolTip="Zoom out (Ctrl+-)" MinWidth="36" />
-                    <Button Content="＋" Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}"
+                    <Button Content="＋" Style="{StaticResource ToolButton}" Click="OnZoomInClick"
                             ToolTip="Zoom in (Ctrl++)" MinWidth="36" />
                     <TextBlock Text="Ctrl + scroll to zoom" Foreground="{StaticResource Muted}"
                                VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12" />
@@ -371,7 +366,8 @@
                      VirtualizingPanel.CacheLengthUnit="Page"
                      VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                      MouseDoubleClick="OnItemsDoubleClick"
-                     PreviewMouseWheel="OnItemsPreviewMouseWheel">
+                     PreviewMouseWheel="OnItemsPreviewMouseWheel"
+                     PreviewKeyDown="OnGridKeyDown">
                 <ListBox.InputBindings>
                     <KeyBinding Key="Return" Command="{Binding OpenSelectedCommand}" />
                 </ListBox.InputBindings>
@@ -424,6 +420,27 @@
                                 <ContextMenu>
                                     <MenuItem Header="Open"
                                               Command="{Binding DataContext.OpenSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                    <Separator />
+                                    <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
+                                              Command="{Binding DataContext.CopyImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
+                                              Command="{Binding DataContext.CopyImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <MenuItem Header="Copy file name"
+                                              Command="{Binding DataContext.CopyFileNameCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <MenuItem Header="Copy full path"
+                                              Command="{Binding DataContext.CopyFullPathCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <Separator />
+                                    <MenuItem Header="Copy" InputGestureText="Ctrl+C"
+                                              Command="{Binding DataContext.CopyFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <MenuItem Header="Cut" InputGestureText="Ctrl+X"
+                                              Command="{Binding DataContext.CutFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}" />
+                                    <Separator />
                                     <MenuItem Header="Hide this folder from the view"
                                               Command="{Binding DataContext.HideFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                               CommandParameter="{Binding}" />
@@ -433,9 +450,12 @@
                                     Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
                                 <Grid>
-                                    <Image Stretch="Uniform" Margin="3"
-                                           RenderOptions.BitmapScalingMode="HighQuality"
-                                           Source="{Binding Thumbnail}" />
+                                    <!-- Fill the square tile (center-crop) for a clean uniform grid -->
+                                    <Border CornerRadius="6" RenderOptions.BitmapScalingMode="HighQuality">
+                                        <Border.Background>
+                                            <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                        </Border.Background>
+                                    </Border>
                                     <!-- Video badge -->
                                     <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="7"
                                             Background="#B0000000" CornerRadius="10" Width="20" Height="20"

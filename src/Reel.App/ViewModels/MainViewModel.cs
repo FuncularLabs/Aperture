@@ -59,6 +59,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         AddChosenFoldersCommand = new RelayCommand(AddChosenFolders);
         SkipFirstRunCommand = new RelayCommand(SkipFirstRun);
+        CopyFullPathCommand = new RelayCommand<TileVm>(t => CopyText(t?.FullPath));
+        CopyFileNameCommand = new RelayCommand<TileVm>(t => CopyText(t?.FileName));
+        CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
+        CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
+        CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
 
         _library.RootChanged += OnRootChanged;
 
@@ -163,6 +168,68 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand QuickLookPrevCommand { get; }
     public ICommand AddChosenFoldersCommand { get; }
     public ICommand SkipFirstRunCommand { get; }
+    public ICommand CopyFullPathCommand { get; }
+    public ICommand CopyFileNameCommand { get; }
+    public ICommand CopyImageCommand { get; }
+    public ICommand CopyFileCommand { get; }
+    public ICommand CutFileCommand { get; }
+
+    // --- Clipboard / context menu ------------------------------------------
+
+    private static void CopyText(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+        try { System.Windows.Clipboard.SetText(text); }
+        catch { /* clipboard can be transiently locked by another app */ }
+    }
+
+    private void CopyImage(TileVm? tile)
+    {
+        if (tile is null)
+            return;
+
+        // Pics: the full-resolution image. Videos: the cached frame thumbnail.
+        var image = tile.IsVideo
+            ? DecodeThumbnail(tile.ItemId)
+            : ImageLoading.LoadFullImage(tile.FullPath, decodePixelWidth: 0);
+        if (image is null)
+            return;
+        try { System.Windows.Clipboard.SetImage(image); }
+        catch { }
+    }
+
+    private static void PutFileOnClipboard(TileVm? tile, bool cut)
+    {
+        if (tile is null || !File.Exists(tile.FullPath))
+            return;
+        try
+        {
+            var files = new System.Collections.Specialized.StringCollection { tile.FullPath };
+            var data = new System.Windows.DataObject();
+            data.SetFileDropList(files);
+            // "Preferred DropEffect" DWORD: 2 = Move (cut), 5 = Copy — what Explorer reads.
+            var effect = new byte[] { (byte)(cut ? 2 : 5), 0, 0, 0 };
+            data.SetData("Preferred DropEffect", new MemoryStream(effect));
+            System.Windows.Clipboard.SetDataObject(data, copy: true);
+        }
+        catch { }
+    }
+
+    /// <summary>Moves the selection by <paramref name="delta"/> in view order, expanding the landing section.</summary>
+    public TileVm? MoveSelection(int delta)
+    {
+        if (_tiles.Count == 0)
+            return null;
+
+        var index = _selectedTile is null ? -1 : _tiles.IndexOf(_selectedTile);
+        var next = Math.Clamp(index < 0 ? 0 : index + delta, 0, _tiles.Count - 1);
+        var tile = _tiles[next];
+        if (tile.Section is { IsExpanded: false } section)
+            section.IsExpanded = true;
+        SelectedTile = tile;
+        return tile;
+    }
 
     // --- First run ----------------------------------------------------------
 
