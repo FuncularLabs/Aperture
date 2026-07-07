@@ -352,9 +352,38 @@
                           Background="Transparent" />
 
             <!-- Thumbnail grid -->
-            <ListBox x:Name="ItemsList" Grid.Column="2"
+            <DockPanel Grid.Column="2">
+                <!-- Breadcrumb / navigation bar -->
+                <Border DockPanel.Dock="Top" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                        BorderThickness="0,0,0,1" Padding="8,5">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="←" Command="{Binding NavigateBackCommand}" Style="{StaticResource ToolButton}"
+                                MinWidth="32" ToolTip="Back" />
+                        <Button Content="↑" Command="{Binding NavigateUpCommand}" Style="{StaticResource ToolButton}"
+                                MinWidth="32" ToolTip="Up (Backspace)" />
+                        <ItemsControl ItemsSource="{Binding Breadcrumb}" VerticalAlignment="Center" Margin="4,0,0,0">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding Label}" Cursor="Hand" Background="Transparent"
+                                                BorderThickness="0" Padding="4,2" Foreground="{StaticResource Ink}"
+                                                Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}" />
+                                        <TextBlock Text="›" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                                   Visibility="{Binding IsLast, Converter={StaticResource InverseBoolToVis}}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <ListBox x:Name="ItemsList"
                      ItemsSource="{Binding ItemsView}"
-                     SelectedItem="{Binding SelectedTile, Mode=TwoWay}"
+                     SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      Background="Transparent" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -369,7 +398,8 @@
                      PreviewMouseWheel="OnItemsPreviewMouseWheel"
                      PreviewKeyDown="OnGridKeyDown">
                 <ListBox.InputBindings>
-                    <KeyBinding Key="Return" Command="{Binding OpenSelectedCommand}" />
+                    <KeyBinding Key="Return" Command="{Binding ActivateItemCommand}" CommandParameter="{Binding SelectedItem}" />
+                    <KeyBinding Key="Back" Command="{Binding NavigateUpCommand}" />
                 </ListBox.InputBindings>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -412,7 +442,30 @@
                         </GroupStyle.ContainerStyle>
                     </GroupStyle>
                 </ListBox.GroupStyle>
-                <ListBox.ItemTemplate>
+                <ListBox.Resources>
+                    <!-- Folder tile -->
+                    <DataTemplate DataType="{x:Type vm:FolderTileVm}">
+                        <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    ToolTip="{Binding FullPath}">
+                            <Border Background="#EEF1F6" CornerRadius="6"
+                                    Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
+                                <Grid>
+                                    <Viewbox Stretch="Uniform" Margin="24,18,24,26">
+                                        <TextBlock Text="📁" />
+                                    </Viewbox>
+                                    <TextBlock Text="{Binding Count, StringFormat={}{0:n0} items}" VerticalAlignment="Bottom"
+                                               HorizontalAlignment="Center" Margin="0,0,0,8" FontSize="11"
+                                               Foreground="{StaticResource Muted}" />
+                                </Grid>
+                            </Border>
+                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource Ink}" FontWeight="SemiBold"
+                                       FontSize="12" TextAlignment="Center" TextTrimming="CharacterEllipsis" Margin="2,4,2,0"
+                                       MaxWidth="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        </StackPanel>
+                    </DataTemplate>
+
+                    <!-- Media tile -->
                     <DataTemplate DataType="{x:Type vm:TileVm}">
                         <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     ToolTip="{Binding Tooltip}">
@@ -472,8 +525,9 @@
                                        MaxWidth="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}" />
                         </StackPanel>
                     </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                </ListBox.Resources>
+                </ListBox>
+            </DockPanel>
         </Grid>
     </DockPanel>
 

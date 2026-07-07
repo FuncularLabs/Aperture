@@ -176,8 +176,10 @@ public partial class MainWindow : Window
 
     private void OnItemsDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (ViewModel?.OpenSelectedCommand.CanExecute(null) == true)
-            ViewModel.OpenSelectedCommand.Execute(null);
+        // Ignore double-clicks that aren't on an item (e.g. section header / empty space).
+        if ((e.OriginalSource as DependencyObject) is null || ViewModel?.SelectedItem is null)
+            return;
+        ViewModel.ActivateItemCommand.Execute(ViewModel.SelectedItem);
     }
 
     private void OnItemsPreviewMouseWheel(object sender, MouseWheelEventArgs e)

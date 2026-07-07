@@ -12,7 +12,7 @@ namespace Reel.App.ViewModels;
 /// on-screen tiles ever trigger a decode. No reliance on container lifecycle
 /// events, which virtualization fires unreliably.
 /// </summary>
-public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string captionFormat) : ObservableObject
+public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string captionFormat) : ObservableObject, IGridItem
 {
     private readonly ThumbnailService _thumbnails = thumbnails;
     private readonly string _captionFormat = captionFormat;

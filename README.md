@@ -146,6 +146,15 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 **Deferred/refinement:** color tags, section-expansion persistence, per-root zoom, cache-cap/thumb-size settings, MSIX packaging.
 
+### Refinements (post-M4) ✅ done
+- **Folder navigation.** Subdirectories show as folder tiles (a "Folders" section) instead of being flattened; double-click drills in, breadcrumb + ← / ↑ / Backspace go back. Home is the single root's top (or root tiles with multiple roots). Indexing stays recursive; **search** (`/`) does a flat recursive result under the current folder (Explorer-style). Date sections apply to the current folder's direct media.
+- **Square-fill thumbnails** (center-crop) for a clean uniform grid; quick-look still shows the whole image.
+- **Real video frames** chosen with ffmpeg's `thumbnail` filter (skips black/transitional frames).
+- **Context menu**: Copy image / Copy thumbnail, Copy file name, Copy full path, Copy + Cut as file-clipboard ops (Explorer paste/move), Hide folder. `Ctrl+C`/`Ctrl+X` on the selection.
+- **Zoom anchors** to the item near the viewport centre.
+- **Arrow-key navigation** (Explorer-style: ←/→ item, ↑/↓ row) with scroll-into-view.
+- **~12 date sections** target — granularity (day/week/month/year) picked so the section count lands near 12.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

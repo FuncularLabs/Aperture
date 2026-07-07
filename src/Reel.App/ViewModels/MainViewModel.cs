@@ -29,12 +29,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private int _activeIndexers;
     private long _lastStreamRefreshTick;
 
-    private List<TileVm> _tiles = [];
-    private TileVm? _selectedTile;
+    private List<IGridItem> _tiles = [];
+    private object? _selectedItem;
     private int _zoom;
     private string _searchText = "";
     private string _statusText = "No folders yet — add one to begin.";
     private string _indexingText = "";
+
+    // Folder navigation: null root = home (all included roots).
+    private (long? RootId, string RelDir) _location = (null, "");
+    private readonly Stack<(long? RootId, string RelDir)> _back = new();
+    private List<TileVm> _mediaTiles = [];
+    private SectionVm? _folderSection;
 
     public MainViewModel(LibraryService library, ThumbnailService thumbnails)
     {
@@ -47,7 +53,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RemoveRootCommand = new RelayCommand<RootVm>(RemoveRoot);
         ZoomInCommand = new RelayCommand(ZoomIn, () => _zoom < ZoomSizes.Length - 1);
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
-        OpenSelectedCommand = new RelayCommand(OpenSelected, () => _selectedTile is not null);
+        OpenSelectedCommand = new RelayCommand(OpenSelected, () => SelectedTile is not null);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         SetSortCommand = new RelayCommand<string>(ApplySortPreset);
         HideFolderCommand = new RelayCommand<TileVm>(HideFolder);
@@ -64,6 +70,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
+        NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
+        NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
+        NavigateBackCommand = new RelayCommand(NavigateBack, () => _back.Count > 0);
+        NavigateCrumbCommand = new RelayCommand<BreadcrumbVm>(c => { if (c is not null) NavigateTo(c.RootId, c.RelDir); });
+        ActivateItemCommand = new RelayCommand<object>(ActivateItem);
 
         _library.RootChanged += OnRootChanged;
 
@@ -79,11 +90,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
     public ICollectionView? ItemsView => _view.View;
 
-    public TileVm? SelectedTile
+    /// <summary>The selected grid item (media tile or folder tile).</summary>
+    public object? SelectedItem
     {
-        get => _selectedTile;
-        set => SetProperty(ref _selectedTile, value);
+        get => _selectedItem;
+        set
+        {
+            if (SetProperty(ref _selectedItem, value))
+                OnPropertyChanged(nameof(SelectedTile));
+        }
     }
+
+    /// <summary>The selection when it is a media tile (null when a folder is selected).</summary>
+    public TileVm? SelectedTile => _selectedItem as TileVm;
 
     public double TileSize => ZoomSizes[_zoom];
 
@@ -173,6 +192,66 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyImageCommand { get; }
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
+    public ICommand NavigateHomeCommand { get; }
+    public ICommand NavigateUpCommand { get; }
+    public ICommand NavigateBackCommand { get; }
+    public ICommand NavigateCrumbCommand { get; }
+    public ICommand ActivateItemCommand { get; }
+
+    // --- Folder navigation --------------------------------------------------
+
+    /// <summary>The location breadcrumb (Home / root / subfolder …).</summary>
+    public ObservableCollection<BreadcrumbVm> Breadcrumb { get; } = [];
+
+    public bool IsHome => _location.RootId is null && _location.RelDir.Length == 0;
+
+    private void NavigateTo(long? rootId, string relDir, bool pushBack = true)
+    {
+        if (pushBack && (_location.RootId != rootId || !string.Equals(_location.RelDir, relDir, StringComparison.OrdinalIgnoreCase)))
+            _back.Push(_location);
+        _location = (rootId, relDir);
+        _searchText = "";          // clear the filter without a redundant rebuild
+        OnPropertyChanged(nameof(SearchText));
+        SelectedItem = null;
+        BuildView();
+        OnPropertyChanged(nameof(IsHome));
+    }
+
+    private void NavigateUp()
+    {
+        if (_location.RootId is null)
+            return;
+        var relDir = _location.RelDir;
+        if (relDir.Length == 0)
+        {
+            NavigateTo(null, ""); // root top → home
+            return;
+        }
+        var parent = Path.GetDirectoryName(relDir) ?? "";
+        NavigateTo(_location.RootId, parent);
+    }
+
+    private void NavigateBack()
+    {
+        if (_back.Count == 0)
+            return;
+        var target = _back.Pop();
+        NavigateTo(target.RootId, target.RelDir, pushBack: false);
+    }
+
+    /// <summary>Enter a folder tile, or open a media tile.</summary>
+    private void ActivateItem(object? item)
+    {
+        switch (item)
+        {
+            case FolderTileVm folder:
+                NavigateTo(folder.RootId, folder.RelDir);
+                break;
+            case TileVm:
+                OpenSelected();
+                break;
+        }
+    }
 
     // --- Clipboard / context menu ------------------------------------------
 
@@ -217,18 +296,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Moves the selection by <paramref name="delta"/> in view order, expanding the landing section.</summary>
-    public TileVm? MoveSelection(int delta)
+    public object? MoveSelection(int delta)
     {
         if (_tiles.Count == 0)
             return null;
 
-        var index = _selectedTile is null ? -1 : _tiles.IndexOf(_selectedTile);
+        var index = _selectedItem is IGridItem current ? _tiles.IndexOf(current) : -1;
         var next = Math.Clamp(index < 0 ? 0 : index + delta, 0, _tiles.Count - 1);
-        var tile = _tiles[next];
-        if (tile.Section is { IsExpanded: false } section)
+        var item = _tiles[next];
+        if (item.Section is { IsExpanded: false } section)
             section.IsExpanded = true;
-        SelectedTile = tile;
-        return tile;
+        SelectedItem = item;
+        return item;
     }
 
     // --- First run ----------------------------------------------------------
@@ -303,9 +382,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OpenQuickLook()
     {
-        if (_tiles.Count == 0)
+        if (_mediaTiles.Count == 0)
             return;
-        var start = _selectedTile is not null ? _tiles.IndexOf(_selectedTile) : 0;
+        var start = SelectedTile is not null ? _mediaTiles.IndexOf(SelectedTile) : 0;
         QuickLookOpen = true;
         ShowQuickLookAt(start < 0 ? 0 : start);
     }
@@ -319,19 +398,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void MoveQuickLook(int delta)
     {
-        if (!_quickLookOpen)
+        if (!_quickLookOpen || _mediaTiles.Count == 0)
             return;
-        ShowQuickLookAt(Math.Clamp(_quickLookIndex + delta, 0, _tiles.Count - 1));
+        ShowQuickLookAt(Math.Clamp(_quickLookIndex + delta, 0, _mediaTiles.Count - 1));
     }
 
     private void ShowQuickLookAt(int index)
     {
-        if (index < 0 || index >= _tiles.Count)
+        if (index < 0 || index >= _mediaTiles.Count)
             return;
         _quickLookIndex = index;
-        var tile = _tiles[index];
-        SelectedTile = tile;
-        QuickLookCaption = $"{tile.FileName}   ·   {index + 1} / {_tiles.Count:n0}";
+        var tile = _mediaTiles[index];
+        SelectedItem = tile;
+        QuickLookCaption = $"{tile.FileName}   ·   {index + 1} / {_mediaTiles.Count:n0}";
         QuickLookImage = null;
         LoadQuickLook(index, tile);
     }
@@ -547,31 +626,182 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (excluded.Count > 0)
             rows = rows.Where(r => !IsExcluded(r.FullPath, excluded)).ToList();
 
-        var query = _searchText.Trim();
-        if (query.Length > 0)
-            rows = rows.Where(r => Matches(r, query)).ToList();
-
         var format = _library.Settings.Current.CaptionFormat;
         var levels = _library.Settings.Current.Sort;
+        var query = _searchText.Trim();
 
-        List<TileVm> tiles;
-        if (GroupByDate && rows.Count > 0)
-            tiles = BuildSectioned(rows, format, levels);
+        // Searching = a flat, recursive result under the current location (Explorer-style);
+        // otherwise show this folder's subfolders as tiles plus its direct media.
+        List<FolderTileVm> folders = [];
+        List<LibraryRow> media;
+        if (query.Length > 0)
+            media = ScopeRecursive(rows).Where(r => Matches(r, query)).ToList();
+        else
+            (folders, media) = ComputeFolderView(rows);
+
+        var useSections = GroupByDate && (media.Count > 0 || folders.Count > 0);
+
+        List<TileVm> mediaTiles;
+        if (useSections && media.Count > 0)
+        {
+            mediaTiles = BuildSectioned(media, format, levels);
+        }
         else
         {
-            LibrarySorter.Sort(rows, levels);
-            tiles = rows.Select(r => new TileVm(r, Thumbnails, format)).ToList();
-            _sections.Clear();
+            LibrarySorter.Sort(media, levels);
+            mediaTiles = media.Select(r => new TileVm(r, Thumbnails, format)).ToList();
+            if (!useSections)
+                _sections.Clear();
         }
 
-        _tiles = tiles;
-        _view.Source = tiles;
-        _view.GroupDescriptions.Clear();
-        if (GroupByDate && rows.Count > 0)
-            _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(TileVm.Section)));
+        var items = new List<IGridItem>(folders.Count + mediaTiles.Count);
+        if (folders.Count > 0)
+        {
+            var folderSection = useSections ? GetFolderSection(folders.Count) : null;
+            foreach (var folder in folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                folder.Section = folderSection;
+                items.Add(folder);
+            }
+        }
+        items.AddRange(mediaTiles);
 
+        _tiles = items;
+        _mediaTiles = mediaTiles;
+        _view.Source = items;
+        _view.GroupDescriptions.Clear();
+        if (useSections)
+            _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(IGridItem.Section)));
+
+        BuildBreadcrumb();
         OnPropertyChanged(nameof(ItemsView));
         UpdateStatus();
+    }
+
+    private SectionVm GetFolderSection(int count)
+    {
+        _folderSection ??= new SectionVm { Key = long.MaxValue, Label = "Folders", IsExpanded = true };
+        _folderSection.Count = count;
+        return _folderSection;
+    }
+
+    // --- Folder view derivation --------------------------------------------
+
+    /// <summary>Resolves single-root "home" to that root's top level.</summary>
+    private (long? RootId, string RelDir) EffectiveLocation()
+    {
+        if (_location.RootId is null)
+        {
+            var included = Roots.Where(r => r.IsIncluded).ToList();
+            if (included.Count == 1)
+                return (included[0].Id, "");
+        }
+        return _location;
+    }
+
+    private (List<FolderTileVm> Folders, List<LibraryRow> Media) ComputeFolderView(List<LibraryRow> rows)
+    {
+        var loc = EffectiveLocation();
+
+        // Multi-root home: one tile per included root.
+        if (loc.RootId is null)
+        {
+            var counts = rows.GroupBy(r => r.Item.RootId).ToDictionary(g => g.Key, g => g.Count());
+            var rootTiles = Roots.Where(r => r.IsIncluded).Select(r => new FolderTileVm
+            {
+                Name = r.Alias,
+                RootId = r.Id,
+                RelDir = "",
+                FullPath = r.Path,
+                Count = counts.GetValueOrDefault(r.Id),
+            }).ToList();
+            return (rootTiles, []);
+        }
+
+        var rootId = loc.RootId.Value;
+        var relDir = loc.RelDir;
+        var rootPath = Roots.FirstOrDefault(r => r.Id == rootId)?.Path ?? "";
+
+        var media = new List<LibraryRow>();
+        var childCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var r in rows)
+        {
+            if (r.Item.RootId != rootId)
+                continue;
+            var dir = GetDir(r.Item.RelPath);
+            if (!IsUnder(dir, relDir))
+                continue;
+
+            if (string.Equals(dir, relDir, StringComparison.OrdinalIgnoreCase))
+                media.Add(r); // file directly in this folder
+            else if (FirstSegmentUnder(r.Item.RelPath, relDir) is { } child)
+                childCounts[child] = childCounts.GetValueOrDefault(child) + 1;
+        }
+
+        var folders = childCounts.Select(kv => new FolderTileVm
+        {
+            Name = kv.Key,
+            RootId = rootId,
+            RelDir = relDir.Length == 0 ? kv.Key : Path.Combine(relDir, kv.Key),
+            FullPath = Path.Combine(rootPath, relDir, kv.Key),
+            Count = kv.Value,
+        }).ToList();
+
+        return (folders, media);
+    }
+
+    /// <summary>All rows under the current location, recursively (for search).</summary>
+    private List<LibraryRow> ScopeRecursive(List<LibraryRow> rows)
+    {
+        var loc = EffectiveLocation();
+        if (loc.RootId is null)
+            return rows;
+        var rootId = loc.RootId.Value;
+        var relDir = loc.RelDir;
+        return rows.Where(r => r.Item.RootId == rootId && IsUnder(GetDir(r.Item.RelPath), relDir)).ToList();
+    }
+
+    private static string GetDir(string relPath) => Path.GetDirectoryName(relPath) ?? "";
+
+    private static bool IsUnder(string dir, string relDir) =>
+        relDir.Length == 0
+        || dir.Equals(relDir, StringComparison.OrdinalIgnoreCase)
+        || dir.StartsWith(relDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    private static string? FirstSegmentUnder(string relPath, string relDir)
+    {
+        var start = relDir.Length == 0 ? 0 : relDir.Length + 1;
+        if (start >= relPath.Length)
+            return null;
+        var rest = relPath[start..];
+        var sep = rest.IndexOf(Path.DirectorySeparatorChar);
+        return sep < 0 ? null : rest[..sep];
+    }
+
+    private void BuildBreadcrumb()
+    {
+        Breadcrumb.Clear();
+        Breadcrumb.Add(new BreadcrumbVm { Label = "Home", RootId = null, RelDir = "" });
+
+        if (_location.RootId is { } rootId)
+        {
+            var alias = Roots.FirstOrDefault(r => r.Id == rootId)?.Alias ?? "…";
+            Breadcrumb.Add(new BreadcrumbVm { Label = alias, RootId = rootId, RelDir = "" });
+
+            if (_location.RelDir.Length > 0)
+            {
+                var accumulated = "";
+                foreach (var part in _location.RelDir.Split(Path.DirectorySeparatorChar))
+                {
+                    accumulated = accumulated.Length == 0 ? part : Path.Combine(accumulated, part);
+                    Breadcrumb.Add(new BreadcrumbVm { Label = part, RootId = rootId, RelDir = accumulated });
+                }
+            }
+        }
+
+        for (var i = 0; i < Breadcrumb.Count; i++)
+            Breadcrumb[i].IsLast = i == Breadcrumb.Count - 1;
     }
 
     private List<TileVm> BuildSectioned(List<LibraryRow> rows, string format, IReadOnlyList<Reel.Core.Settings.SortLevel> levels)
@@ -635,15 +865,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateStatus()
     {
-        var visible = _tiles.Count;
-        if (visible == 0)
+        var mediaCount = _mediaTiles.Count;
+        var folderCount = _tiles.Count - mediaCount;
+
+        if (_tiles.Count == 0)
         {
             StatusText = Roots.Count == 0
                 ? "No folders yet — add one to begin."
-                : _searchText.Length > 0 ? "No matches." : "No items in the included folders.";
+                : _searchText.Length > 0 ? "No matches." : "This folder is empty.";
             return;
         }
-        StatusText = _searchText.Length > 0 ? $"{visible:n0} matches" : $"{visible:n0} items";
+
+        if (_searchText.Length > 0)
+        {
+            StatusText = $"{mediaCount:n0} matches";
+            return;
+        }
+
+        StatusText = folderCount > 0
+            ? $"{mediaCount:n0} items · {folderCount:n0} folder{(folderCount == 1 ? "" : "s")}"
+            : $"{mediaCount:n0} items";
     }
 
     // --- Indexing -----------------------------------------------------------
@@ -753,7 +994,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OpenSelected()
     {
-        var path = _selectedTile?.FullPath;
+        var path = SelectedTile?.FullPath;
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return;
 
