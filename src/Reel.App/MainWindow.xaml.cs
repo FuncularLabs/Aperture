@@ -113,12 +113,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Space opens quick-look — but not when typing or toggling a section header.
+        // Space: toggle the section when the cursor is on a header, else quick-look.
+        // (Skip when a real ToggleButton like the settings gear has focus.)
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox
             && focused is not System.Windows.Controls.Primitives.ToggleButton)
         {
-            ViewModel.OpenQuickLookCommand.Execute(null);
+            if (ViewModel.CursorIsHeader)
+                ViewModel.ToggleCursorSection();
+            else
+                ViewModel.OpenQuickLookCommand.Execute(null);
             e.Handled = true;
         }
     }
@@ -250,26 +254,32 @@ public partial class MainWindow : Window
             return; // leave Ctrl+arrows / Ctrl+wheel alone
         }
 
-        int delta;
-        switch (e.Key)
+        var direction = e.Key switch
         {
-            case Key.Left: delta = -1; break;
-            case Key.Right: delta = 1; break;
-            case Key.Up: delta = -ColumnsPerRow(); break;
-            case Key.Down: delta = ColumnsPerRow(); break;
-            default: return;
+            Key.Left => "left",
+            Key.Right => "right",
+            Key.Up => "up",
+            Key.Down => "down",
+            _ => null,
+        };
+
+        if (direction is not null)
+        {
+            var target = ViewModel.MoveGrid(direction, ColumnsPerRow());
+            if (target is not null)
+                try { ItemsList.ScrollIntoView(target); } catch { }
+            ItemsList.Focus(); // keep focus on the grid so arrows keep firing (even on a header)
+            e.Handled = true;
+            return;
         }
 
-        var tile = ViewModel.MoveSelection(delta);
-        if (tile is not null)
+        if (e.Key == Key.Enter)
         {
-            ItemsList.ScrollIntoView(tile);
-            Dispatcher.BeginInvoke(
-                new Action(() => (ItemsList.ItemContainerGenerator.ContainerFromItem(tile)
-                    as System.Windows.Controls.ListBoxItem)?.Focus()),
-                System.Windows.Threading.DispatcherPriority.Background);
+            var target = ViewModel.ActivateCursor();
+            if (target is not null)
+                try { ItemsList.ScrollIntoView(target); } catch { }
+            e.Handled = true;
         }
-        e.Handled = true;
     }
 
     private int ColumnsPerRow()

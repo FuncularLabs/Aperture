@@ -55,9 +55,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
         OpenSelectedCommand = new RelayCommand(OpenSelected, () => SelectedTile is not null);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
-        SetSortCommand = new RelayCommand<string>(ApplySortPreset);
-        HideFolderCommand = new RelayCommand<TileVm>(HideFolder);
-        ClearExclusionsCommand = new RelayCommand(ClearExclusions);
         OpenQuickLookCommand = new RelayCommand(OpenQuickLook, () => _tiles.Count > 0);
         CloseQuickLookCommand = new RelayCommand(CloseQuickLook);
         QuickLookNextCommand = new RelayCommand(() => MoveQuickLook(1));
@@ -131,7 +128,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Group the grid into collapsible date sections.</summary>
+    /// <summary>Group the grid into collapsible date sections (date sorts only).</summary>
     public bool GroupByDate
     {
         get => _library.Settings.Current.GroupByDate;
@@ -144,6 +141,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             BuildView();
         }
     }
+
+    // --- Sort ---------------------------------------------------------------
+
+    /// <summary>A named sort. Date sorts keep collapsible sections; others flatten to a global list.</summary>
+    public sealed record SortOption(string Label, List<Reel.Core.Settings.SortLevel> Levels, bool Grouped);
+
+    private static readonly SortOption[] SortOptions =
+    [
+        new("Newest first", [new("date", true)], true),
+        new("Oldest first", [new("date", false)], true),
+        new("Name (A–Z)", [new("name", false)], false),
+        new("Name (Z–A)", [new("name", true)], false),
+        new("Largest", [new("size", true)], false),
+        new("Smallest", [new("size", false)], false),
+        new("By camera", [new("camera", false), new("date", true)], false),
+    ];
+
+    public IReadOnlyList<string> SortLabels { get; } = SortOptions.Select(o => o.Label).ToList();
+
+    public string SortPreset
+    {
+        get => _library.Settings.Current.SortPreset;
+        set
+        {
+            if (string.IsNullOrEmpty(value) || value == _library.Settings.Current.SortPreset)
+                return;
+            _library.Settings.Update(s => s.SortPreset = value);
+            OnPropertyChanged();
+            BuildView();
+        }
+    }
+
+    private SortOption CurrentSort => SortOptions.FirstOrDefault(o => o.Label == SortPreset) ?? SortOptions[0];
 
     /// <summary>Index and show video files. Toggling re-indexes every root to add or drop videos.</summary>
     public bool IncludeVideos
@@ -178,9 +208,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ZoomOutCommand { get; }
     public ICommand OpenSelectedCommand { get; }
     public ICommand ClearSearchCommand { get; }
-    public ICommand SetSortCommand { get; }
-    public ICommand HideFolderCommand { get; }
-    public ICommand ClearExclusionsCommand { get; }
     public ICommand OpenQuickLookCommand { get; }
     public ICommand CloseQuickLookCommand { get; }
     public ICommand QuickLookNextCommand { get; }
@@ -295,19 +322,143 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch { }
     }
 
-    /// <summary>Moves the selection by <paramref name="delta"/> in view order, expanding the landing section.</summary>
-    public object? MoveSelection(int delta)
+    // --- Keyboard navigation (headers + visible tiles) ----------------------
+
+    private readonly record struct NavStop(bool IsHeader, SectionVm? Section, IGridItem? Item);
+
+    private SectionVm? _cursorSection;
+
+    /// <summary>True when the keyboard cursor is on a section header rather than a tile.</summary>
+    public bool CursorIsHeader => _cursorSection is not null;
+
+    /// <summary>
+    /// The linear sequence the keyboard walks: each section's header, then that
+    /// section's tiles when it's expanded (collapsed sections contribute only a header).
+    /// </summary>
+    private List<NavStop> BuildNav()
     {
-        if (_tiles.Count == 0)
+        var nav = new List<NavStop>();
+        var i = 0;
+        while (i < _tiles.Count)
+        {
+            var section = _tiles[i].Section;
+            if (section is not null)
+                nav.Add(new NavStop(true, section, null));
+
+            var expanded = section is null || section.IsExpanded;
+            while (i < _tiles.Count && ReferenceEquals(_tiles[i].Section, section))
+            {
+                if (expanded)
+                    nav.Add(new NavStop(false, section, _tiles[i]));
+                i++;
+            }
+        }
+        return nav;
+    }
+
+    private int FindCursor(List<NavStop> nav)
+    {
+        if (_cursorSection is not null)
+        {
+            var h = nav.FindIndex(s => s.IsHeader && ReferenceEquals(s.Section, _cursorSection));
+            if (h >= 0)
+                return h;
+        }
+        if (_selectedItem is IGridItem item)
+        {
+            var t = nav.FindIndex(s => !s.IsHeader && ReferenceEquals(s.Item, item));
+            if (t >= 0)
+                return t;
+        }
+        return 0;
+    }
+
+    /// <summary>Moves the keyboard cursor. Returns the item/section to scroll into view.</summary>
+    public object? MoveGrid(string direction, int columns)
+    {
+        var nav = BuildNav();
+        if (nav.Count == 0)
             return null;
 
-        var index = _selectedItem is IGridItem current ? _tiles.IndexOf(current) : -1;
-        var next = Math.Clamp(index < 0 ? 0 : index + delta, 0, _tiles.Count - 1);
-        var item = _tiles[next];
-        if (item.Section is { IsExpanded: false } section)
-            section.IsExpanded = true;
-        SelectedItem = item;
-        return item;
+        var cur = Math.Clamp(FindCursor(nav), 0, nav.Count - 1);
+        var next = direction switch
+        {
+            "left" => cur - 1,
+            "right" => cur + 1,
+            "down" => StepVertical(nav, cur, columns),
+            "up" => StepVertical(nav, cur, -columns),
+            _ => cur,
+        };
+        return ApplyCursor(nav, Math.Clamp(next, 0, nav.Count - 1));
+    }
+
+    private static int StepVertical(List<NavStop> nav, int cur, int delta)
+    {
+        // Headers are full-width single stops — step by one.
+        if (nav[cur].IsHeader)
+            return cur + Math.Sign(delta);
+
+        var target = cur + delta;
+        if (delta > 0)
+        {
+            for (var k = cur + 1; k <= Math.Min(target, nav.Count - 1); k++)
+                if (nav[k].IsHeader)
+                    return k; // stop at the next header rather than jumping into the next section
+            return Math.Min(target, nav.Count - 1);
+        }
+        for (var k = cur - 1; k >= Math.Max(target, 0); k--)
+            if (nav[k].IsHeader)
+                return k;
+        return Math.Max(target, 0);
+    }
+
+    private object? ApplyCursor(List<NavStop> nav, int index)
+    {
+        var stop = nav[index];
+        ClearCursorHighlight();
+
+        if (stop.IsHeader)
+        {
+            _cursorSection = stop.Section;
+            stop.Section!.IsCursor = true;
+            SelectedItem = null;
+            return FirstItemOfSection(stop.Section);
+        }
+
+        _cursorSection = null;
+        SelectedItem = stop.Item;
+        return stop.Item;
+    }
+
+    private void ClearCursorHighlight()
+    {
+        if (_folderSection is not null)
+            _folderSection.IsCursor = false;
+        foreach (var s in _sections.Values)
+            s.IsCursor = false;
+    }
+
+    private IGridItem? FirstItemOfSection(SectionVm section) =>
+        _tiles.FirstOrDefault(t => ReferenceEquals(t.Section, section));
+
+    /// <summary>Enter: toggle the section on a header, or open/enter the tile.</summary>
+    public object? ActivateCursor()
+    {
+        if (_cursorSection is not null)
+        {
+            _cursorSection.IsExpanded = !_cursorSection.IsExpanded;
+            return FirstItemOfSection(_cursorSection);
+        }
+        if (_selectedItem is not null)
+            ActivateItem(_selectedItem);
+        return null;
+    }
+
+    /// <summary>Space on a header toggles it (Space on a tile is handled as quick-look).</summary>
+    public void ToggleCursorSection()
+    {
+        if (_cursorSection is not null)
+            _cursorSection.IsExpanded = !_cursorSection.IsExpanded;
     }
 
     // --- First run ----------------------------------------------------------
@@ -432,81 +583,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return bytes is null ? null : ImageLoading.Decode(bytes, 0);
     }
 
-    public string ExclusionsSummary
-    {
-        get
-        {
-            var n = _library.Settings.Current.ExcludedFolders.Count;
-            return n == 0 ? "" : $"{n} folder{(n == 1 ? "" : "s")} hidden";
-        }
-    }
-
-    public bool HasExclusions => _library.Settings.Current.ExcludedFolders.Count > 0;
-
-    private void HideFolder(TileVm? tile)
-    {
-        var dir = tile is null ? null : Path.GetDirectoryName(tile.FullPath);
-        if (string.IsNullOrEmpty(dir))
-            return;
-
-        _library.Settings.Update(s =>
-        {
-            if (!s.ExcludedFolders.Contains(dir, StringComparer.OrdinalIgnoreCase))
-                s.ExcludedFolders.Add(dir);
-        });
-        OnPropertyChanged(nameof(ExclusionsSummary));
-        OnPropertyChanged(nameof(HasExclusions));
-        BuildView();
-    }
-
-    private void ClearExclusions()
-    {
-        _library.Settings.Update(s => s.ExcludedFolders.Clear());
-        OnPropertyChanged(nameof(ExclusionsSummary));
-        OnPropertyChanged(nameof(HasExclusions));
-        BuildView();
-    }
-
-    private static bool IsExcluded(string fullPath, List<string> excluded)
-    {
-        var dir = Path.GetDirectoryName(fullPath) ?? "";
-        foreach (var e in excluded)
-        {
-            if (dir.Equals(e, StringComparison.OrdinalIgnoreCase)
-                || dir.StartsWith(e + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>Human-readable summary of the active sort, for the settings UI.</summary>
-    public string SortSummary
-    {
-        get
-        {
-            var levels = _library.Settings.Current.Sort;
-            return levels.Count == 0
-                ? "unsorted"
-                : string.Join(", ", levels.Select(l => $"{l.Token} {(l.Descending ? "↓" : "↑")}"));
-        }
-    }
-
-    private void ApplySortPreset(string? preset)
-    {
-        List<Reel.Core.Settings.SortLevel> spec = preset switch
-        {
-            "newest" => [new("date", true)],
-            "oldest" => [new("date", false)],
-            "name" => [new("name", false)],
-            "largest" => [new("size", true)],
-            "camera" => [new("camera", false), new("date", true)],
-            _ => _library.Settings.Current.Sort,
-        };
-        _library.Settings.Update(s => s.Sort = spec);
-        OnPropertyChanged(nameof(SortSummary));
-        BuildView();
-    }
-
     /// <summary>Kick a background reconcile of every root, then watch it. Cached rows are already on screen.</summary>
     public void StartBackgroundRefresh()
     {
@@ -620,14 +696,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void BuildView()
     {
+        ClearCursorHighlight();
+        _cursorSection = null;
+
         var rows = _library.GetUnion();
 
-        var excluded = _library.Settings.Current.ExcludedFolders;
-        if (excluded.Count > 0)
-            rows = rows.Where(r => !IsExcluded(r.FullPath, excluded)).ToList();
-
         var format = _library.Settings.Current.CaptionFormat;
-        var levels = _library.Settings.Current.Sort;
+        var sort = CurrentSort;
+        var levels = sort.Levels;
         var query = _searchText.Trim();
 
         // Searching = a flat, recursive result under the current location (Explorer-style);
@@ -639,7 +715,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         else
             (folders, media) = ComputeFolderView(rows);
 
-        var useSections = GroupByDate && (media.Count > 0 || folders.Count > 0);
+        // Only date sorts get collapsible date sections; other sorts flatten to a global list.
+        var useSections = GroupByDate && sort.Grouped && (media.Count > 0 || folders.Count > 0);
 
         List<TileVm> mediaTiles;
         if (useSections && media.Count > 0)

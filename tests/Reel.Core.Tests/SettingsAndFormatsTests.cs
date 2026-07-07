@@ -33,7 +33,8 @@ public class SettingsAndFormatsTests
 
         Assert.True(settings.Current.IncludeVideos);
         Assert.Equal(2, settings.Current.DefaultZoom);
-        Assert.NotEmpty(settings.Current.Sort);
+        Assert.Equal("Newest first", settings.Current.SortPreset);
+        Assert.True(settings.Current.GroupByDate);
     }
 
     [Fact]

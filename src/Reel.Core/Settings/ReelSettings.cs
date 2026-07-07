@@ -30,14 +30,11 @@ public sealed class ReelSettings
     /// <summary>Tile caption format string. See <c>CaptionFormatter</c> for tokens.</summary>
     public string CaptionFormat { get; set; } = "{date:yyyy-MM-dd HH.mm} · {alias}";
 
-    /// <summary>Multi-level sort. Default: newest first, then alias.</summary>
-    public List<SortLevel> Sort { get; set; } = [new("date", true), new("alias", false)];
+    /// <summary>Active sort, by preset label (see MainViewModel.SortOptions).</summary>
+    public string SortPreset { get; set; } = "Newest first";
 
-    /// <summary>Group the grid into collapsible date sections. On by default.</summary>
+    /// <summary>Group the grid into collapsible date sections (only applies to date sorts). On by default.</summary>
     public bool GroupByDate { get; set; } = true;
-
-    /// <summary>Absolute folder paths excluded from the unioned view (surgical carve-outs).</summary>
-    public List<string> ExcludedFolders { get; set; } = [];
 
     /// <summary>Soft cap on the on-disk thumbnail cache, in megabytes.</summary>
     public long ThumbnailCacheCapMb { get; set; } = 2048;

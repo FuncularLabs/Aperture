@@ -118,13 +118,18 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="b" Background="Transparent" CornerRadius="6" Padding="6,5">
+                        <Border x:Name="b" Background="Transparent" CornerRadius="6" Padding="6,5"
+                                BorderBrush="Transparent" BorderThickness="1">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="b" Property="Background" Value="#EEF1F6" />
                             </Trigger>
+                            <DataTrigger Binding="{Binding Name.IsCursor}" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#E3ECFF" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}" />
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -210,35 +215,6 @@
                             <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,12"
                                        Text="Tokens: {name} {date:fmt} {mtime} {alias} {size} {dim} {camera} {ext}. Use ?? for fallback." />
 
-                            <TextBlock Text="Sort" Foreground="{StaticResource Ink}" FontSize="12"
-                                       FontWeight="SemiBold" Margin="0,0,0,4" />
-                            <WrapPanel>
-                                <Button Content="Newest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
-                                        Command="{Binding SetSortCommand}" CommandParameter="newest" />
-                                <Button Content="Oldest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
-                                        Command="{Binding SetSortCommand}" CommandParameter="oldest" />
-                                <Button Content="Name" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
-                                        Command="{Binding SetSortCommand}" CommandParameter="name" />
-                                <Button Content="Largest" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
-                                        Command="{Binding SetSortCommand}" CommandParameter="largest" />
-                                <Button Content="Camera" Style="{StaticResource ToolButton}" Margin="0,0,4,4"
-                                        Command="{Binding SetSortCommand}" CommandParameter="camera" />
-                            </WrapPanel>
-                            <TextBlock Text="{Binding SortSummary, StringFormat=Sorting by: {0}}"
-                                       Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0" />
-
-                            <StackPanel Margin="0,12,0,0"
-                                        Visibility="{Binding HasExclusions, Converter={StaticResource BoolToVis}}">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding ExclusionsSummary}" Foreground="{StaticResource Ink}"
-                                               FontSize="12" VerticalAlignment="Center" />
-                                    <Button Content="Show all" Style="{StaticResource ToolButton}" Margin="8,0,0,0"
-                                            Command="{Binding ClearExclusionsCommand}" />
-                                </StackPanel>
-                                <TextBlock Text="Right-click a tile → “Hide this folder” to carve folders out."
-                                           Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
-                                           Margin="0,3,0,0" />
-                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Popup>
@@ -254,8 +230,11 @@
                             ToolTip="Zoom out (Ctrl+-)" MinWidth="36" />
                     <Button Content="＋" Style="{StaticResource ToolButton}" Click="OnZoomInClick"
                             ToolTip="Zoom in (Ctrl++)" MinWidth="36" />
-                    <TextBlock Text="Ctrl + scroll to zoom" Foreground="{StaticResource Muted}"
-                               VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12" />
+                    <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
+                    <TextBlock Text="Sort" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                               Margin="0,0,6,0" FontSize="12" />
+                    <ComboBox ItemsSource="{Binding SortLabels}" SelectedItem="{Binding SortPreset, Mode=TwoWay}"
+                              Width="120" VerticalAlignment="Center" Height="30" />
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -398,7 +377,6 @@
                      PreviewMouseWheel="OnItemsPreviewMouseWheel"
                      PreviewKeyDown="OnGridKeyDown">
                 <ListBox.InputBindings>
-                    <KeyBinding Key="Return" Command="{Binding ActivateItemCommand}" CommandParameter="{Binding SelectedItem}" />
                     <KeyBinding Key="Back" Command="{Binding NavigateUpCommand}" />
                 </ListBox.InputBindings>
                 <ListBox.ItemsPanel>
@@ -492,10 +470,6 @@
                                               CommandParameter="{Binding}" />
                                     <MenuItem Header="Cut" InputGestureText="Ctrl+X"
                                               Command="{Binding DataContext.CutFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding}" />
-                                    <Separator />
-                                    <MenuItem Header="Hide this folder from the view"
-                                              Command="{Binding DataContext.HideFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
                             </StackPanel.ContextMenu>

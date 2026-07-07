@@ -155,6 +155,11 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Arrow-key navigation** (Explorer-style: ←/→ item, ↑/↓ row) with scroll-into-view.
 - **~12 date sections** target — granularity (day/week/month/year) picked so the section count lands near 12.
 
+### Feedback round 2 ✅ done
+- **Sort is an always-visible toolbar dropdown** showing the active sort. Date sorts (Newest/Oldest) keep collapsible date sections; every other sort (Name, Largest, Camera…) **flattens to one global list** so the order is obvious.
+- **Scope = root checkboxes only.** Removed the per-tile "Hide this folder" exclusions (folder navigation replaces them).
+- **Coherent grouped keyboard navigation.** A cursor walks section headers *and* visible tiles: arrows move predictably (Up/Down stop on the next header rather than skipping into a section), the header highlights when the cursor is on it, `Enter`/`Space` toggles a section, `Enter` opens/enters a tile. No more sections auto-expanding as you arrow through.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

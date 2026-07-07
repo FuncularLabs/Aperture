@@ -25,4 +25,13 @@ public sealed class SectionVm : ObservableObject
         get => _isExpanded;
         set => SetProperty(ref _isExpanded, value);
     }
+
+    /// <summary>True when the keyboard cursor is on this section's header.</summary>
+    private bool _isCursor;
+    public bool IsCursor
+    {
+        get => _isCursor;
+        set => SetProperty(ref _isCursor, value);
+    }
 }
+
