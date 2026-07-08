@@ -5,6 +5,7 @@
         xmlns:vm="clr-namespace:Reel.App.ViewModels"
         xmlns:mvvm="clr-namespace:Reel.App.Mvvm"
         Title="Reel" Height="820" Width="1280"
+        Icon="Assets/reel.ico"
         Background="#F5F6F8"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
@@ -196,6 +197,16 @@
                             <DropShadowEffect Color="#22000000" BlurRadius="16" ShadowDepth="2" Direction="270" />
                         </Border.Effect>
                         <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                                <Image Source="Assets/mascot.png" Width="34" Height="34" />
+                                <StackPanel VerticalAlignment="Center" Margin="10,0,0,0">
+                                    <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource Ink}"
+                                               FontWeight="SemiBold" FontSize="14" />
+                                    <TextBlock Text="A fast local image &amp; video browser" Foreground="{StaticResource Muted}"
+                                               FontSize="11" />
+                                </StackPanel>
+                            </StackPanel>
+
                             <TextBlock Text="SETTINGS" Foreground="{StaticResource Muted}" FontSize="11"
                                        FontWeight="SemiBold" Margin="0,0,0,10" />
 
@@ -451,6 +462,9 @@
                                 <ContextMenu>
                                     <MenuItem Header="Open"
                                               Command="{Binding DataContext.OpenSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                    <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
+                                        <MenuItem Header="" />
+                                    </MenuItem>
                                     <Separator />
                                     <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
                                               Command="{Binding DataContext.CopyImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"

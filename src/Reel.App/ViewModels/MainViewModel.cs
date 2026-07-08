@@ -82,6 +82,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ThumbnailService Thumbnails { get; }
 
+    /// <summary>"Reel vX.Y.Z" from the assembly version, for the About row.</summary>
+    public string AppVersion =>
+        "Reel v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.5.0");
+
     public ObservableCollection<RootVm> Roots { get; } = [];
 
     /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
@@ -1077,7 +1081,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            // Launch through Explorer (rather than a bare ShellExecute) so the default
+            // viewer — e.g. Photos — receives the file with its folder context and can
+            // page through siblings with its Back/Forward arrows, like a double-click.
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
         }
         catch (Exception ex)
         {

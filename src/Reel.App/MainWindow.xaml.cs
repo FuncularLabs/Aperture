@@ -178,6 +178,32 @@ public partial class MainWindow : Window
             root.IsEditing = false;
     }
 
+    /// <summary>Populate the shell "Open with" submenu for the right-clicked tile.</summary>
+    private void OnOpenWithSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.MenuItem menu
+            || menu.DataContext is not TileVm tile)
+            return;
+
+        menu.Items.Clear();
+        var path = tile.FullPath;
+
+        foreach (var handler in Services.ShellOpenWith.GetHandlers(path))
+        {
+            var item = new System.Windows.Controls.MenuItem { Header = handler.Name };
+            var captured = handler;
+            item.Click += (_, _) => captured.Invoke(path);
+            menu.Items.Add(item);
+        }
+
+        if (menu.Items.Count > 0)
+            menu.Items.Add(new System.Windows.Controls.Separator());
+
+        var chooser = new System.Windows.Controls.MenuItem { Header = "Choose another app…" };
+        chooser.Click += (_, _) => Services.ShellOpenWith.ChooseAnotherApp(path);
+        menu.Items.Add(chooser);
+    }
+
     private void OnItemsDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // Ignore double-clicks that aren't on an item (e.g. section header / empty space).
