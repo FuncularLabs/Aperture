@@ -36,6 +36,16 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
     public bool HasNote => !string.IsNullOrWhiteSpace(Annotation.Note);
     public bool HasAnnotation => HasTags || HasNote;
 
+    /// <summary>Folder location relative to the root, e.g. "Camera Sample/2014".</summary>
+    public string Location
+    {
+        get
+        {
+            var dir = System.IO.Path.GetDirectoryName(Item.RelPath);
+            return string.IsNullOrEmpty(dir) ? Row.RootAlias : $"{Row.RootAlias}/{dir.Replace('\\', '/')}";
+        }
+    }
+
     /// <summary>
     /// The tile image. Reading it (which the binding does on realization) kicks a
     /// one-time async load; the property then raises change notification when the
@@ -62,7 +72,7 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
     {
         get
         {
-            var lines = $"{FileName}\n{DisplayDate:yyyy-MM-dd HH:mm}\n{Dimensions}\n{SizeText}\n{Row.RootAlias}";
+            var lines = $"{FileName}\n{DisplayDate:yyyy-MM-dd HH:mm}\n{Dimensions}\n{SizeText}\nin [{Location}]";
             if (HasTags)
                 lines += $"\n🏷 {string.Join(", ", Annotation.Tags)}";
             if (HasNote)

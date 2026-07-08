@@ -25,4 +25,8 @@
     <Resource Include="Assets\mascot.png" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -12,6 +12,8 @@
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <mvvm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
+        <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
+        <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
@@ -162,11 +164,11 @@
                               Style="{StaticResource ToolToggle}" Margin="6,0,0,0" />
 
                 <!-- Search (right, left of settings) -->
-                <Border DockPanel.Dock="Right" Width="230" Height="30" Background="#F3F4F7"
+                <Border DockPanel.Dock="Right" Width="320" Height="30" Background="#F3F4F7"
                         BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="6"
                         Margin="0,0,6,0" VerticalAlignment="Center">
                     <Grid>
-                        <TextBlock Text="🔍  Search   tag:  note:  is:video  ( / )" Foreground="{StaticResource Muted}" FontSize="12"
+                        <TextBlock Text="🔍  Search   tag:  note:  is:video   ( / or Ctrl+F )" Foreground="{StaticResource Muted}" FontSize="12"
                                    Margin="9,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
@@ -225,6 +227,17 @@
                                      BorderBrush="{StaticResource Line}" BorderThickness="1" />
                             <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,12"
                                        Text="Tokens: {name} {date:fmt} {mtime} {alias} {size} {dim} {camera} {ext}. Use ?? for fallback." />
+
+                            <Border Height="1" Background="{StaticResource Line}" Margin="0,2,0,12" />
+
+                            <Button Content="🏷  Manage tags…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Margin="0,0,0,6" Command="{Binding ManageTagsCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}" />
+                            <Button Content="📖  View README (help)" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Command="{Binding OpenReadmeCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}" />
 
                         </StackPanel>
                     </Border>
@@ -316,7 +329,7 @@
                                         <ContextMenu Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}">
                                             <MenuItem Header="Rename" Command="{Binding Root.BeginRenameCommand}" />
                                             <MenuItem Header="Remove folder"
-                                                      Command="{Binding DataContext.RemoveRootCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                      Command="{Binding Data.RemoveRootCommand, Source={StaticResource Vm}}"
                                                       CommandParameter="{Binding Root}" />
                                         </ContextMenu>
                                     </StackPanel.ContextMenu>
@@ -399,33 +412,33 @@
                             <StackPanel.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="Open"
-                                              Command="{Binding DataContext.OpenSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                              Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
                                     <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
                                         <MenuItem Header="" />
                                     </MenuItem>
                                     <Separator />
                                     <MenuItem Header="Tags &amp; notes…"
-                                              Command="{Binding DataContext.EditAnnotationCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <Separator />
                                     <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
-                                              Command="{Binding DataContext.CopyImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
-                                              Command="{Binding DataContext.CopyImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <MenuItem Header="Copy file name"
-                                              Command="{Binding DataContext.CopyFileNameCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <MenuItem Header="Copy full path"
-                                              Command="{Binding DataContext.CopyFullPathCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <Separator />
                                     <MenuItem Header="Copy" InputGestureText="Ctrl+C"
-                                              Command="{Binding DataContext.CopyFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                     <MenuItem Header="Cut" InputGestureText="Ctrl+X"
-                                              Command="{Binding DataContext.CutFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
                             </StackPanel.ContextMenu>

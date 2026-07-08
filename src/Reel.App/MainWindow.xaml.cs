@@ -99,6 +99,13 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+            if (e.Key == Key.F)
+            {
+                SearchBox.Focus();
+                SearchBox.SelectAll();
+                e.Handled = true;
+                return;
+            }
         }
 
         var focused = Keyboard.FocusedElement;

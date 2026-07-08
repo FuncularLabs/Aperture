@@ -54,6 +54,48 @@ public sealed class AnnotationStore(ReelDatabase database)
         return [.. tags];
     }
 
+    /// <summary>Tag -> number of files carrying it.</summary>
+    public Dictionary<string, int> GetTagCounts()
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var annotation in GetAll().Values)
+            foreach (var tag in annotation.Tags)
+                counts[tag] = counts.GetValueOrDefault(tag) + 1;
+        return counts;
+    }
+
+    /// <summary>Renames a tag across every file. Renaming onto an existing tag merges them.</summary>
+    public void RenameTag(string oldTag, string newTag)
+    {
+        newTag = newTag.Trim();
+        if (newTag.Length == 0 || string.Equals(oldTag, newTag, StringComparison.Ordinal))
+            return;
+
+        foreach (var (path, annotation) in GetAll())
+        {
+            if (!annotation.Tags.Any(t => Ci.Equals(t, oldTag)))
+                continue;
+            var tags = annotation.Tags
+                .Select(t => Ci.Equals(t, oldTag) ? newTag : t)
+                .Distinct(Ci)
+                .ToList();
+            Save(path, tags, annotation.Note);
+        }
+    }
+
+    /// <summary>Removes a tag from every file.</summary>
+    public void DeleteTag(string tag)
+    {
+        foreach (var (path, annotation) in GetAll())
+        {
+            if (!annotation.Tags.Any(t => Ci.Equals(t, tag)))
+                continue;
+            Save(path, annotation.Tags.Where(t => !Ci.Equals(t, tag)).ToList(), annotation.Note);
+        }
+    }
+
+    private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
+
     public void Save(string path, IReadOnlyList<string> tags, string note)
     {
         var cleanTags = tags

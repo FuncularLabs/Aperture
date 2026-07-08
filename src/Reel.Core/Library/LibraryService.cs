@@ -83,6 +83,12 @@ public sealed class LibraryService : IDisposable
     public void SaveAnnotation(string path, IReadOnlyList<string> tags, string note) =>
         _annotations.Save(path, tags, note);
 
+    public Dictionary<string, int> GetTagCounts() => _annotations.GetTagCounts();
+
+    public void RenameTag(string oldTag, string newTag) => _annotations.RenameTag(oldTag, newTag);
+
+    public void DeleteTag(string tag) => _annotations.DeleteTag(tag);
+
     // --- Indexing ------------------------------------------------------------
 
     /// <summary>Runs a full reconcile of a root. Call on a background thread.</summary>

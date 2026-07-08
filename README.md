@@ -174,7 +174,15 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Tags & Notes** (`Ctrl+T` or right-click → "Tags & notes…"): one dialog with a tag chip editor (type to add, pick from suggestions, ✕ to remove — new tags grow the suggestion list) and a free-text note. Stored keyed by path in `reel.db` (survive re-index / root re-add). Annotated tiles show a 🏷 badge; tooltip shows tags + note.
 - **Gmail-style search**: `tag:x`, `note:x`, `has:tag`/`has:note`, `is:video`/`is:image`/`is:tagged`, `type:mp4`, `name:`, `camera:`, `folder:`, quoted values (`tag:"date night"`); bare words match name/alias/camera/tags/note; terms are AND-ed. Search is now global across the library. Core-tested.
 
-**Deferred/refinement:** tag rename/merge/delete management UI; note markdown; sidecar export of annotations.
+### Feedback round 5 ✅ done
+- **Context-menu dialog fix**: the tile right-click → "Tags & notes…" now actually launches. Root cause was that `RelativeSource AncestorType=Window` doesn't resolve inside a `ContextMenu` (a separate popup tree); commands are now routed through a `BindingProxy` held in the window's resources (`Source={StaticResource Vm}`), which fixes every context-menu command.
+- **Tag management UI** (Settings → "Manage tags…"): lists every tag with a per-file count; edit a name + Enter to rename (renaming onto an existing tag merges them); Delete removes a tag from all files (and drops now-empty annotation rows). Core-tested (counts, rename, merge, delete).
+- **`Ctrl+F`** focuses the search box (as does `/`); the box is wider.
+- **README from Settings**: "View README (help)" opens this file; it's copied next to the app on build.
+- **Tooltip location**: since search spans subfolders, each tile's tooltip shows its `FOLDERS`-relative path, e.g. `in [Camera Uploads/2014]`.
+- **Open like a double-click**: files now shell-execute their default `open` verb with the containing folder as the working directory (instead of via `explorer.exe`) — the closest replica of an Explorer double-click, which is what gives folder-aware viewers their context. Note: whether Windows Photos pages siblings with its Back/Forward arrows is decided by Photos itself once it has the file + folder; Reel can only hand it off faithfully.
+
+**Deferred/refinement:** note markdown; sidecar export of annotations (deferred at the user's request).
 
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
@@ -211,4 +219,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails. 42 xUnit tests over the Core engine (indexer, thumbnails, watcher, union, formatting, settings). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and five rounds of feedback. 54 xUnit tests over the Core engine (indexer, thumbnails, watcher, union, formatting, settings, search, annotations, tag management). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search). See each milestone above for what shipped and what was deferred.

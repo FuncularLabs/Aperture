@@ -70,6 +70,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
         EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
+        ManageTagsCommand = new RelayCommand(ManageTags);
+        OpenReadmeCommand = new RelayCommand(OpenReadme);
         NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
         NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
         NavigateBackCommand = new RelayCommand(NavigateBack, () => _back.Count > 0);
@@ -291,7 +293,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
     public ICommand EditAnnotationCommand { get; }
+    public ICommand ManageTagsCommand { get; }
+    public ICommand OpenReadmeCommand { get; }
     public ICommand NavigateHomeCommand { get; }
+
+    private void OpenReadme()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "README.md");
+        if (!File.Exists(path))
+            return;
+        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch { }
+    }
+
+    private void ManageTags()
+    {
+        var vm = new TagManagerVm(_library);
+        var dialog = new TagManagerDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow };
+        dialog.ShowDialog();
+        if (vm.Changed)
+        {
+            LoadAnnotations();
+            BuildView();
+        }
+    }
     public ICommand NavigateUpCommand { get; }
     public ICommand NavigateBackCommand { get; }
     public ICommand NavigateCrumbCommand { get; }
@@ -1192,10 +1217,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            // Launch through Explorer (rather than a bare ShellExecute) so the default
-            // viewer — e.g. Photos — receives the file with its folder context and can
-            // page through siblings with its Back/Forward arrows, like a double-click.
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+            // Replicate an Explorer double-click as faithfully as possible: shell-execute
+            // the file's default "open" verb with the containing folder as the working
+            // directory. This is what lets folder-aware viewers (Windows Photos) page
+            // through siblings with Back/Forward. (Launching via explorer.exe spawns an
+            // extra shell process and doesn't improve that folder context.)
+            Process.Start(new ProcessStartInfo(path)
+            {
+                UseShellExecute = true,
+                Verb = "open",
+                WorkingDirectory = Path.GetDirectoryName(path) ?? "",
+            });
         }
         catch (Exception ex)
         {
