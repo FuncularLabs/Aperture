@@ -19,6 +19,7 @@ public sealed class LibraryService : IDisposable
     private readonly RootStore _roots;
     private readonly ItemStore _items;
     private readonly ThumbnailStore _thumbnails;
+    private readonly AnnotationStore _annotations;
     private readonly Indexer _indexer;
     private readonly Dictionary<long, RootWatcher> _watchers = [];
     private readonly Lock _watchersLock = new();
@@ -38,6 +39,7 @@ public sealed class LibraryService : IDisposable
         _roots = new RootStore(_db);
         _items = new ItemStore(_db);
         _thumbnails = new ThumbnailStore(_db);
+        _annotations = new AnnotationStore(_db);
         _indexer = new Indexer(_db, new ThumbnailGenerator(), new MetadataReader());
         Settings = new SettingsService(dataDir);
     }
@@ -69,6 +71,17 @@ public sealed class LibraryService : IDisposable
     public int CountForRoot(long rootId) => _items.CountForRoot(rootId);
 
     public byte[]? GetThumbnail(long itemId, ThumbSize size) => _thumbnails.Get(itemId, size);
+
+    // --- Annotations (tags + notes) -----------------------------------------
+
+    public Annotation GetAnnotation(string path) => _annotations.Get(path);
+
+    public Dictionary<string, Annotation> GetAllAnnotations() => _annotations.GetAll();
+
+    public List<string> GetAllTags() => _annotations.GetAllTags();
+
+    public void SaveAnnotation(string path, IReadOnlyList<string> tags, string note) =>
+        _annotations.Save(path, tags, note);
 
     // --- Indexing ------------------------------------------------------------
 

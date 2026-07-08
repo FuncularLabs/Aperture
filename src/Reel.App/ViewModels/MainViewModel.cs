@@ -41,6 +41,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly Stack<(long? RootId, string RelDir)> _back = new();
     private List<TileVm> _mediaTiles = [];
     private List<LibraryRow> _allRows = [];
+    private Dictionary<string, Annotation> _annotations = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _availableTags = [];
 
     public MainViewModel(LibraryService library, ThumbnailService thumbnails)
     {
@@ -67,6 +69,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
+        EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
         NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
         NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
         NavigateBackCommand = new RelayCommand(NavigateBack, () => _back.Count > 0);
@@ -76,10 +79,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library.RootChanged += OnRootChanged;
 
         LoadRoots();
+        LoadAnnotations();
         BuildView();
         BuildTree();
         SelectDefaultNode();
         MaybeStartFirstRun();
+    }
+
+    private void LoadAnnotations()
+    {
+        _annotations = _library.GetAllAnnotations();
+        _availableTags = _library.GetAllTags();
+    }
+
+    private Annotation AnnotationFor(LibraryRow row) =>
+        _annotations.GetValueOrDefault(row.FullPath) ?? Annotation.Empty;
+
+    private TileVm MakeTile(LibraryRow row, string format) =>
+        new(row, Thumbnails, format, AnnotationFor(row));
+
+    private void EditAnnotation(TileVm? tile)
+    {
+        if (tile is null)
+            return;
+
+        var current = AnnotationFor(tile.Row);
+        var vm = new AnnotationDialogVm(tile.FileName, current.Tags, current.Note, _availableTags);
+        var dialog = new AnnotationDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        _library.SaveAnnotation(tile.FullPath, [.. vm.Tags], vm.Note);
+        LoadAnnotations();
+        BuildView();
     }
 
     private void SelectDefaultNode()
@@ -95,6 +127,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>"Reel vX.Y.Z" from the assembly version, for the About row.</summary>
     public string AppVersion =>
         "Reel v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.5.0");
+
+    private string _windowTitle = "Reel";
+
+    /// <summary>Window title — shows the current folder's full path.</summary>
+    public string WindowTitle
+    {
+        get => _windowTitle;
+        private set => SetProperty(ref _windowTitle, value);
+    }
+
+    private void UpdateWindowTitle()
+    {
+        if (_location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root)
+        {
+            var full = _location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir);
+            WindowTitle = $"Reel  —  {full}";
+        }
+        else
+        {
+            WindowTitle = "Reel";
+        }
+    }
 
     public ObservableCollection<RootVm> Roots { get; } = [];
 
@@ -236,6 +290,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyImageCommand { get; }
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
+    public ICommand EditAnnotationCommand { get; }
     public ICommand NavigateHomeCommand { get; }
     public ICommand NavigateUpCommand { get; }
     public ICommand NavigateBackCommand { get; }
@@ -744,11 +799,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var levels = sort.Levels;
         var query = _searchText.Trim();
 
-        // Searching = a flat, recursive result under the current folder (Explorer-style);
+        // Searching = a flat, global Gmail-style query over the whole library;
         // otherwise the current folder's direct media (subfolders live in the tree).
-        var media = query.Length > 0
-            ? ScopeRecursive(_allRows).Where(r => Matches(r, query)).ToList()
-            : ComputeMedia(_allRows);
+        List<LibraryRow> media;
+        if (query.Length > 0)
+        {
+            var search = SearchQuery.Parse(query);
+            media = _allRows.Where(r => search.Matches(r, AnnotationFor(r))).ToList();
+        }
+        else
+        {
+            media = ComputeMedia(_allRows);
+        }
 
         // Only date sorts get collapsible date sections; other sorts flatten to a global list.
         var useSections = GroupByDate && sort.Grouped && media.Count > 0;
@@ -761,7 +823,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         else
         {
             LibrarySorter.Sort(media, levels);
-            mediaTiles = media.Select(r => new TileVm(r, Thumbnails, format)).ToList();
+            mediaTiles = media.Select(r => MakeTile(r, format)).ToList();
             _sections.Clear();
         }
 
@@ -774,6 +836,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         OnPropertyChanged(nameof(ItemsView));
         UpdateStatus();
+        UpdateWindowTitle();
     }
 
     /// <summary>Media files directly inside the current folder (non-recursive).</summary>
@@ -835,7 +898,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 acc[child] = (childRel, 1, deeper);
         }
 
-        return acc.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+        return acc.OrderByDescending(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
             .Select(kv => (kv.Key, kv.Value.RelDir, kv.Value.Count, kv.Value.HasChild))
             .ToList();
     }
@@ -964,7 +1027,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (seen.Add(bucket.Key))
                 order.Add(section);
 
-            tiles.Add(new TileVm(r, Thumbnails, format) { Section = section });
+            var tile = MakeTile(r, format);
+            tile.Section = section;
+            tiles.Add(tile);
         }
 
         foreach (var section in order)
@@ -987,10 +1052,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return tiles;
     }
 
-    private static bool Matches(LibraryRow r, string query) =>
-        r.Item.FileName.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || r.RootAlias.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || (r.Item.Camera?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private void UpdateStatus()
     {

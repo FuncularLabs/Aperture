@@ -12,7 +12,8 @@ namespace Reel.App.ViewModels;
 /// on-screen tiles ever trigger a decode. No reliance on container lifecycle
 /// events, which virtualization fires unreliably.
 /// </summary>
-public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string captionFormat) : ObservableObject, IGridItem
+public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string captionFormat, Annotation annotation)
+    : ObservableObject, IGridItem
 {
     private readonly ThumbnailService _thumbnails = thumbnails;
     private readonly string _captionFormat = captionFormat;
@@ -21,6 +22,7 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
 
     public LibraryRow Row { get; } = row;
     public MediaItem Item => Row.Item;
+    public Annotation Annotation { get; } = annotation;
 
     /// <summary>The date section this tile belongs to (set by the view model when grouping).</summary>
     public SectionVm? Section { get; set; }
@@ -29,6 +31,10 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
     public string FileName => Item.FileName;
     public string FullPath => Row.FullPath;
     public bool IsVideo => Item.IsVideo;
+
+    public bool HasTags => Annotation.Tags.Count > 0;
+    public bool HasNote => !string.IsNullOrWhiteSpace(Annotation.Note);
+    public bool HasAnnotation => HasTags || HasNote;
 
     /// <summary>
     /// The tile image. Reading it (which the binding does on realization) kicks a
@@ -52,8 +58,18 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
     /// <summary>Caption rendered from the user's tokenized format string.</summary>
     public string Caption => CaptionFormatter.Format(_captionFormat, Item, Row.RootAlias);
 
-    public string Tooltip =>
-        $"{FileName}\n{DisplayDate:yyyy-MM-dd HH:mm}\n{Dimensions}\n{SizeText}\n{Row.RootAlias}";
+    public string Tooltip
+    {
+        get
+        {
+            var lines = $"{FileName}\n{DisplayDate:yyyy-MM-dd HH:mm}\n{Dimensions}\n{SizeText}\n{Row.RootAlias}";
+            if (HasTags)
+                lines += $"\n🏷 {string.Join(", ", Annotation.Tags)}";
+            if (HasNote)
+                lines += $"\n📝 {Annotation.Note}";
+            return lines;
+        }
+    }
 
     public string Dimensions => Item is { Width: { } w, Height: { } h } ? $"{w} × {h}" : "";
 

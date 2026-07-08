@@ -288,6 +288,11 @@ public partial class MainWindow : Window
                 ViewModel.CutFileCommand.Execute(ViewModel.SelectedTile);
                 e.Handled = true;
             }
+            else if (e.Key == Key.T)
+            {
+                ViewModel.EditAnnotationCommand.Execute(ViewModel.SelectedTile);
+                e.Handled = true;
+            }
             return; // leave Ctrl+arrows / Ctrl+wheel alone
         }
 

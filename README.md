@@ -168,6 +168,14 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 **Deferred/refinement:** nav width is a fixed narrower value with a splitter (not yet auto-fit to the longest entry); the tree rebuilds (collapsing other branches, current path restored) when indexing completes; folder-preview thumbnails on nodes.
 
+### Feedback round 4 ✅ done
+- **Branding**: larger logo + "Reel" wordmark in the toolbar; the window title shows the current folder's full path.
+- **Tree order**: subfolders sort name-**descending** by default (year folders newest-first).
+- **Tags & Notes** (`Ctrl+T` or right-click → "Tags & notes…"): one dialog with a tag chip editor (type to add, pick from suggestions, ✕ to remove — new tags grow the suggestion list) and a free-text note. Stored keyed by path in `reel.db` (survive re-index / root re-add). Annotated tiles show a 🏷 badge; tooltip shows tags + note.
+- **Gmail-style search**: `tag:x`, `note:x`, `has:tag`/`has:note`, `is:video`/`is:image`/`is:tagged`, `type:mp4`, `name:`, `camera:`, `folder:`, quoted values (`tag:"date night"`); bare words match name/alias/camera/tags/note; terms are AND-ed. Search is now global across the library. Core-tested.
+
+**Deferred/refinement:** tag rename/merge/delete management UI; note markdown; sidecar export of annotations.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

@@ -132,6 +132,13 @@ public sealed class ReelDatabase
 
         CREATE INDEX IF NOT EXISTS ix_items_root ON items(root_id);
         CREATE INDEX IF NOT EXISTS ix_items_date ON items(taken_ticks, mtime_ticks);
+
+        CREATE TABLE IF NOT EXISTS annotations (
+            path          TEXT PRIMARY KEY COLLATE NOCASE,
+            tags          TEXT NOT NULL DEFAULT '[]',
+            note          TEXT NOT NULL DEFAULT '',
+            updated_ticks INTEGER NOT NULL
+        );
         """;
 
     // Thumbnails cannot reference items across DB files, so cascade deletes are

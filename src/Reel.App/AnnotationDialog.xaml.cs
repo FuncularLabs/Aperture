@@ -1,0 +1,16 @@
+using System.Windows;
+
+namespace Reel.App;
+
+public partial class AnnotationDialog : Window
+{
+    public AnnotationDialog()
+    {
+        InitializeComponent();
+    }
+
+    private void OnSave(object sender, RoutedEventArgs e)
+    {
+        DialogResult = true;
+    }
+}
