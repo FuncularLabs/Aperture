@@ -195,6 +195,13 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
   - **Notes**: the field shows the majority note; saving applies it to every item that has that note **or no note**. Items carrying a *different* note are called out ("N selected items have different notes — they won't be changed") and left untouched, so a bulk note edit never clobbers a distinct note.
 - Multi-item merge rules live in `Reel.Core.Annotations.AnnotationMerge` and are unit-tested (add/remove/case-folding, note majority + exclusion).
 
+### Feedback round 8 ✅ done
+- **Tags ordered by recency of use.** A per-tag last-used timestamp (`tag_stats`) is bumped whenever a tag is *added* to an item (never on removal). Tag lists — dialog chips + suggestions and the tag manager — now sort most-recently-used first. Recency is a per-tag (lookup-level) fact, not per (item, tag). Existing libraries are backfilled from current usage.
+- **Medium-dark canvas.** The left folder pane and the tile grid use a medium-dark theme (approaching VS dark, a touch lighter — `#22252B` / `#282B32`), with light text, legible captions/section headers, and dark-appropriate selection/hover. The toolbar, status bar, and dialogs stay light.
+- **Folder tree expanded by default** — every node is expanded on load (and after background rebuilds).
+- **Search quick-picks.** Focusing the search box pops up your top tags. When usage is highly skewed (a few tags dominate) it offers the **most-used**; otherwise it offers the **most-recent** — a distribution the code decides ([`TagQuickPicks`](src/Reel.Core/Annotations/TagQuickPicks.cs)). Clicking one adds a `tag:` clause.
+- **`tag:` search is OR.** Multiple `tag:` clauses match items with *any* of them (e.g. `tag:beach tag:city`), still AND-ed with non-tag terms.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -230,4 +237,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and seven rounds of feedback. 66 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, settings, search, annotations, tag management, multi-item merge). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and eight rounds of feedback. 74 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.

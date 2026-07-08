@@ -134,6 +134,10 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnSearchFocus(object sender, RoutedEventArgs e) => ViewModel?.OpenQuickPicks();
+
+    private void OnSearchBlur(object sender, RoutedEventArgs e) => ViewModel?.CloseQuickPicks();
+
     private void OnQuickLookBackgroundClick(object sender, MouseButtonEventArgs e)
     {
         // Close only when the dim background itself is clicked, not a button.

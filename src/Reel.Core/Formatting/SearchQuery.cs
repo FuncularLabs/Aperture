@@ -37,10 +37,22 @@ public sealed partial class SearchQuery
 
     public bool Matches(LibraryRow row, Annotation annotation)
     {
+        // tag: terms are OR-ed with each other (match ANY), then AND-ed with the
+        // rest — so `tag:a tag:b note:x` means (has a OR has b) AND note contains x.
+        var hasTagTerm = false;
+        var anyTagMatched = false;
         foreach (var term in _terms)
+        {
+            if (term.Kind == TermKind.Tag)
+            {
+                hasTagTerm = true;
+                anyTagMatched |= term.Matches(row, annotation);
+                continue;
+            }
             if (!term.Matches(row, annotation))
                 return false;
-        return true;
+        }
+        return !hasTagTerm || anyTagMatched;
     }
 
     private static Term Classify(string? field, string value) => field switch

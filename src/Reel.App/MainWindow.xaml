@@ -23,6 +23,17 @@
         <SolidColorBrush x:Key="SelBg" Color="#E6EEFF" />
         <SolidColorBrush x:Key="SelBorder" Color="#3A72F0" />
 
+        <!-- Medium-dark canvas (left nav + tile grid). Approaching VS dark, a touch lighter. -->
+        <SolidColorBrush x:Key="CanvasBg" Color="#22252B" />
+        <SolidColorBrush x:Key="CanvasPanel" Color="#282B32" />
+        <SolidColorBrush x:Key="CanvasInk" Color="#E6E8ED" />
+        <SolidColorBrush x:Key="CanvasMuted" Color="#9BA1AE" />
+        <SolidColorBrush x:Key="CanvasLine" Color="#3A3E46" />
+        <SolidColorBrush x:Key="CanvasThumbBg" Color="#31353D" />
+        <SolidColorBrush x:Key="CanvasHover" Color="#31353D" />
+        <SolidColorBrush x:Key="CanvasSelBg" Color="#2E3A57" />
+        <SolidColorBrush x:Key="CanvasCursor" Color="#33406A" />
+
         <!-- Toolbar button -->
         <Style x:Key="ToolButton" TargetType="Button">
             <Setter Property="Padding" Value="12,6" />
@@ -96,7 +107,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="{StaticResource SelBg}" />
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource CanvasSelBg}" />
                                 <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource SelBorder}" />
                             </Trigger>
                             <MultiTrigger>
@@ -104,7 +115,7 @@
                                     <Condition Property="IsSelected" Value="False" />
                                     <Condition Property="IsMouseOver" Value="True" />
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="b" Property="Background" Value="#F0F2F6" />
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource CanvasHover}" />
                             </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -127,10 +138,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="#EEF1F6" />
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource CanvasHover}" />
                             </Trigger>
                             <DataTrigger Binding="{Binding Name.IsCursor}" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="#E3ECFF" />
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource CanvasCursor}" />
                                 <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}" />
                             </DataTrigger>
                         </ControlTemplate.Triggers>
@@ -164,7 +175,7 @@
                               Style="{StaticResource ToolToggle}" Margin="6,0,0,0" />
 
                 <!-- Search (right, left of settings) -->
-                <Border DockPanel.Dock="Right" Width="320" Height="30" Background="#F3F4F7"
+                <Border x:Name="SearchBorder" DockPanel.Dock="Right" Width="320" Height="30" Background="#F3F4F7"
                         BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="6"
                         Margin="0,0,6,0" VerticalAlignment="Center">
                     <Grid>
@@ -183,12 +194,42 @@
                         </TextBlock>
                         <TextBox x:Name="SearchBox" Background="Transparent" BorderThickness="0"
                                  VerticalContentAlignment="Center" Margin="7,0,26,0" FontSize="12"
+                                 GotKeyboardFocus="OnSearchFocus" LostKeyboardFocus="OnSearchBlur"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
                         <Button Content="✕" Command="{Binding ClearSearchCommand}" HorizontalAlignment="Right"
                                 Width="24" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Muted}"
                                 Cursor="Hand" />
                     </Grid>
                 </Border>
+
+                <!-- Tag quick-picks, shown while the search box is focused -->
+                <Popup DockPanel.Dock="Right" PlacementTarget="{Binding ElementName=SearchBorder}" Placement="Bottom"
+                       IsOpen="{Binding QuickPicksOpen, Mode=OneWay}" StaysOpen="True" AllowsTransparency="True">
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="8" Padding="12" Width="320" Margin="0,4,8,8" SnapsToDevicePixels="True">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#22000000" BlurRadius="16" ShadowDepth="2" Direction="270" />
+                        </Border.Effect>
+                        <StackPanel>
+                            <TextBlock Text="{Binding QuickPickHeader}" Foreground="{StaticResource Muted}"
+                                       FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8" />
+                            <ItemsControl ItemsSource="{Binding QuickPickTags}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding}" Focusable="False" Margin="0,0,6,6" Padding="10,3"
+                                                Cursor="Hand" Background="#EEF1F6" BorderBrush="{StaticResource Line}"
+                                                BorderThickness="1" Foreground="{StaticResource Ink}"
+                                                Command="{Binding Data.QuickPickCommand, Source={StaticResource Vm}}"
+                                                CommandParameter="{Binding}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                </Popup>
                 <Popup IsOpen="{Binding IsChecked, ElementName=SettingsToggle}"
                        PlacementTarget="{Binding ElementName=SettingsToggle}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-160">
@@ -283,14 +324,21 @@
             </Grid.ColumnDefinitions>
 
             <!-- Roots pane -->
-            <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+            <Border Grid.Column="0" Background="{StaticResource CanvasPanel}" BorderBrush="{StaticResource CanvasLine}"
                     BorderThickness="0,0,1,0">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="FOLDERS" Foreground="{StaticResource Muted}"
+                    <TextBlock DockPanel.Dock="Top" Text="FOLDERS" Foreground="{StaticResource CanvasMuted}"
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
                     <TreeView x:Name="FolderTreeView" ItemsSource="{Binding FolderTree}"
-                              BorderThickness="0" Background="Transparent"
+                              BorderThickness="0" Background="Transparent" Foreground="{StaticResource CanvasInk}"
                               SelectedItemChanged="OnTreeSelectedChanged">
+                        <TreeView.Resources>
+                            <!-- Dark-appropriate selection so light node text stays legible -->
+                            <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#33406A" />
+                            <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#E6E8ED" />
+                            <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#31353D" />
+                            <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#E6E8ED" />
+                        </TreeView.Resources>
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
@@ -305,7 +353,7 @@
                                               Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}" />
                                     <TextBlock Text="📁" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center"
                                                Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
-                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource Ink}" VerticalAlignment="Center"
+                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource CanvasInk}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" MouseLeftButtonDown="OnAliasClick">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
@@ -323,7 +371,7 @@
                                              Padding="2,0" BorderBrush="{StaticResource Accent}" BorderThickness="1"
                                              IsVisibleChanged="OnAliasEditVisibleChanged" KeyDown="OnAliasEditKeyDown"
                                              LostFocus="OnAliasEditLostFocus" />
-                                    <TextBlock Text="{Binding Count, StringFormat= ({0:n0})}" Foreground="{StaticResource Muted}"
+                                    <TextBlock Text="{Binding Count, StringFormat= ({0:n0})}" Foreground="{StaticResource CanvasMuted}"
                                                FontSize="11" VerticalAlignment="Center" Margin="4,0,0,0" />
                                     <StackPanel.ContextMenu>
                                         <ContextMenu Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}">
@@ -350,7 +398,7 @@
                      SelectionMode="Extended"
                      SelectionChanged="OnGridSelectionChanged"
                      PreviewMouseRightButtonDown="OnGridRightButtonDown"
-                     Background="Transparent" BorderThickness="0" Padding="6"
+                     Background="{StaticResource CanvasBg}" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -383,13 +431,13 @@
                                                               Style="{StaticResource SectionHeader}">
                                                     <StackPanel Orientation="Horizontal">
                                                         <TextBlock x:Name="chev" Text="▾" FontSize="12"
-                                                                   Foreground="{StaticResource Muted}"
+                                                                   Foreground="{StaticResource CanvasMuted}"
                                                                    VerticalAlignment="Center" Margin="0,0,8,0" />
                                                         <TextBlock Text="{Binding Name.Label}" FontSize="14"
-                                                                   FontWeight="SemiBold" Foreground="{StaticResource Ink}"
+                                                                   FontWeight="SemiBold" Foreground="{StaticResource CanvasInk}"
                                                                    VerticalAlignment="Center" />
                                                         <TextBlock Text="{Binding ItemCount, StringFormat=  ·  {0:n0}}"
-                                                                   FontSize="13" Foreground="{StaticResource Muted}"
+                                                                   FontSize="13" Foreground="{StaticResource CanvasMuted}"
                                                                    VerticalAlignment="Center" />
                                                     </StackPanel>
                                                 </ToggleButton>
@@ -445,7 +493,7 @@
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
                             </StackPanel.ContextMenu>
-                            <Border Background="{StaticResource ThumbBg}" CornerRadius="6"
+                            <Border Background="{StaticResource CanvasThumbBg}" CornerRadius="6"
                                     Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
                                     Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
                                 <Grid>
@@ -471,7 +519,7 @@
                                     </Border>
                                 </Grid>
                             </Border>
-                            <TextBlock Text="{Binding Caption}" Foreground="{StaticResource Muted}"
+                            <TextBlock Text="{Binding Caption}" Foreground="{StaticResource CanvasMuted}"
                                        FontSize="11" TextAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Margin="2,4,2,0"
                                        MaxWidth="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}" />

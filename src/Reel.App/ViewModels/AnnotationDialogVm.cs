@@ -58,8 +58,14 @@ public sealed class AnnotationDialogVm : ObservableObject
                 casing.TryAdd(tag, tag);
             }
 
+        // Order chips: shared (on every item) first, then by recency of use — the
+        // rank comes from availableTags, which the caller supplies newest-used-first.
+        var rank = new Dictionary<string, int>(Ci);
+        for (var i = 0; i < _allTags.Count; i++)
+            rank.TryAdd(_allTags[i], i);
         Tags = new ObservableCollection<TagChipVm>(
-            counts.OrderByDescending(kv => kv.Value >= _total)      // shared chips first
+            counts.OrderByDescending(kv => kv.Value >= _total)
+                  .ThenBy(kv => rank.TryGetValue(kv.Key, out var r) ? r : int.MaxValue)
                   .ThenBy(kv => casing[kv.Key], Ci)
                   .Select(kv => new TagChipVm(casing[kv.Key], kv.Value, _total)));
 

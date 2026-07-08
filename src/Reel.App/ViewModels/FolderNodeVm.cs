@@ -64,6 +64,16 @@ public sealed class FolderNodeVm : ObservableObject
         set => SetProperty(ref _isSelected, value);
     }
 
+    /// <summary>Recursively expands this node and all descendants (loading children as it goes).</summary>
+    public void ExpandAll()
+    {
+        if (!HasChildren)
+            return;
+        IsExpanded = true; // triggers EnsureChildren
+        foreach (var child in Children)
+            child.ExpandAll();
+    }
+
     private void EnsureChildren()
     {
         if (_loaded || _loadChildren is null)

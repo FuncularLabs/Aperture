@@ -78,6 +78,25 @@ public class SearchAndAnnotationTests
         Assert.True(q.Matches(Row(), Ann(["Date Night"])));
     }
 
+    [Fact]
+    public void Search_MultipleTagTerms_AreOred()
+    {
+        var q = SearchQuery.Parse("tag:beach tag:city");
+        Assert.True(q.Matches(Row(), Ann(["beach"])));
+        Assert.True(q.Matches(Row(), Ann(["city"])));
+        Assert.True(q.Matches(Row(), Ann(["beach", "city"])));
+        Assert.False(q.Matches(Row(), Ann(["work"])));
+    }
+
+    [Fact]
+    public void Search_TagOr_IsAndedWithOtherTerms()
+    {
+        var q = SearchQuery.Parse("tag:a tag:b is:video");
+        Assert.True(q.Matches(Row(kind: MediaKind.Video), Ann(["a"])));    // one tag + video
+        Assert.False(q.Matches(Row(kind: MediaKind.Image), Ann(["a"])));   // tag matches but not video
+        Assert.False(q.Matches(Row(kind: MediaKind.Video), Ann(["c"])));   // video but neither tag
+    }
+
     // --- AnnotationStore ---
 
     [Fact]
@@ -168,5 +187,34 @@ public class SearchAndAnnotationTests
         Assert.Equal(["keep"], library.GetAnnotation(@"C:\p\a.jpg").Tags);
         Assert.True(library.GetAnnotation(@"C:\p\b.jpg").IsEmpty); // row removed
         Assert.DoesNotContain("temp", library.GetAllTags());
+    }
+
+    // --- Tag recency ---
+
+    [Fact]
+    public void TagsByRecency_OrdersByMostRecentlyAdded()
+    {
+        using var dir = new TempDir();
+        using var library = new Reel.Core.Library.LibraryService(dir.Path);
+        library.SaveAnnotation(@"C:\p\1.jpg", ["alpha"], "");
+        library.SaveAnnotation(@"C:\p\2.jpg", ["beta"], "");
+
+        Assert.Equal(["beta", "alpha"], library.GetTagsByRecency()); // beta applied more recently
+
+        library.SaveAnnotation(@"C:\p\3.jpg", ["alpha"], ""); // re-applying alpha bumps it
+        Assert.Equal(["alpha", "beta"], library.GetTagsByRecency());
+    }
+
+    [Fact]
+    public void TagRecency_NotBumpedOnRemoval()
+    {
+        using var dir = new TempDir();
+        using var library = new Reel.Core.Library.LibraryService(dir.Path);
+        library.SaveAnnotation(@"C:\p\1.jpg", ["alpha"], "");
+        library.SaveAnnotation(@"C:\p\2.jpg", ["beta"], "");
+        // Remove beta from its item — must not make it look "recent"; alpha stays behind beta by time.
+        library.SaveAnnotation(@"C:\p\2.jpg", [], "");
+        // beta no longer exists on any item, so it drops out of the current-tag list entirely.
+        Assert.Equal(["alpha"], library.GetTagsByRecency());
     }
 }

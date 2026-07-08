@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Reel.Core.Annotations;
 using Reel.Core.Models;
 
 namespace Reel.Core.Storage;
@@ -9,9 +10,18 @@ namespace Reel.Core.Storage;
 /// survive re-indexing and removing/re-adding a root. Tags are stored as a JSON
 /// array. Deleting all tags and clearing the note removes the row.
 /// </summary>
-public sealed class AnnotationStore(ReelDatabase database)
+public sealed class AnnotationStore
 {
-    private readonly ReelDatabase _db = database;
+    private readonly ReelDatabase _db;
+    private readonly TagStatsStore _stats;
+    private readonly Lock _seedLock = new();
+    private bool _seeded;
+
+    public AnnotationStore(ReelDatabase database)
+    {
+        _db = database;
+        _stats = new TagStatsStore(database);
+    }
 
     public Annotation Get(string path)
     {
@@ -96,6 +106,41 @@ public sealed class AnnotationStore(ReelDatabase database)
 
     private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
 
+    /// <summary>Current tags across all files, ordered by recency of use (most recent first).</summary>
+    public List<string> GetTagsByRecency()
+    {
+        EnsureSeeded();
+        var stats = _stats.GetAll();
+        return GetAllTags()
+            .OrderByDescending(t => stats.TryGetValue(t, out var s) ? s.LastUsedTicks : 0L)
+            .ThenByDescending(t => stats.TryGetValue(t, out var s) ? s.UseCount : 0)
+            .ThenBy(t => t, Ci)
+            .ToList();
+    }
+
+    /// <summary>Current tags with their item count and last-used timestamp (for quick-picks).</summary>
+    public List<TagUsage> GetTagUsage()
+    {
+        EnsureSeeded();
+        var stats = _stats.GetAll();
+        return GetTagCounts()
+            .Select(kv => new TagUsage(kv.Key, kv.Value, stats.TryGetValue(kv.Key, out var s) ? s.LastUsedTicks : 0L))
+            .ToList();
+    }
+
+    private void EnsureSeeded()
+    {
+        if (_seeded)
+            return;
+        lock (_seedLock)
+        {
+            if (_seeded)
+                return;
+            _stats.EnsureSeeded(json => ParseTags(json));
+            _seeded = true;
+        }
+    }
+
     public void Save(string path, IReadOnlyList<string> tags, string note)
     {
         var cleanTags = tags
@@ -104,6 +149,11 @@ public sealed class AnnotationStore(ReelDatabase database)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var cleanNote = note?.Trim() ?? "";
+
+        // Tags newly present on this item get their recency bumped (never on removal).
+        EnsureSeeded();
+        var existing = Get(path).Tags;
+        var added = cleanTags.Where(t => !existing.Any(e => Ci.Equals(e, t))).ToList();
 
         using var conn = _db.OpenMetadata();
         using var cmd = conn.CreateCommand();
@@ -126,6 +176,9 @@ public sealed class AnnotationStore(ReelDatabase database)
         cmd.Parameters.AddWithValue("@note", cleanNote);
         cmd.Parameters.AddWithValue("@ticks", DateTime.UtcNow.Ticks);
         cmd.ExecuteNonQuery();
+
+        if (added.Count > 0)
+            _stats.RecordUse(added);
     }
 
     private static List<string> ParseTags(string json)

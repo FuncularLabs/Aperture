@@ -139,6 +139,12 @@ public sealed class ReelDatabase
             note          TEXT NOT NULL DEFAULT '',
             updated_ticks INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS tag_stats (
+            name            TEXT PRIMARY KEY COLLATE NOCASE,
+            last_used_ticks INTEGER NOT NULL,
+            use_count       INTEGER NOT NULL
+        );
         """;
 
     // Thumbnails cannot reference items across DB files, so cascade deletes are

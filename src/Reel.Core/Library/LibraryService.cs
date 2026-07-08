@@ -80,6 +80,12 @@ public sealed class LibraryService : IDisposable
 
     public List<string> GetAllTags() => _annotations.GetAllTags();
 
+    /// <summary>Current tags ordered by recency of use (most recently applied first).</summary>
+    public List<string> GetTagsByRecency() => _annotations.GetTagsByRecency();
+
+    /// <summary>Current tags with item count + last-used, for search quick-picks.</summary>
+    public List<Annotations.TagUsage> GetTagUsage() => _annotations.GetTagUsage();
+
     public void SaveAnnotation(string path, IReadOnlyList<string> tags, string note) =>
         _annotations.Save(path, tags, note);
 

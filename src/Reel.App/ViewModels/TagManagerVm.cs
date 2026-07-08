@@ -45,7 +45,13 @@ public sealed class TagManagerVm : ObservableObject
     private void Reload()
     {
         Tags.Clear();
-        foreach (var kv in _library.GetTagCounts().OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var order = _library.GetTagsByRecency();
+        for (var i = 0; i < order.Count; i++)
+            rank.TryAdd(order[i], i);
+        foreach (var kv in _library.GetTagCounts()
+                     .OrderBy(k => rank.TryGetValue(k.Key, out var r) ? r : int.MaxValue)
+                     .ThenBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             Tags.Add(new TagItemVm(kv.Key, kv.Value));
         OnPropertyChanged(nameof(IsEmpty));
     }

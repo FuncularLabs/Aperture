@@ -7,6 +7,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using Reel.App.Mvvm;
 using Reel.App.Services;
+using Reel.Core.Annotations;
 using Reel.Core.Formatting;
 using Reel.Core.Library;
 using Reel.Core.Models;
@@ -58,6 +59,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
         OpenSelectedCommand = new RelayCommand(OpenSelected, () => SelectedTile is not null);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
+        QuickPickCommand = new RelayCommand<string>(QuickPickTag);
         OpenQuickLookCommand = new RelayCommand(OpenQuickLook, () => _tiles.Count > 0);
         CloseQuickLookCommand = new RelayCommand(CloseQuickLook);
         QuickLookNextCommand = new RelayCommand(() => MoveQuickLook(1));
@@ -92,7 +94,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void LoadAnnotations()
     {
         _annotations = _library.GetAllAnnotations();
-        _availableTags = _library.GetAllTags();
+        _availableTags = _library.GetTagsByRecency();
     }
 
     private Annotation AnnotationFor(LibraryRow row) =>
@@ -219,6 +221,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // --- Search quick-picks (recent / most-used tags, shown when the box is focused) ---
+
+    private bool _quickPicksOpen;
+    private string _quickPickHeader = "";
+
+    public ObservableCollection<string> QuickPickTags { get; } = [];
+
+    public bool QuickPicksOpen
+    {
+        get => _quickPicksOpen;
+        private set => SetProperty(ref _quickPicksOpen, value);
+    }
+
+    public string QuickPickHeader
+    {
+        get => _quickPickHeader;
+        private set => SetProperty(ref _quickPickHeader, value);
+    }
+
+    /// <summary>Called when the search box gains focus: recompute and show the tag quick-picks.</summary>
+    public void OpenQuickPicks()
+    {
+        var (tags, byUsage) = TagQuickPicks.Select(_library.GetTagUsage(), 12);
+        QuickPickTags.Clear();
+        foreach (var tag in tags)
+            QuickPickTags.Add(tag);
+        QuickPickHeader = byUsage ? "Most-used tags" : "Recent tags";
+        QuickPicksOpen = QuickPickTags.Count > 0;
+    }
+
+    public void CloseQuickPicks() => QuickPicksOpen = false;
+
+    /// <summary>Adds a <c>tag:</c> clause for the picked tag (tag clauses OR together).</summary>
+    private void QuickPickTag(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return;
+        var clause = tag.Contains(' ') ? $"tag:\"{tag}\"" : $"tag:{tag}";
+        var current = _searchText.TrimEnd();
+        SearchText = current.Length == 0 ? clause : $"{current} {clause}";
+    }
+
     /// <summary>Tokenized caption format string. Editing rebuilds tile captions.</summary>
     public string CaptionFormat
     {
@@ -313,6 +357,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ZoomOutCommand { get; }
     public ICommand OpenSelectedCommand { get; }
     public ICommand ClearSearchCommand { get; }
+    public ICommand QuickPickCommand { get; }
     public ICommand OpenQuickLookCommand { get; }
     public ICommand CloseQuickLookCommand { get; }
     public ICommand QuickLookNextCommand { get; }
@@ -925,6 +970,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
                 rootVm, rootVm.Count, LoadChildNodes));
         }
+        ExpandTree(); // expand everything by default (also after background rebuilds)
+    }
+
+    /// <summary>Expands the whole folder tree by default (eager-loads every node's children).</summary>
+    private void ExpandTree()
+    {
+        foreach (var node in FolderTree)
+            node.ExpandAll();
     }
 
     private List<FolderNodeVm> LoadChildNodes(long rootId, string relDir) =>
