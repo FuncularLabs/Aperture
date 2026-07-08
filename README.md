@@ -187,6 +187,14 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 ### Feedback round 6 ✅ done
 - **"Copy image" / quick-look orientation**: rotated phone photos (EXIF orientation ≠ 1) were copied/previewed sideways because WPF's `BitmapImage` ignores EXIF orientation. Both paths now decode through SkiaSharp's orientation logic — the *same* `SKCodec.EncodedOrigin` + matrix code the thumbnails use — so a copied image is byte-for-byte the same orientation as the tile and Windows Photos. Verified end-to-end (the reported file copies as 2252×4000 portrait, not 4000×2252 landscape). New Core tests cover the axis-swap, the no-orientation case, and the longest-edge cap.
 
+### Feedback round 7 ✅ done
+- **Tagging no longer disturbs the grid**: editing tags/notes (and bulk tag-manager changes) update the affected tiles' badges/tooltips **in place** instead of rebuilding the view. The scroll position, selection, and tile sizing stay exactly as they were — previously the grid rebuilt, which reset scroll (sometimes to the bottom) and briefly mis-sized thumbnails.
+- **Multi-select** (Explorer-style: Ctrl+click to toggle, Shift+click for a range). Right-clicking an unselected tile selects just it; right-clicking within a selection keeps it.
+- **Tag/note on many items at once** (`Ctrl+T` or right-click → "Tags & notes…" with several selected):
+  - **Tags** show as an aggregate. A tag on *every* selected item is solid; a tag on *some* shows a **dashed outline** with a "Pertains to K of N selected" tooltip. **Adding** a tag applies it to all; the **✕** removes it from all that have it.
+  - **Notes**: the field shows the majority note; saving applies it to every item that has that note **or no note**. Items carrying a *different* note are called out ("N selected items have different notes — they won't be changed") and left untouched, so a bulk note edit never clobbers a distinct note.
+- Multi-item merge rules live in `Reel.Core.Annotations.AnnotationMerge` and are unit-tested (add/remove/case-folding, note majority + exclusion).
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -222,4 +230,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and six rounds of feedback. 57 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, settings, search, annotations, tag management). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and seven rounds of feedback. 66 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, settings, search, annotations, tag management, multi-item merge). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.

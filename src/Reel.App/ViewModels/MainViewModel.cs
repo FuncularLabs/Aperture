@@ -40,6 +40,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private (long? RootId, string RelDir) _location = (null, "");
     private readonly Stack<(long? RootId, string RelDir)> _back = new();
     private List<TileVm> _mediaTiles = [];
+    private IReadOnlyList<TileVm> _selectedTiles = [];
     private List<LibraryRow> _allRows = [];
     private Dictionary<string, Annotation> _annotations = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _availableTags = [];
@@ -102,19 +103,50 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void EditAnnotation(TileVm? tile)
     {
-        if (tile is null)
+        // Operate on the whole media selection; fall back to the passed/clicked tile.
+        var targets = _selectedTiles.Count > 0 ? _selectedTiles.ToList() : [];
+        if (tile is not null && !targets.Contains(tile))
+            targets.Add(tile);
+        if (targets.Count == 0)
             return;
 
-        var current = AnnotationFor(tile.Row);
-        var vm = new AnnotationDialogVm(tile.FileName, current.Tags, current.Note, _availableTags);
+        var header = targets.Count == 1 ? targets[0].FileName : $"{targets.Count} items selected";
+        var inputs = targets
+            .Select(t => { var a = AnnotationFor(t.Row); return new AnnotationTarget(t.FullPath, a.Tags, a.Note); })
+            .ToList();
+
+        var vm = new AnnotationDialogVm(header, inputs, _availableTags);
         var dialog = new AnnotationDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow };
         if (dialog.ShowDialog() != true)
             return;
 
-        _library.SaveAnnotation(tile.FullPath, [.. vm.Tags], vm.Note);
-        LoadAnnotations();
-        BuildView();
+        foreach (var input in inputs)
+        {
+            var (tags, note) = vm.ResolveFor(input);
+            _library.SaveAnnotation(input.Path, tags, note);
+        }
+        RefreshAnnotationsInPlace(targets);
     }
+
+    /// <summary>Reloads the annotation cache and refreshes the given tiles' badges/tooltips in place.</summary>
+    private void RefreshAnnotationsInPlace(IEnumerable<TileVm> tiles)
+    {
+        LoadAnnotations();
+        foreach (var tile in tiles)
+            tile.UpdateAnnotation(AnnotationFor(tile.Row));
+    }
+
+    /// <summary>Refreshes every media tile's annotation in place (used after bulk tag-manager edits).</summary>
+    private void RefreshAllAnnotationsInPlace()
+    {
+        LoadAnnotations();
+        foreach (var tile in _mediaTiles)
+            tile.UpdateAnnotation(AnnotationFor(tile.Row));
+    }
+
+    /// <summary>Pushed from the grid on selection change; media tiles only.</summary>
+    public void SetSelectedItems(System.Collections.IEnumerable items) =>
+        _selectedTiles = items.OfType<TileVm>().ToList();
 
     private void SelectDefaultNode()
     {
@@ -312,10 +344,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var dialog = new TagManagerDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow };
         dialog.ShowDialog();
         if (vm.Changed)
-        {
-            LoadAnnotations();
-            BuildView();
-        }
+            RefreshAllAnnotationsInPlace();
     }
     public ICommand NavigateUpCommand { get; }
     public ICommand NavigateBackCommand { get; }
@@ -817,6 +846,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         ClearCursorHighlight();
         _cursorSection = null;
+        _selectedTiles = []; // stale references across a view rebuild would act on the wrong tiles
 
         _allRows = _library.GetUnion();
 

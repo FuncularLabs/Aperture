@@ -222,6 +222,32 @@ public partial class MainWindow : Window
         menu.Items.Add(chooser);
     }
 
+    private void OnGridSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
+        ViewModel?.SetSelectedItems(ItemsList.SelectedItems);
+
+    /// <summary>
+    /// Explorer-style right-click: clicking a tile that isn't in the current selection
+    /// selects just it; clicking within the selection keeps it, so the context menu
+    /// (Tags &amp; notes) can act on every selected item.
+    /// </summary>
+    private void OnGridRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ContainerFrom(e.OriginalSource as DependencyObject) is not { } item)
+            return;
+        if (!item.IsSelected)
+        {
+            ItemsList.SelectedItems.Clear();
+            item.IsSelected = true;
+        }
+    }
+
+    private static System.Windows.Controls.ListBoxItem? ContainerFrom(DependencyObject? source)
+    {
+        while (source is not null and not System.Windows.Controls.ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return source as System.Windows.Controls.ListBoxItem;
+    }
+
     private void OnItemsDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // Ignore double-clicks that aren't on an item (e.g. section header / empty space).

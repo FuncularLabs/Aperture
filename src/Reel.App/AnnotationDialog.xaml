@@ -10,18 +10,29 @@
         <SolidColorBrush x:Key="Muted" Color="#8A90A0" />
         <SolidColorBrush x:Key="Accent" Color="#3A72F0" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
-        <!-- Removable tag chip -->
+        <!-- Removable tag chip. Shared tags (on every selected item) show a solid
+             fill; partial tags (on some) show a dashed outline + a "pertains to" tip. -->
         <DataTemplate x:Key="ChipTemplate">
-            <Border Background="#E6EEFF" CornerRadius="11" Padding="9,3,4,3" Margin="0,0,6,6">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding}" Foreground="#274B8F" VerticalAlignment="Center" />
+            <Grid Margin="0,0,6,6" ToolTip="{Binding ScopeTooltip}">
+                <Rectangle x:Name="fill" RadiusX="11" RadiusY="11" Fill="#E6EEFF" />
+                <Rectangle x:Name="dash" RadiusX="11" RadiusY="11" Fill="#F1F4FA"
+                           Stroke="#9DB0D8" StrokeThickness="1.2" StrokeDashArray="2 2" Visibility="Collapsed" />
+                <StackPanel Orientation="Horizontal" Margin="9,3,4,3">
+                    <TextBlock Text="{Binding Name}" Foreground="#274B8F" VerticalAlignment="Center" />
                     <Button Content="✕" FontSize="10" Margin="6,0,0,0" Padding="3,0" Background="Transparent"
                             BorderThickness="0" Foreground="#5A79B0" Cursor="Hand"
                             Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             CommandParameter="{Binding}" />
                 </StackPanel>
-            </Border>
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Shared}" Value="False">
+                    <Setter TargetName="fill" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="dash" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
     </Window.Resources>
 
@@ -39,8 +50,12 @@
         <TextBlock Grid.Row="0" Text="{Binding Header}" Foreground="{StaticResource Ink}" FontWeight="Bold"
                    FontSize="15" TextTrimming="CharacterEllipsis" Margin="0,0,0,14" />
 
-        <TextBlock Grid.Row="1" Text="TAGS" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold"
-                   Margin="0,0,0,6" />
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
+            <TextBlock Text="TAGS" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" />
+            <TextBlock Text="  ·  adding applies to all;  ✕ removes from all that have it"
+                       Foreground="{StaticResource Muted}" FontSize="11"
+                       Visibility="{Binding IsMulti, Converter={StaticResource BoolToVis}}" />
+        </StackPanel>
 
         <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" ItemTemplate="{StaticResource ChipTemplate}">
             <ItemsControl.ItemsPanel>
@@ -80,11 +95,18 @@
             </ItemsControl>
         </StackPanel>
 
-        <TextBlock Grid.Row="5" Text="NOTE" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold"
-                   VerticalAlignment="Top" Margin="0,0,0,6" />
-        <TextBox Grid.Row="5" Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}" Margin="0,20,0,0"
-                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                 Padding="6,4" BorderBrush="{StaticResource Line}" BorderThickness="1" />
+        <DockPanel Grid.Row="5">
+            <TextBlock DockPanel.Dock="Top" Text="NOTE" Foreground="{StaticResource Muted}" FontSize="11"
+                       FontWeight="SemiBold" Margin="0,0,0,6" />
+            <Border DockPanel.Dock="Top" Background="#FFF4E5" BorderBrush="#F0D6A8" BorderThickness="1"
+                    CornerRadius="4" Padding="8,5" Margin="0,0,0,8"
+                    Visibility="{Binding NoteHasExclusions, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding NoteExclusionText}" Foreground="#8A5A12" FontSize="11" TextWrapping="Wrap" />
+            </Border>
+            <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                     Padding="6,4" BorderBrush="{StaticResource Line}" BorderThickness="1" />
+        </DockPanel>
 
         <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
             <Button Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0" />

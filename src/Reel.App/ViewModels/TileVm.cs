@@ -20,9 +20,26 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
     private BitmapSource? _thumbnail;
     private bool _loadStarted;
 
+    private Annotation _annotation = annotation;
+
     public LibraryRow Row { get; } = row;
     public MediaItem Item => Row.Item;
-    public Annotation Annotation { get; } = annotation;
+    public Annotation Annotation => _annotation;
+
+    /// <summary>
+    /// Replaces this tile's tags/notes and refreshes its badge + tooltip in place —
+    /// so editing annotations never rebuilds the grid (which would reset scroll,
+    /// selection and re-trigger virtualization).
+    /// </summary>
+    public void UpdateAnnotation(Annotation annotation)
+    {
+        _annotation = annotation;
+        OnPropertyChanged(nameof(Annotation));
+        OnPropertyChanged(nameof(HasTags));
+        OnPropertyChanged(nameof(HasNote));
+        OnPropertyChanged(nameof(HasAnnotation));
+        OnPropertyChanged(nameof(Tooltip));
+    }
 
     /// <summary>The date section this tile belongs to (set by the view model when grouping).</summary>
     public SectionVm? Section { get; set; }
