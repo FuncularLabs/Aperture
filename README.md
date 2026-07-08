@@ -184,6 +184,9 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 **Deferred/refinement:** note markdown; sidecar export of annotations (deferred at the user's request).
 
+### Feedback round 6 ✅ done
+- **"Copy image" / quick-look orientation**: rotated phone photos (EXIF orientation ≠ 1) were copied/previewed sideways because WPF's `BitmapImage` ignores EXIF orientation. Both paths now decode through SkiaSharp's orientation logic — the *same* `SKCodec.EncodedOrigin` + matrix code the thumbnails use — so a copied image is byte-for-byte the same orientation as the tile and Windows Photos. Verified end-to-end (the reported file copies as 2252×4000 portrait, not 4000×2252 landscape). New Core tests cover the axis-swap, the no-orientation case, and the longest-edge cap.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -219,4 +222,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and five rounds of feedback. 54 xUnit tests over the Core engine (indexer, thumbnails, watcher, union, formatting, settings, search, annotations, tag management). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and six rounds of feedback. 57 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, settings, search, annotations, tag management). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.

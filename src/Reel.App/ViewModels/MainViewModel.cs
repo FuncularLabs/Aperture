@@ -408,10 +408,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (tile is null)
             return;
 
-        // Pics: the full-resolution image. Videos: the cached frame thumbnail.
+        // Pics: the full-resolution image, EXIF-oriented like the tile/Photos.
+        // Videos: the cached frame thumbnail.
         var image = tile.IsVideo
             ? DecodeThumbnail(tile.ItemId)
-            : ImageLoading.LoadFullImage(tile.FullPath, decodePixelWidth: 0);
+            : ImageLoading.LoadFullImageUpright(tile.FullPath);
         if (image is null)
             return;
         try { System.Windows.Clipboard.SetImage(image); }
@@ -681,7 +682,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var image = await Task.Run(() => tile.IsVideo
             ? DecodeThumbnail(tile.ItemId)
-            : ImageLoading.LoadFullImage(tile.FullPath));
+            : ImageLoading.LoadFullImageUpright(tile.FullPath, maxLongestEdge: 1600));
 
         // Ignore if the user moved on while we decoded.
         if (_quickLookOpen && _quickLookIndex == index)

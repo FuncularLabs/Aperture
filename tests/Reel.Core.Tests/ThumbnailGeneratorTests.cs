@@ -66,6 +66,51 @@ public class ThumbnailGeneratorTests
     }
 
     [Fact]
+    public void DecodeUpright_AppliesExifOrientation_ForRotatedPhoto()
+    {
+        using var lib = new TempDir();
+        var path = lib.Combine("rotated.jpg");
+        // Raw 400x200 landscape, EXIF orientation 6 = "rotate 90 CW" → upright is 200x400.
+        TestImages.WriteJpegWithOrientation(path, 400, 200, orientation: 6);
+
+        var img = ThumbnailGenerator.DecodeUpright(path);
+
+        Assert.NotNull(img);
+        Assert.Equal(200, img!.Width);   // axes swapped
+        Assert.Equal(400, img.Height);
+        Assert.Equal(img.Width * 4, img.Stride);          // BGRA8888
+        Assert.Equal(img.Stride * img.Height, img.Bgra.Length);
+    }
+
+    [Fact]
+    public void DecodeUpright_NoOrientation_KeepsDimensions()
+    {
+        using var lib = new TempDir();
+        var path = lib.Combine("plain.jpg");
+        TestImages.Write(path, 400, 200);
+
+        var img = ThumbnailGenerator.DecodeUpright(path);
+
+        Assert.NotNull(img);
+        Assert.Equal(400, img!.Width);
+        Assert.Equal(200, img.Height);
+    }
+
+    [Fact]
+    public void DecodeUpright_CapsLongestEdge()
+    {
+        using var lib = new TempDir();
+        var path = lib.Combine("big.jpg");
+        TestImages.Write(path, 2000, 1000);
+
+        var img = ThumbnailGenerator.DecodeUpright(path, maxLongestEdge: 500);
+
+        Assert.NotNull(img);
+        Assert.Equal(500, img!.Width);   // longest edge clamped
+        Assert.Equal(250, img.Height);   // aspect preserved
+    }
+
+    [Fact]
     public void Generate_ReturnsNull_ForNonImage()
     {
         using var lib = new TempDir();

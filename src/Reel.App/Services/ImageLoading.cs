@@ -1,20 +1,30 @@
 using System.IO;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Reel.Core.Media;
 
 namespace Reel.App.Services;
 
 /// <summary>Decodes full-size images for the quick-look overlay, off the UI thread.</summary>
 public static class ImageLoading
 {
-    /// <summary>Loads an image file, capped to <paramref name="decodePixelWidth"/> px wide. Null on failure.</summary>
-    public static BitmapSource? LoadFullImage(string path, int decodePixelWidth = 1600)
+    /// <summary>
+    /// Loads a full image with EXIF orientation applied (via SkiaSharp — WPF's
+    /// <see cref="BitmapImage"/> ignores EXIF orientation, which left "copy image"
+    /// and quick-look sideways for rotated phone photos). <paramref name="maxLongestEdge"/>
+    /// caps the longest edge (0 = full resolution). Null on failure.
+    /// </summary>
+    public static BitmapSource? LoadFullImageUpright(string path, int maxLongestEdge = 0)
     {
         try
         {
-            if (!File.Exists(path))
+            var img = ThumbnailGenerator.DecodeUpright(path, maxLongestEdge);
+            if (img is null)
                 return null;
-            using var stream = File.OpenRead(path);
-            return Decode(stream, decodePixelWidth);
+            var bitmap = BitmapSource.Create(
+                img.Width, img.Height, 96, 96, PixelFormats.Bgra32, null, img.Bgra, img.Stride);
+            bitmap.Freeze();
+            return bitmap;
         }
         catch
         {
@@ -22,6 +32,7 @@ public static class ImageLoading
         }
     }
 
+    /// <summary>Decodes cached thumbnail bytes (already upright JPEGs) for videos. Null on failure.</summary>
     public static BitmapSource? Decode(byte[] bytes, int decodePixelWidth)
     {
         try

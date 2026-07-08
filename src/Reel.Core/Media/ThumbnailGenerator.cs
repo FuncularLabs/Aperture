@@ -3,6 +3,15 @@ using SkiaSharp;
 
 namespace Reel.Core.Media;
 
+/// <summary>A decoded, orientation-corrected image as raw BGRA8888 pixels.</summary>
+public sealed class UprightImage
+{
+    public required int Width { get; init; }
+    public required int Height { get; init; }
+    public required int Stride { get; init; }
+    public required byte[] Bgra { get; init; }
+}
+
 /// <summary>One encoded thumbnail plus its dimensions.</summary>
 public sealed class ThumbnailData
 {
@@ -121,6 +130,66 @@ public sealed class ThumbnailGenerator
             Orientation = null, // shell frames are already upright
             Thumbs = thumbs,
         };
+    }
+
+    /// <summary>
+    /// Decodes a full image with EXIF/codec orientation applied — the exact same
+    /// decode + <see cref="ApplyOrigin"/> path thumbnails use, reading orientation
+    /// from <see cref="SKCodec.EncodedOrigin"/> — and returns BGRA8888 pixels.
+    /// This keeps "copy image" / quick-look orientation identical to the tiles
+    /// (WPF's <c>BitmapImage</c> ignores EXIF orientation, so it must not be used).
+    /// <paramref name="maxLongestEdge"/> caps the longest edge (0 = full resolution).
+    /// Null if the file cannot be decoded.
+    /// </summary>
+    public static UprightImage? DecodeUpright(string path, int maxLongestEdge = 0)
+    {
+        using var stream = new SKManagedStream(File.OpenRead(path), disposeManagedStream: true);
+        using var codec = SKCodec.Create(stream);
+        if (codec is null)
+            return null;
+
+        var origin = codec.EncodedOrigin;
+        using var decoded = SKBitmap.Decode(codec);
+        if (decoded is null)
+            return null;
+
+        var upright = ApplyOrigin(decoded, origin);
+        SKBitmap? resized = null;
+        try
+        {
+            var source = upright;
+            if (maxLongestEdge > 0)
+            {
+                var (w, h) = FitTo(upright.Width, upright.Height, maxLongestEdge);
+                if (w != upright.Width || h != upright.Height)
+                {
+                    var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear);
+                    resized = upright.Resize(new SKImageInfo(w, h), sampling);
+                    if (resized is not null)
+                        source = resized;
+                }
+            }
+
+            // Normalize to BGRA8888 (WPF Bgra32), converting from whatever the decode
+            // produced. Bytes returns a copy, so it survives disposing the bitmaps.
+            using var bgra = source.ColorType == SKColorType.Bgra8888 ? source : source.Copy(SKColorType.Bgra8888);
+            if (bgra is null)
+                return null;
+
+            return new UprightImage
+            {
+                Width = bgra.Width,
+                Height = bgra.Height,
+                Stride = bgra.RowBytes,
+                Bgra = bgra.Bytes,
+            };
+        }
+        finally
+        {
+            resized?.Dispose();
+            if (!ReferenceEquals(upright, decoded))
+                upright.Dispose();
+        }
     }
 
     private static Dictionary<ThumbSize, ThumbnailData> EncodeSizes(SKBitmap upright, IEnumerable<ThumbSize> sizes)
