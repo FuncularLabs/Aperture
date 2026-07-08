@@ -134,11 +134,22 @@ public partial class MainWindow : Window
             ViewModel?.CloseQuickLookCommand.Execute(null);
     }
 
-    // --- Root alias inline rename ---
+    // --- Folder tree ---
+
+    private void OnTreeSelectedChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is FolderNodeVm node)
+            ViewModel?.NavigateToNode(node);
+    }
+
+    // --- Root alias inline rename (from the tree's root nodes) ---
+
+    private static RootVm? RootOf(object? dataContext) =>
+        dataContext as RootVm ?? (dataContext as FolderNodeVm)?.Root;
 
     private void OnAliasClick(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2 && sender is FrameworkElement { DataContext: RootVm root })
+        if (e.ClickCount == 2 && sender is FrameworkElement fe && RootOf(fe.DataContext) is { } root)
         {
             root.IsEditing = true;
             e.Handled = true;
@@ -156,7 +167,7 @@ public partial class MainWindow : Window
 
     private void OnAliasEditKeyDown(object sender, KeyEventArgs e)
     {
-        if (sender is not System.Windows.Controls.TextBox box || sender is not FrameworkElement { DataContext: RootVm root })
+        if (sender is not System.Windows.Controls.TextBox box || RootOf(box.DataContext) is not { } root)
             return;
 
         if (e.Key == Key.Enter)
@@ -174,7 +185,7 @@ public partial class MainWindow : Window
 
     private void OnAliasEditLostFocus(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: RootVm root })
+        if (sender is FrameworkElement fe && RootOf(fe.DataContext) is { } root)
             root.IsEditing = false;
     }
 

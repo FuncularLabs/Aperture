@@ -160,6 +160,14 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Scope = root checkboxes only.** Removed the per-tile "Hide this folder" exclusions (folder navigation replaces them).
 - **Coherent grouped keyboard navigation.** A cursor walks section headers *and* visible tiles: arrows move predictably (Up/Down stop on the next header rather than skipping into a section), the header highlights when the cursor is on it, `Enter`/`Space` toggles a section, `Enter` opens/enters a tile. No more sections auto-expanding as you arrow through.
 
+### Feedback round 3 ✅ done
+- **App icon + mascot + version.** A film-reel glyph on a purple gradient (generated multi-size `.ico`); set as the window/exe icon; version `0.5.0`; the Settings popup shows the mascot + "Reel v0.5.0".
+- **"Open with" context submenu.** Lists the shell handlers registered for the file's extension (`SHAssocEnumHandlers`) and invokes the chosen one (`IShellItem.BindToHandler` → `IDataObject` → `IAssocHandler.Invoke`), plus "Choose another app…" (`OpenAs_RunDLL`).
+- **Photos Back/Forward.** Media opens through `explorer.exe` so the default viewer gets the file's folder context and can page through siblings, like an Explorer double-click.
+- **Folder tree in the left nav.** Subfolders moved from top grid tiles into a left `TreeView` (roots → lazy subfolders, with counts + include checkboxes on roots, rename/remove on the root context menu). Selecting a node shows that folder's direct media; the grid + breadcrumb clutter is gone and the nav is narrower. Search still spans the subtree.
+
+**Deferred/refinement:** nav width is a fixed narrower value with a splitter (not yet auto-fit to the longest entry); the tree rebuilds (collapsing other branches, current path restored) when indexing completes; folder-preview thumbnails on nodes.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

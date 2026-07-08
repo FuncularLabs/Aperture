@@ -233,9 +233,6 @@
                 <!-- Actions (left) -->
                 <StackPanel Orientation="Horizontal">
                     <Button Content="＋  Add Folder" Style="{StaticResource ToolButton}" Command="{Binding AddRootCommand}" />
-                    <Button Content="Remove" Style="{StaticResource ToolButton}"
-                            Command="{Binding RemoveRootCommand}"
-                            CommandParameter="{Binding SelectedItem, ElementName=RootsList}" />
                     <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
                     <Button Content="－" Style="{StaticResource ToolButton}" Click="OnZoomOutClick"
                             ToolTip="Zoom out (Ctrl+-)" MinWidth="36" />
@@ -264,7 +261,7 @@
         <!-- Body -->
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="250" MinWidth="180" />
+                <ColumnDefinition Width="210" MinWidth="140" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
@@ -275,66 +272,55 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="FOLDERS" Foreground="{StaticResource Muted}"
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
-                    <ListBox x:Name="RootsList" ItemsSource="{Binding Roots}"
-                             BorderThickness="0" Background="Transparent"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             HorizontalContentAlignment="Stretch">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="8,6" />
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <TreeView x:Name="FolderTreeView" ItemsSource="{Binding FolderTree}"
+                              BorderThickness="0" Background="Transparent"
+                              SelectedItemChanged="OnTreeSelectedChanged">
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                             </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate DataType="{x:Type vm:RootVm}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}"
-                                              VerticalAlignment="Center" Margin="0,0,8,0"
-                                              ToolTip="Include in the combined view" />
-                                    <StackPanel Grid.Column="1">
-                                        <!-- Alias: label (double-click to rename) + inline editor -->
-                                        <TextBlock Text="{Binding Alias}" Foreground="{StaticResource Ink}"
-                                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Path}"
-                                                   MouseLeftButtonDown="OnAliasClick">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                        <TextBox Text="{Binding Alias, UpdateSourceTrigger=LostFocus}"
-                                                 Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}"
-                                                 FontWeight="SemiBold" Padding="2,0" BorderBrush="{StaticResource Accent}"
-                                                 BorderThickness="1" IsVisibleChanged="OnAliasEditVisibleChanged"
-                                                 KeyDown="OnAliasEditKeyDown" LostFocus="OnAliasEditLostFocus" />
-                                        <TextBlock Text="{Binding Count, StringFormat={}{0:n0} items}"
-                                                   Foreground="{StaticResource Muted}" FontSize="11"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding Status}" Style="{StaticResource RootStatus}" />
-                                    </StackPanel>
-                                    <Grid.ContextMenu>
-                                        <ContextMenu>
-                                            <MenuItem Header="Rename"
-                                                      Command="{Binding BeginRenameCommand}" />
+                        </TreeView.ItemContainerStyle>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Margin="0,1">
+                                    <CheckBox IsChecked="{Binding Root.IsIncluded, Mode=TwoWay}" VerticalAlignment="Center"
+                                              Margin="0,0,5,0" ToolTip="Include this folder"
+                                              Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}" />
+                                    <TextBlock Text="📁" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center"
+                                               Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
+                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource Ink}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" MouseLeftButtonDown="OnAliasClick">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Root.IsEditing}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Text="{Binding Root.Alias, UpdateSourceTrigger=LostFocus}" MinWidth="80"
+                                             Visibility="{Binding Root.IsEditing, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed, TargetNullValue=Collapsed}"
+                                             Padding="2,0" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                                             IsVisibleChanged="OnAliasEditVisibleChanged" KeyDown="OnAliasEditKeyDown"
+                                             LostFocus="OnAliasEditLostFocus" />
+                                    <TextBlock Text="{Binding Count, StringFormat= ({0:n0})}" Foreground="{StaticResource Muted}"
+                                               FontSize="11" VerticalAlignment="Center" Margin="4,0,0,0" />
+                                    <StackPanel.ContextMenu>
+                                        <ContextMenu Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}">
+                                            <MenuItem Header="Rename" Command="{Binding Root.BeginRenameCommand}" />
                                             <MenuItem Header="Remove folder"
                                                       Command="{Binding DataContext.RemoveRootCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                      CommandParameter="{Binding}" />
+                                                      CommandParameter="{Binding Root}" />
                                         </ContextMenu>
-                                    </Grid.ContextMenu>
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                                    </StackPanel.ContextMenu>
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
                 </DockPanel>
             </Border>
 
@@ -342,36 +328,7 @@
                           Background="Transparent" />
 
             <!-- Thumbnail grid -->
-            <DockPanel Grid.Column="2">
-                <!-- Breadcrumb / navigation bar -->
-                <Border DockPanel.Dock="Top" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                        BorderThickness="0,0,0,1" Padding="8,5">
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="←" Command="{Binding NavigateBackCommand}" Style="{StaticResource ToolButton}"
-                                MinWidth="32" ToolTip="Back" />
-                        <Button Content="↑" Command="{Binding NavigateUpCommand}" Style="{StaticResource ToolButton}"
-                                MinWidth="32" ToolTip="Up (Backspace)" />
-                        <ItemsControl ItemsSource="{Binding Breadcrumb}" VerticalAlignment="Center" Margin="4,0,0,0">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="{Binding Label}" Cursor="Hand" Background="Transparent"
-                                                BorderThickness="0" Padding="4,2" Foreground="{StaticResource Ink}"
-                                                Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}" />
-                                        <TextBlock Text="›" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
-                                                   Visibility="{Binding IsLast, Converter={StaticResource InverseBoolToVis}}" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-
-                <ListBox x:Name="ItemsList"
+                <ListBox x:Name="ItemsList" Grid.Column="2"
                      ItemsSource="{Binding ItemsView}"
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      Background="Transparent" BorderThickness="0" Padding="6"
@@ -432,28 +389,6 @@
                     </GroupStyle>
                 </ListBox.GroupStyle>
                 <ListBox.Resources>
-                    <!-- Folder tile -->
-                    <DataTemplate DataType="{x:Type vm:FolderTileVm}">
-                        <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    ToolTip="{Binding FullPath}">
-                            <Border Background="#EEF1F6" CornerRadius="6"
-                                    Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
-                                <Grid>
-                                    <Viewbox Stretch="Uniform" Margin="24,18,24,26">
-                                        <TextBlock Text="📁" />
-                                    </Viewbox>
-                                    <TextBlock Text="{Binding Count, StringFormat={}{0:n0} items}" VerticalAlignment="Bottom"
-                                               HorizontalAlignment="Center" Margin="0,0,0,8" FontSize="11"
-                                               Foreground="{StaticResource Muted}" />
-                                </Grid>
-                            </Border>
-                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource Ink}" FontWeight="SemiBold"
-                                       FontSize="12" TextAlignment="Center" TextTrimming="CharacterEllipsis" Margin="2,4,2,0"
-                                       MaxWidth="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}" />
-                        </StackPanel>
-                    </DataTemplate>
-
                     <!-- Media tile -->
                     <DataTemplate DataType="{x:Type vm:TileVm}">
                         <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -515,7 +450,6 @@
                     </DataTemplate>
                 </ListBox.Resources>
                 </ListBox>
-            </DockPanel>
         </Grid>
     </DockPanel>
 

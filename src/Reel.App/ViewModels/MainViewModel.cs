@@ -40,7 +40,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private (long? RootId, string RelDir) _location = (null, "");
     private readonly Stack<(long? RootId, string RelDir)> _back = new();
     private List<TileVm> _mediaTiles = [];
-    private SectionVm? _folderSection;
+    private List<LibraryRow> _allRows = [];
 
     public MainViewModel(LibraryService library, ThumbnailService thumbnails)
     {
@@ -77,7 +77,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         LoadRoots();
         BuildView();
+        BuildTree();
+        SelectDefaultNode();
         MaybeStartFirstRun();
+    }
+
+    private void SelectDefaultNode()
+    {
+        if (_location.RootId is null && FolderTree.Count > 0)
+            NavigateTo(FolderTree[0].RootId, "", pushBack: false);
+        else
+            SelectPath(_location.RootId, _location.RelDir);
     }
 
     public ThumbnailService Thumbnails { get; }
@@ -87,6 +97,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         "Reel v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.5.0");
 
     public ObservableCollection<RootVm> Roots { get; } = [];
+
+    /// <summary>Root nodes of the left folder tree (roots → lazy subfolders).</summary>
+    public ObservableCollection<FolderNodeVm> FolderTree { get; } = [];
 
     /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
     public ICollectionView? ItemsView => _view.View;
@@ -236,16 +249,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool IsHome => _location.RootId is null && _location.RelDir.Length == 0;
 
+    private bool _navigating;
+
     private void NavigateTo(long? rootId, string relDir, bool pushBack = true)
     {
-        if (pushBack && (_location.RootId != rootId || !string.Equals(_location.RelDir, relDir, StringComparison.OrdinalIgnoreCase)))
-            _back.Push(_location);
-        _location = (rootId, relDir);
-        _searchText = "";          // clear the filter without a redundant rebuild
-        OnPropertyChanged(nameof(SearchText));
-        SelectedItem = null;
-        BuildView();
-        OnPropertyChanged(nameof(IsHome));
+        if (_navigating)
+            return;
+        if (_location.RootId == rootId && string.Equals(_location.RelDir, relDir, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _navigating = true;
+        try
+        {
+            if (pushBack)
+                _back.Push(_location);
+            _location = (rootId, relDir);
+            _searchText = "";
+            OnPropertyChanged(nameof(SearchText));
+            SelectedItem = null;
+            BuildView();
+            OnPropertyChanged(nameof(IsHome));
+            SelectPath(rootId, relDir); // keep the tree's selection in sync
+        }
+        finally
+        {
+            _navigating = false;
+        }
     }
 
     private void NavigateUp()
@@ -436,8 +465,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void ClearCursorHighlight()
     {
-        if (_folderSection is not null)
-            _folderSection.IsCursor = false;
         foreach (var s in _sections.Values)
             s.IsCursor = false;
     }
@@ -651,6 +678,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void OnRootAliasChanged(RootVm rootVm, string alias)
     {
         _library.SetAlias(rootVm.Id, alias);
+        BuildTree();
         BuildView(); // captions reference {alias}
     }
 
@@ -672,6 +700,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var root = _library.AddRoot(path, alias);
         var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged);
         Roots.Add(vm);
+        BuildTree();
         _ = IndexRootAsync(root, watchAfter: true);
     }
 
@@ -679,8 +708,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (rootVm is null)
             return;
+        var wasCurrent = _location.RootId == rootVm.Id;
         _library.RemoveRoot(rootVm.Id);
         Roots.Remove(rootVm);
+        if (wasCurrent)
+            _location = (null, "");
+        BuildTree();
+        SelectDefaultNode();
         BuildView();
     }
 
@@ -703,27 +737,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ClearCursorHighlight();
         _cursorSection = null;
 
-        var rows = _library.GetUnion();
+        _allRows = _library.GetUnion();
 
         var format = _library.Settings.Current.CaptionFormat;
         var sort = CurrentSort;
         var levels = sort.Levels;
         var query = _searchText.Trim();
 
-        // Searching = a flat, recursive result under the current location (Explorer-style);
-        // otherwise show this folder's subfolders as tiles plus its direct media.
-        List<FolderTileVm> folders = [];
-        List<LibraryRow> media;
-        if (query.Length > 0)
-            media = ScopeRecursive(rows).Where(r => Matches(r, query)).ToList();
-        else
-            (folders, media) = ComputeFolderView(rows);
+        // Searching = a flat, recursive result under the current folder (Explorer-style);
+        // otherwise the current folder's direct media (subfolders live in the tree).
+        var media = query.Length > 0
+            ? ScopeRecursive(_allRows).Where(r => Matches(r, query)).ToList()
+            : ComputeMedia(_allRows);
 
         // Only date sorts get collapsible date sections; other sorts flatten to a global list.
-        var useSections = GroupByDate && sort.Grouped && (media.Count > 0 || folders.Count > 0);
+        var useSections = GroupByDate && sort.Grouped && media.Count > 0;
 
         List<TileVm> mediaTiles;
-        if (useSections && media.Count > 0)
+        if (useSections)
         {
             mediaTiles = BuildSectioned(media, format, levels);
         }
@@ -731,105 +762,122 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             LibrarySorter.Sort(media, levels);
             mediaTiles = media.Select(r => new TileVm(r, Thumbnails, format)).ToList();
-            if (!useSections)
-                _sections.Clear();
+            _sections.Clear();
         }
 
-        var items = new List<IGridItem>(folders.Count + mediaTiles.Count);
-        if (folders.Count > 0)
-        {
-            var folderSection = useSections ? GetFolderSection(folders.Count) : null;
-            foreach (var folder in folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                folder.Section = folderSection;
-                items.Add(folder);
-            }
-        }
-        items.AddRange(mediaTiles);
-
-        _tiles = items;
         _mediaTiles = mediaTiles;
-        _view.Source = items;
+        _tiles = mediaTiles.Cast<IGridItem>().ToList();
+        _view.Source = _tiles;
         _view.GroupDescriptions.Clear();
         if (useSections)
             _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(IGridItem.Section)));
 
-        BuildBreadcrumb();
         OnPropertyChanged(nameof(ItemsView));
         UpdateStatus();
     }
 
-    private SectionVm GetFolderSection(int count)
-    {
-        _folderSection ??= new SectionVm { Key = long.MaxValue, Label = "Folders", IsExpanded = true };
-        _folderSection.Count = count;
-        return _folderSection;
-    }
-
-    // --- Folder view derivation --------------------------------------------
-
-    /// <summary>Resolves single-root "home" to that root's top level.</summary>
-    private (long? RootId, string RelDir) EffectiveLocation()
-    {
-        if (_location.RootId is null)
-        {
-            var included = Roots.Where(r => r.IsIncluded).ToList();
-            if (included.Count == 1)
-                return (included[0].Id, "");
-        }
-        return _location;
-    }
-
-    private (List<FolderTileVm> Folders, List<LibraryRow> Media) ComputeFolderView(List<LibraryRow> rows)
+    /// <summary>Media files directly inside the current folder (non-recursive).</summary>
+    private List<LibraryRow> ComputeMedia(List<LibraryRow> rows)
     {
         var loc = EffectiveLocation();
-
-        // Multi-root home: one tile per included root.
         if (loc.RootId is null)
-        {
-            var counts = rows.GroupBy(r => r.Item.RootId).ToDictionary(g => g.Key, g => g.Count());
-            var rootTiles = Roots.Where(r => r.IsIncluded).Select(r => new FolderTileVm
-            {
-                Name = r.Alias,
-                RootId = r.Id,
-                RelDir = "",
-                FullPath = r.Path,
-                Count = counts.GetValueOrDefault(r.Id),
-            }).ToList();
-            return (rootTiles, []);
-        }
+            return [];
 
         var rootId = loc.RootId.Value;
         var relDir = loc.RelDir;
-        var rootPath = Roots.FirstOrDefault(r => r.Id == rootId)?.Path ?? "";
-
         var media = new List<LibraryRow>();
-        var childCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
         foreach (var r in rows)
+        {
+            if (r.Item.RootId == rootId && string.Equals(GetDir(r.Item.RelPath), relDir, StringComparison.OrdinalIgnoreCase))
+                media.Add(r);
+        }
+        return media;
+    }
+
+    // --- Folder tree --------------------------------------------------------
+
+    private void BuildTree()
+    {
+        FolderTree.Clear();
+        foreach (var rootVm in Roots)
+        {
+            var subs = GetSubfolders(rootVm.Id, "");
+            FolderTree.Add(new FolderNodeVm(
+                rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
+                rootVm, rootVm.Count, LoadChildNodes));
+        }
+    }
+
+    private List<FolderNodeVm> LoadChildNodes(long rootId, string relDir) =>
+        GetSubfolders(rootId, relDir)
+            .Select(s => new FolderNodeVm(rootId, s.RelDir, s.Name, isRoot: false, s.HasChildren, null, s.Count, LoadChildNodes))
+            .ToList();
+
+    /// <summary>Immediate subfolders of (rootId, relDir): name, path, recursive count, and whether it nests further.</summary>
+    private List<(string Name, string RelDir, int Count, bool HasChildren)> GetSubfolders(long rootId, string relDir)
+    {
+        var acc = new Dictionary<string, (string RelDir, int Count, bool HasChild)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in _allRows)
         {
             if (r.Item.RootId != rootId)
                 continue;
             var dir = GetDir(r.Item.RelPath);
-            if (!IsUnder(dir, relDir))
+            if (!IsUnder(dir, relDir) || string.Equals(dir, relDir, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (FirstSegmentUnder(r.Item.RelPath, relDir) is not { } child)
                 continue;
 
-            if (string.Equals(dir, relDir, StringComparison.OrdinalIgnoreCase))
-                media.Add(r); // file directly in this folder
-            else if (FirstSegmentUnder(r.Item.RelPath, relDir) is { } child)
-                childCounts[child] = childCounts.GetValueOrDefault(child) + 1;
+            var childRel = relDir.Length == 0 ? child : Path.Combine(relDir, child);
+            var deeper = !string.Equals(dir, childRel, StringComparison.OrdinalIgnoreCase);
+            if (acc.TryGetValue(child, out var v))
+                acc[child] = (childRel, v.Count + 1, v.HasChild || deeper);
+            else
+                acc[child] = (childRel, 1, deeper);
         }
 
-        var folders = childCounts.Select(kv => new FolderTileVm
-        {
-            Name = kv.Key,
-            RootId = rootId,
-            RelDir = relDir.Length == 0 ? kv.Key : Path.Combine(relDir, kv.Key),
-            FullPath = Path.Combine(rootPath, relDir, kv.Key),
-            Count = kv.Value,
-        }).ToList();
+        return acc.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => (kv.Key, kv.Value.RelDir, kv.Value.Count, kv.Value.HasChild))
+            .ToList();
+    }
 
-        return (folders, media);
+    /// <summary>Called from the tree when the user selects a node.</summary>
+    public void NavigateToNode(FolderNodeVm? node)
+    {
+        if (node is not null)
+            NavigateTo(node.RootId, node.RelDir);
+    }
+
+    /// <summary>Expands the tree to and selects the node for a location (keeps the tree in sync).</summary>
+    private void SelectPath(long? rootId, string relDir)
+    {
+        if (rootId is null)
+            return;
+        var node = FolderTree.FirstOrDefault(n => n.RootId == rootId);
+        if (node is null)
+            return;
+
+        if (relDir.Length > 0)
+        {
+            var accumulated = "";
+            foreach (var segment in relDir.Split(Path.DirectorySeparatorChar))
+            {
+                node.IsExpanded = true; // lazy-loads children
+                accumulated = accumulated.Length == 0 ? segment : Path.Combine(accumulated, segment);
+                var next = node.Children.FirstOrDefault(c => string.Equals(c.RelDir, accumulated, StringComparison.OrdinalIgnoreCase));
+                if (next is null)
+                    break;
+                node = next;
+            }
+        }
+        node.IsSelected = true;
+    }
+
+    /// <summary>Resolves single-root "home" to that root's top level.</summary>
+    private (long? RootId, string RelDir) EffectiveLocation()
+    {
+        if (_location.RootId is null && Roots.Count == 1)
+            return (Roots[0].Id, "");
+        return _location;
     }
 
     /// <summary>All rows under the current location, recursively (for search).</summary>
@@ -1009,6 +1057,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 }
                 UpdateIndexingText();
                 BuildView();
+                BuildTree();
+                SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
             });
 
             if (watchAfter)
