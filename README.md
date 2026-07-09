@@ -235,6 +235,10 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Bottom preview uses the margins**: tags/notes on the left, image + zoom in the center, metadata on the right (right dock stays stacked). One set of controls, repositioned by a `PreviewModeConverter`-driven grid.
 - **Removable tags in the preview** (a ✕ on each chip) and **correct zoom-button glyphs** (− / + were rendering blank).
 
+### Feedback round 14 ✅ done
+- **Preview pane is a real, resizable split** now: the browser grid and the pane are genuine grid cells with a **`GridSplitter`** between them (drag the pane's left edge when docked right, top edge when docked bottom). Opening/closing/resizing the pane reflows the thumbnail wrap panel and resets scrollbars exactly like a window resize — no more clipped, unreachable tiles on the right/bottom. (Configured in `ConfigurePreviewLayout`.)
+- **Keyboard nav scrolls collapsed section titles into view**: Home/End scroll to the very top/bottom, and landing on a section header (even a collapsed, item-less one) brings that header into view (`BringHeaderIntoView`). Previously Ctrl+End could move the cursor to the last collapsed title without moving the scroll position.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

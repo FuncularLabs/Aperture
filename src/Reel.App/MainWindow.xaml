@@ -421,21 +421,10 @@
             <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                           Background="Transparent" />
 
-            <!-- Thumbnail grid -->
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <!-- Browser grid; spans the cells the preview pane doesn't occupy -->
-                <Grid Grid.Row="0" Grid.Column="0"
-                      Grid.RowSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=browserRowSpan}"
-                      Grid.ColumnSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=browserColSpan}">
+            <!-- Thumbnail grid + preview pane; cells/splitter configured in code (ConfigurePreviewLayout) -->
+            <Grid x:Name="ContentGrid" Grid.Column="2">
+                <!-- Browser grid (real resizable column/row so the wrap panel reflows when the preview opens) -->
+                <Grid x:Name="BrowserHost">
                 <ListBox x:Name="ItemsList"
                      ItemsSource="{Binding ItemsView}"
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
@@ -588,15 +577,11 @@
             </Border>
                 </Grid>
 
-            <!-- Preview / inspector pane (docks right or bottom) -->
-            <Border x:Name="PreviewPane"
-                    Grid.Row="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=prow}"
-                    Grid.Column="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=pcol}"
-                    Grid.RowSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=prowspan}"
-                    Grid.ColumnSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=pcolspan}"
-                    Width="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=width}"
-                    Height="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=height}"
-                    Visibility="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=vis}"
+                <!-- Drag handle between the browser and the preview (left edge for right-dock, top for bottom) -->
+                <GridSplitter x:Name="PreviewSplitter" Visibility="Collapsed" Background="{StaticResource CanvasLine}" />
+
+            <!-- Preview / inspector pane (docks right or bottom; cell + size set in ConfigurePreviewLayout) -->
+            <Border x:Name="PreviewPane" Visibility="Collapsed"
                     Background="{StaticResource CanvasPanel}"
                     BorderBrush="{StaticResource CanvasLine}" BorderThickness="1">
                 <DockPanel>

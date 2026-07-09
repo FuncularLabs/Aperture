@@ -42,6 +42,91 @@ public partial class MainWindow : Window
         _lastLocationKey = ViewModel.LocationKey;
         ViewModel.ViewApplying += OnViewApplying;
         ViewModel.ViewApplied += OnViewApplied;
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        ConfigurePreviewLayout(ViewModel.PreviewMode);
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.PreviewMode) && ViewModel is not null)
+            ConfigurePreviewLayout(ViewModel.PreviewMode);
+    }
+
+    private double _previewWidth = 380;
+    private double _previewHeight = 340;
+
+    /// <summary>
+    /// Lays out the browser grid + preview pane as real, resizable grid cells so the
+    /// thumbnail wrap panel reflows (and scrollbars reset) exactly like a window resize.
+    /// A <see cref="GridSplitter"/> sits on the preview's left (right dock) or top (bottom dock).
+    /// </summary>
+    private void ConfigurePreviewLayout(PreviewMode mode)
+    {
+        // Remember the user's dragged size before we rebuild the definitions.
+        if (ContentGrid.ColumnDefinitions.Count == 3 && ContentGrid.ColumnDefinitions[2].ActualWidth > 0)
+            _previewWidth = ContentGrid.ColumnDefinitions[2].ActualWidth;
+        if (ContentGrid.RowDefinitions.Count == 3 && ContentGrid.RowDefinitions[2].ActualHeight > 0)
+            _previewHeight = ContentGrid.RowDefinitions[2].ActualHeight;
+
+        ContentGrid.ColumnDefinitions.Clear();
+        ContentGrid.RowDefinitions.Clear();
+
+        if (mode == PreviewMode.Off)
+        {
+            ContentGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+            ContentGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition());
+            System.Windows.Controls.Grid.SetColumn(BrowserHost, 0);
+            System.Windows.Controls.Grid.SetRow(BrowserHost, 0);
+            PreviewSplitter.Visibility = Visibility.Collapsed;
+            PreviewPane.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        PreviewSplitter.Visibility = Visibility.Visible;
+        PreviewPane.Visibility = Visibility.Visible;
+
+        if (mode == PreviewMode.Right)
+        {
+            ContentGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition());
+            ContentGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 220 });
+            ContentGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = GridLength.Auto });
+            ContentGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new GridLength(_previewWidth), MinWidth = 260 });
+
+            Place(BrowserHost, 0, 0);
+            Place(PreviewSplitter, 0, 1);
+            Place(PreviewPane, 0, 2);
+
+            PreviewSplitter.Width = 5;
+            PreviewSplitter.Height = double.NaN;
+            PreviewSplitter.HorizontalAlignment = HorizontalAlignment.Center;
+            PreviewSplitter.VerticalAlignment = VerticalAlignment.Stretch;
+            PreviewSplitter.ResizeDirection = System.Windows.Controls.GridResizeDirection.Columns;
+            PreviewSplitter.Cursor = Cursors.SizeWE;
+        }
+        else // Bottom
+        {
+            ContentGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+            ContentGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 160 });
+            ContentGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
+            ContentGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(_previewHeight), MinHeight = 200 });
+
+            Place(BrowserHost, 0, 0);
+            Place(PreviewSplitter, 1, 0);
+            Place(PreviewPane, 2, 0);
+
+            PreviewSplitter.Height = 5;
+            PreviewSplitter.Width = double.NaN;
+            PreviewSplitter.VerticalAlignment = VerticalAlignment.Center;
+            PreviewSplitter.HorizontalAlignment = HorizontalAlignment.Stretch;
+            PreviewSplitter.ResizeDirection = System.Windows.Controls.GridResizeDirection.Rows;
+            PreviewSplitter.Cursor = Cursors.SizeNS;
+        }
+    }
+
+    private static void Place(UIElement element, int row, int column)
+    {
+        System.Windows.Controls.Grid.SetRow(element, row);
+        System.Windows.Controls.Grid.SetColumn(element, column);
     }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -511,12 +596,12 @@ public partial class MainWindow : Window
             }
             else if (e.Key == Key.Home)
             {
-                MoveCursorAndScroll(ViewModel.MoveCursorToStart());
+                JumpCursor(toEnd: false);
                 e.Handled = true;
             }
             else if (e.Key == Key.End)
             {
-                MoveCursorAndScroll(ViewModel.MoveCursorToEnd());
+                JumpCursor(toEnd: true);
                 e.Handled = true;
             }
             return; // leave Ctrl+arrows / Ctrl+wheel alone
@@ -524,7 +609,7 @@ public partial class MainWindow : Window
 
         if (e.Key is Key.Home or Key.End)
         {
-            MoveCursorAndScroll(e.Key == Key.Home ? ViewModel.MoveCursorToStart() : ViewModel.MoveCursorToEnd());
+            JumpCursor(e.Key == Key.End);
             e.Handled = true;
             return;
         }
@@ -558,6 +643,8 @@ public partial class MainWindow : Window
             var target = ViewModel.MoveGrid(direction, ColumnsPerRow());
             if (target is not null)
                 try { ItemsList.ScrollIntoView(target); } catch { }
+            if (ViewModel.CursorIsHeader)
+                BringHeaderIntoView(); // a collapsed section title still scrolls into view
             ItemsList.Focus(); // keep focus on the grid so arrows keep firing (even on a header)
             e.Handled = true;
             return;
@@ -572,11 +659,43 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MoveCursorAndScroll(object? target)
+    /// <summary>Home/End: move the cursor to the first/last stop and scroll the grid to that extreme.</summary>
+    private void JumpCursor(bool toEnd)
     {
-        if (target is not null)
-            try { ItemsList.ScrollIntoView(target); } catch { }
+        _ = toEnd ? ViewModel!.MoveCursorToEnd() : ViewModel!.MoveCursorToStart();
+        var sv = GridScroll();
+        if (toEnd)
+            sv?.ScrollToBottom();
+        else
+            sv?.ScrollToTop();
+        if (ViewModel.CursorIsHeader)
+            BringHeaderIntoView();
         ItemsList.Focus();
+    }
+
+    /// <summary>Scrolls the cursor's section header (which may be a collapsed, item-less section) into view.</summary>
+    private void BringHeaderIntoView()
+    {
+        if (ViewModel?.CursorSection is not { } section)
+            return;
+        Dispatcher.BeginInvoke(
+            new Action(() => FindGroupItem(ItemsList, section)?.BringIntoView()),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private static System.Windows.Controls.GroupItem? FindGroupItem(DependencyObject root, object section)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is System.Windows.Controls.GroupItem gi
+                && ReferenceEquals((gi.Content as System.Windows.Data.CollectionViewGroup)?.Name, section))
+                return gi;
+            if (FindGroupItem(child, section) is { } found)
+                return found;
+        }
+        return null;
     }
 
     /// <summary>True if the cursor's tile is among the grid's realized (roughly on-screen) containers.</summary>

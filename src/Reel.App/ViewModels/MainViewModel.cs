@@ -698,6 +698,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>True when the keyboard cursor is on a section header rather than a tile.</summary>
     public bool CursorIsHeader => _cursorSection is not null;
 
+    /// <summary>The section the cursor is on (a header), for scrolling a collapsed title into view.</summary>
+    public SectionVm? CursorSection => _cursorSection;
+
     /// <summary>
     /// The linear sequence the keyboard walks: each section's header, then that
     /// section's tiles when it's expanded (collapsed sections contribute only a header).
