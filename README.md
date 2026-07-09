@@ -214,6 +214,15 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 **Evaluated from the review notes — deferred (with reasons):** *Smart Albums / Recents / Favorites* sidebar sections (valuable, but Favorites needs a new persistent "starred" flag and Smart Albums want a saved-search model — worth a dedicated pass); *smooth tree expand/collapse animation* (WPF `TreeView` has no native animated expansion — low ROI vs. effort); *kebab menu for secondary actions* (the toolbar isn't crowded enough yet to warrant hiding actions).
 
+### Feedback round 11 ✅ done — nav + UI polish
+- **Keyboard expand/collapse**: in the folder tree, Space toggles the selected node (Right/Left already expand/collapse); in the grid, when the cursor is on a date-section header, Right expands / Left collapses it (Space still toggles).
+- **Show: Pictures / Videos** checkboxes in the top bar — a live filter over the current view.
+- **Grid starts at the top on navigation**, and remembers each folder's scroll position so returning to a previously-viewed folder restores where you were (per-location scroll memory).
+- **Sort dropdown** text is vertically centered (was top-aligned).
+- **Clicking outside the search box dismisses** the tag quick-picks.
+- **Tag chooser**: on a multi-selection, a tag that's on only *some* items now stays in the available/suggestions list (so you can one-click apply it to all), in addition to showing as a dashed "partial" chip.
+- **Settings → ☰ hamburger** (it'll host more than settings soon).
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

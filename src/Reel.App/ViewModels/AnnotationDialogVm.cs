@@ -69,7 +69,9 @@ public sealed class AnnotationDialogVm : ObservableObject
                   .ThenBy(kv => casing[kv.Key], Ci)
                   .Select(kv => new TagChipVm(casing[kv.Key], kv.Value, _total)));
 
-        Suggestions = new ObservableCollection<string>(_allTags.Where(t => !HasChip(t)));
+        // Only tags already on EVERY selected item drop out of the suggestions;
+        // a tag on just some items stays available so you can apply it to all.
+        Suggestions = new ObservableCollection<string>(_allTags.Where(t => !IsShared(t)));
 
         // --- Notes: majority note; others are excluded from an edit. ---
         var notes = targets.Select(t => (t.Note ?? "").Trim()).ToList();
@@ -167,5 +169,5 @@ public sealed class AnnotationDialogVm : ObservableObject
         }
     }
 
-    private bool HasChip(string tag) => Tags.Any(c => Ci.Equals(c.Name, tag));
+    private bool IsShared(string tag) => Tags.Any(c => Ci.Equals(c.Name, tag) && c.Shared);
 }

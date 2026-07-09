@@ -11,6 +11,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         PreviewKeyDown += OnWindowPreviewKeyDown;
+        PreviewMouseDown += OnWindowPreviewMouseDown;
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
@@ -37,6 +38,10 @@ public partial class MainWindow : Window
         }
         if (max)
             WindowState = WindowState.Maximized;
+
+        _lastLocationKey = ViewModel.LocationKey;
+        ViewModel.ViewApplying += OnViewApplying;
+        ViewModel.ViewApplied += OnViewApplied;
     }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -121,10 +126,12 @@ public partial class MainWindow : Window
         }
 
         // Space: toggle the section when the cursor is on a header, else quick-look.
-        // (Skip when a real ToggleButton like the settings gear has focus.)
+        // (Skip when a TextBox/ToggleButton has focus, or the folder tree — it toggles
+        // the focused tree node itself in OnTreeKeyDown.)
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox
-            && focused is not System.Windows.Controls.Primitives.ToggleButton)
+            && focused is not System.Windows.Controls.Primitives.ToggleButton
+            && !IsInTree(focused as DependencyObject))
         {
             if (ViewModel.CursorIsHeader)
                 ViewModel.ToggleCursorSection();
@@ -134,9 +141,94 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool IsInTree(DependencyObject? o)
+    {
+        while (o is not null)
+        {
+            if (ReferenceEquals(o, FolderTreeView))
+                return true;
+            o = o is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(o)
+                : LogicalTreeHelper.GetParent(o);
+        }
+        return false;
+    }
+
+    /// <summary>Space on a folder-tree node expands/collapses it (Right/Left already do so by default).</summary>
+    private void OnTreeKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space
+            && FolderTreeView.SelectedItem is FolderNodeVm { HasChildren: true } node)
+        {
+            node.IsExpanded = !node.IsExpanded;
+            e.Handled = true;
+        }
+    }
+
     private void OnSearchFocus(object sender, RoutedEventArgs e) => ViewModel?.OpenQuickPicks();
 
     private void OnSearchBlur(object sender, RoutedEventArgs e) => ViewModel?.CloseQuickPicks();
+
+    /// <summary>Any click outside the search box (and its popup) dismisses the tag quick-picks.</summary>
+    private void OnWindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ViewModel is not { QuickPicksOpen: true })
+            return;
+        if (!IsDescendantOf(e.OriginalSource as DependencyObject, SearchBorder))
+            ViewModel.CloseQuickPicks();
+    }
+
+    private static bool IsDescendantOf(DependencyObject? node, DependencyObject ancestor)
+    {
+        while (node is not null)
+        {
+            if (ReferenceEquals(node, ancestor))
+                return true;
+            node = node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(node)
+                : LogicalTreeHelper.GetParent(node);
+        }
+        return false;
+    }
+
+    // --- Grid scroll memory: start at top on navigation, remember per-folder position ---
+
+    private readonly System.Collections.Generic.Dictionary<string, double> _scrollByLocation = new();
+    private string _lastLocationKey = "";
+    private System.Windows.Controls.ScrollViewer? _gridScroll;
+
+    private System.Windows.Controls.ScrollViewer? GridScroll() =>
+        _gridScroll ??= FindDescendant<System.Windows.Controls.ScrollViewer>(ItemsList);
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+                return match;
+            if (FindDescendant<T>(child) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    private void OnViewApplying()
+    {
+        // Capture the scroll position for the view we're leaving (before its items change).
+        if (GridScroll() is { } sv)
+            _scrollByLocation[_lastLocationKey] = sv.VerticalOffset;
+    }
+
+    private void OnViewApplied()
+    {
+        if (ViewModel is null)
+            return;
+        _lastLocationKey = ViewModel.LocationKey;
+        var target = _scrollByLocation.GetValueOrDefault(_lastLocationKey, 0); // 0 = top for a fresh view
+        Dispatcher.BeginInvoke(new Action(() => GridScroll()?.ScrollToVerticalOffset(target)),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 
     // --- Preview pane: zoom + pan ---
 
@@ -418,6 +510,15 @@ public partial class MainWindow : Window
                 e.Handled = true;
             }
             return; // leave Ctrl+arrows / Ctrl+wheel alone
+        }
+
+        // On a section header, Left/Right collapse/expand it (rather than moving the cursor).
+        if (ViewModel.CursorIsHeader && (e.Key == Key.Left || e.Key == Key.Right))
+        {
+            ViewModel.SetCursorSectionExpanded(e.Key == Key.Right);
+            ItemsList.Focus();
+            e.Handled = true;
+            return;
         }
 
         var direction = e.Key switch

@@ -173,8 +173,9 @@
                 BorderThickness="0,0,0,1">
             <DockPanel Margin="12,10">
                 <!-- Settings (right) -->
-                <ToggleButton x:Name="SettingsToggle" DockPanel.Dock="Right" Content="⚙  Settings"
-                              Style="{StaticResource ToolToggle}" Margin="6,0,0,0" />
+                <ToggleButton x:Name="SettingsToggle" DockPanel.Dock="Right" Content="☰"
+                              FontSize="16" Padding="12,4" Style="{StaticResource ToolToggle}" Margin="6,0,0,0"
+                              ToolTip="Menu" />
 
                 <!-- Search (right, left of settings) -->
                 <Border x:Name="SearchBorder" DockPanel.Dock="Right" Width="320" Height="30" Background="#F3F4F7"
@@ -207,8 +208,8 @@
                 <!-- Tag quick-picks, shown while the search box is focused -->
                 <Popup DockPanel.Dock="Right" PlacementTarget="{Binding ElementName=SearchBorder}" Placement="Bottom"
                        IsOpen="{Binding QuickPicksOpen, Mode=OneWay}" StaysOpen="True" AllowsTransparency="True">
-                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                            CornerRadius="8" Padding="12" Width="320" Margin="0,4,8,8" SnapsToDevicePixels="True">
+                    <Border x:Name="QuickPickPanel" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="8" Padding="12" Width="320" Margin="0,4,8,8" SnapsToDevicePixels="True">
                         <Border.Effect>
                             <DropShadowEffect Color="#22000000" BlurRadius="16" ShadowDepth="2" Direction="270" />
                         </Border.Effect>
@@ -301,8 +302,13 @@
                     <TextBlock Text="Sort" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
                                Margin="0,0,6,0" FontSize="12" />
                     <ComboBox ItemsSource="{Binding SortLabels}" SelectedItem="{Binding SortPreset, Mode=TwoWay}"
-                              Width="120" VerticalAlignment="Center" Height="30" />
-                    <ToggleButton Content="◧  Preview" Style="{StaticResource ToolToggle}" Margin="8,0,0,0"
+                              Width="120" VerticalAlignment="Center" VerticalContentAlignment="Center" Height="30" />
+                    <Rectangle Width="1" Fill="{StaticResource Line}" Margin="8,2,6,2" />
+                    <TextBlock Text="Show" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                               Margin="0,0,6,0" FontSize="12" />
+                    <CheckBox Content="Pictures" IsChecked="{Binding ShowImages}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <CheckBox Content="Videos" IsChecked="{Binding ShowVideos}" VerticalAlignment="Center" />
+                    <ToggleButton Content="◧  Preview" Style="{StaticResource ToolToggle}" Margin="10,0,0,0"
                                   IsChecked="{Binding PreviewOpen, Mode=TwoWay}"
                                   ToolTip="Toggle the preview / inspector pane" />
                     <!-- sync status pill -->
@@ -352,7 +358,7 @@
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
                     <TreeView x:Name="FolderTreeView" ItemsSource="{Binding FolderTree}"
                               BorderThickness="0" Background="Transparent" Foreground="{StaticResource CanvasInk}"
-                              SelectedItemChanged="OnTreeSelectedChanged">
+                              SelectedItemChanged="OnTreeSelectedChanged" PreviewKeyDown="OnTreeKeyDown">
                         <TreeView.Resources>
                             <!-- Dark-appropriate selection so light node text stays legible -->
                             <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#33406A" />

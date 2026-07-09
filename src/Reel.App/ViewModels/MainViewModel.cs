@@ -298,6 +298,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private bool _showImages = true;
+    private bool _showVideos = true;
+
+    /// <summary>Top-bar "Show: Pictures" filter over the current view.</summary>
+    public bool ShowImages
+    {
+        get => _showImages;
+        set { if (SetProperty(ref _showImages, value)) RequestBuildView(); }
+    }
+
+    /// <summary>Top-bar "Show: Videos" filter over the current view.</summary>
+    public bool ShowVideos
+    {
+        get => _showVideos;
+        set { if (SetProperty(ref _showVideos, value)) RequestBuildView(); }
+    }
+
     // --- Sort ---------------------------------------------------------------
 
     /// <summary>A named sort. Date sorts keep collapsible sections; others flatten to a global list.</summary>
@@ -768,6 +785,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _cursorSection.IsExpanded = !_cursorSection.IsExpanded;
     }
 
+    /// <summary>Right/Left on a header expands/collapses it. Returns false when the cursor isn't on a header.</summary>
+    public bool SetCursorSectionExpanded(bool expanded)
+    {
+        if (_cursorSection is null)
+            return false;
+        _cursorSection.IsExpanded = expanded;
+        return true;
+    }
+
     // --- First run ----------------------------------------------------------
 
     private bool _showFirstRun;
@@ -1069,7 +1095,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private sealed record BuildInputs(
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
-        Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion);
+        Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion,
+        bool ShowImages, bool ShowVideos);
 
     private sealed record ViewBuild(
         List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections);
@@ -1083,7 +1110,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         EffectiveLocation(),
         GroupByDate,
         _annotations,
-        _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded));
+        _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded),
+        _showImages,
+        _showVideos);
 
     /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
     private ViewBuild ComputeView(BuildInputs input)
@@ -1103,6 +1132,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             media = ComputeMediaFor(input.Rows, input.Location);
         }
 
+        // Top-bar "Show: Pictures / Videos" filter.
+        if (!input.ShowImages || !input.ShowVideos)
+            media = media.Where(r => r.Item.IsVideo ? input.ShowVideos : input.ShowImages).ToList();
+
         // Only date sorts get collapsible date sections; other sorts flatten to a global list.
         var useSections = input.GroupByDate && input.Sort.Grouped && media.Count > 0;
         var sections = new Dictionary<long, SectionVm>();
@@ -1120,9 +1153,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections);
     }
 
+    /// <summary>Identifies the current view (folder or search) for per-location scroll memory.</summary>
+    public string LocationKey =>
+        _searchText.Trim().Length > 0 ? "search" : $"{_location.RootId}|{_location.RelDir}";
+
+    /// <summary>Raised just before the grid's items change (so the view can save its scroll position).</summary>
+    public event Action? ViewApplying;
+
+    /// <summary>Raised just after the grid's items change (so the view can restore/reset scroll).</summary>
+    public event Action? ViewApplied;
+
     /// <summary>Applies a computed build to the live view — UI thread only.</summary>
     private void ApplyView(ViewBuild build)
     {
+        ViewApplying?.Invoke();
+
         ClearCursorHighlight();
         _cursorSection = null;
         _selectedTiles = []; // stale references across a view rebuild would act on the wrong tiles
@@ -1141,6 +1186,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ItemsView));
         UpdateStatus();
         UpdateWindowTitle();
+
+        ViewApplied?.Invoke();
     }
 
     /// <summary>Media files directly inside the given folder (non-recursive).</summary>
