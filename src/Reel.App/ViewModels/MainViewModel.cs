@@ -76,6 +76,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
+        OpenContainingFolderCommand = new RelayCommand<TileVm>(OpenContainingFolder);
+        TogglePreviewCommand = new RelayCommand(() => PreviewOpen = !PreviewOpen);
         EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
         ManageTagsCommand = new RelayCommand(ManageTags);
         OpenReadmeCommand = new RelayCommand(OpenReadme);
@@ -162,11 +164,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ThumbnailService Thumbnails { get; }
 
-    /// <summary>"Reel vX.Y.Z" from the assembly version, for the About row.</summary>
+    /// <summary>"Aperture vX.Y.Z" from the assembly version, for the About row.</summary>
     public string AppVersion =>
-        "Reel v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.5.0");
+        "Aperture v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.0");
 
-    private string _windowTitle = "Reel";
+    private string _windowTitle = "Aperture";
 
     /// <summary>Window title — shows the current folder's full path.</summary>
     public string WindowTitle
@@ -180,11 +182,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root)
         {
             var full = _location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir);
-            WindowTitle = $"Reel  —  {full}";
+            WindowTitle = $"Aperture  —  {full}";
         }
         else
         {
-            WindowTitle = "Reel";
+            WindowTitle = "Aperture";
         }
     }
 
@@ -203,7 +205,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (SetProperty(ref _selectedItem, value))
+            {
                 OnPropertyChanged(nameof(SelectedTile));
+                LoadPreview(); // no-op when the preview pane is closed
+            }
         }
     }
 
@@ -371,6 +376,120 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyImageCommand { get; }
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
+    public ICommand OpenContainingFolderCommand { get; }
+    public ICommand TogglePreviewCommand { get; }
+
+    private void OpenContainingFolder(TileVm? tile)
+    {
+        var path = tile?.FullPath ?? SelectedTile?.FullPath;
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            return;
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true }); }
+        catch { }
+    }
+
+    // --- Sync status pill ----------------------------------------------------
+
+    private string _syncStatus = "";
+
+    /// <summary>Top-bar pill: total item count, or the current indexing progress.</summary>
+    public string SyncStatus
+    {
+        get => _syncStatus;
+        private set => SetProperty(ref _syncStatus, value);
+    }
+
+    private void UpdateSyncStatus()
+    {
+        bool indexing;
+        lock (_indexLock)
+            indexing = _activeIndexers > 0;
+
+        if (indexing)
+            SyncStatus = string.IsNullOrEmpty(IndexingText) ? "Indexing…" : IndexingText;
+        else
+            SyncStatus = _allRows.Count == 0 ? "" : $"{_allRows.Count:n0} items  ·  up to date";
+    }
+
+    // --- Preview / inspector pane -------------------------------------------
+
+    private bool _previewOpen;
+    private System.Windows.Media.Imaging.BitmapSource? _previewImage;
+    private IReadOnlyList<MetaRow> _previewExif = [];
+    private int _previewGen;
+
+    /// <summary>One EXIF/metadata row in the preview pane.</summary>
+    public sealed record MetaRow(string Label, string Value);
+
+    /// <summary>Whether the right-hand preview/inspector pane is shown.</summary>
+    public bool PreviewOpen
+    {
+        get => _previewOpen;
+        set { if (SetProperty(ref _previewOpen, value) && value) LoadPreview(); }
+    }
+
+    /// <summary>The full-resolution, orientation-corrected image shown in the preview (async loaded).</summary>
+    public System.Windows.Media.Imaging.BitmapSource? PreviewImage
+    {
+        get => _previewImage;
+        private set => SetProperty(ref _previewImage, value);
+    }
+
+    public IReadOnlyList<MetaRow> PreviewExif
+    {
+        get => _previewExif;
+        private set => SetProperty(ref _previewExif, value);
+    }
+
+    /// <summary>The tile the preview is inspecting (drives its tags/notes + basic fields).</summary>
+    public TileVm? PreviewTile => SelectedTile;
+
+    private async void LoadPreview()
+    {
+        if (!_previewOpen)
+            return;
+        OnPropertyChanged(nameof(PreviewTile));
+        var tile = SelectedTile;
+        PreviewExif = BuildExif(tile);
+
+        var gen = ++_previewGen;
+        PreviewImage = null;
+        if (tile is null)
+            return;
+
+        var path = tile.FullPath;
+        var isVideo = tile.IsVideo;
+        var itemId = tile.ItemId;
+        var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId) : ImageLoading.LoadFullImageUpright(path, 2400));
+        if (gen == _previewGen && _previewOpen)
+            PreviewImage = image;
+    }
+
+    private static List<MetaRow> BuildExif(TileVm? tile)
+    {
+        if (tile is null)
+            return [];
+        var item = tile.Item;
+        var date = item.TakenUtc ?? item.MTimeUtc.ToLocalTime();
+
+        var rows = new List<MetaRow>
+        {
+            new("Name", tile.FileName),
+            new("Folder", tile.Location),
+            new("Type", tile.IsVideo ? "Video" : "Image"),
+        };
+        if (tile.Dimensions.Length > 0)
+            rows.Add(new("Dimensions", tile.Dimensions));
+        rows.Add(new("Size", tile.SizeText));
+        rows.Add(new("Taken", date.ToString("yyyy-MM-dd HH:mm")));
+
+        foreach (var (label, value) in Reel.Core.Media.MetadataReader.ReadExifSummary(tile.FullPath))
+            if (!rows.Any(r => r.Label == label)) // don't duplicate Camera etc.
+                rows.Add(new(label, value));
+
+        rows.Add(new("Path", tile.FullPath));
+        return rows;
+    }
     public ICommand EditAnnotationCommand { get; }
     public ICommand ManageTagsCommand { get; }
     public ICommand OpenReadmeCommand { get; }
@@ -841,7 +960,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void AddRoot()
     {
-        var dialog = new OpenFolderDialog { Title = "Add a folder to Reel" };
+        var dialog = new OpenFolderDialog { Title = "Add a folder to Aperture" };
         if (dialog.ShowDialog() != true)
             return;
 
@@ -850,6 +969,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return; // already added
 
         AddRootPath(path, DeriveAlias(path));
+    }
+
+    /// <summary>Adds dropped folders as watched roots (skips duplicates). Used by drag-and-drop.</summary>
+    public void AddFolders(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            var full = Path.GetFullPath(path);
+            if (!System.IO.Directory.Exists(full)
+                || Roots.Any(r => string.Equals(r.Path, full, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            AddRootPath(full, DeriveAlias(full));
+        }
     }
 
     private void AddRootPath(string path, string alias)
@@ -1225,6 +1357,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateStatus()
     {
+        UpdateSyncStatus();
         var mediaCount = _mediaTiles.Count;
         var folderCount = _tiles.Count - mediaCount;
 
@@ -1344,6 +1477,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IndexingText = busy.Count == 1
             ? $"{busy[0].Alias}: {busy[0].Status}"
             : $"Indexing {active} folders…";
+        UpdateSyncStatus();
     }
 
     private void OnRootChanged(object? sender, long rootId)

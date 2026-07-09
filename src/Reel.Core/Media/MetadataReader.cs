@@ -61,4 +61,47 @@ public sealed class MetadataReader
 
         return new ImageMetadata(taken, string.IsNullOrWhiteSpace(camera) ? null : camera, orientation);
     }
+
+    /// <summary>
+    /// Human-readable EXIF label/value pairs for the preview pane (camera, lens,
+    /// exposure, ISO, GPS…). Empty for files without EXIF; never throws.
+    /// </summary>
+    public static List<(string Label, string Value)> ReadExifSummary(string path)
+    {
+        var result = new List<(string, string)>();
+        IReadOnlyList<Directory> dirs;
+        try { dirs = ImageMetadataReader.ReadMetadata(path); }
+        catch { return result; }
+
+        var ifd0 = dirs.OfType<ExifIfd0Directory>().FirstOrDefault();
+        var sub = dirs.OfType<ExifSubIfdDirectory>().FirstOrDefault();
+
+        static string? Desc(Directory? d, int tag)
+        {
+            var s = d?.GetDescription(tag);
+            return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        }
+        void Add(string label, string? v)
+        {
+            if (!string.IsNullOrWhiteSpace(v))
+                result.Add((label, v!));
+        }
+
+        var camera = string.Join(' ',
+            new[] { Desc(ifd0, ExifDirectoryBase.TagMake), Desc(ifd0, ExifDirectoryBase.TagModel) }
+                .Where(s => s is not null));
+        Add("Camera", camera.Length > 0 ? camera : null);
+        Add("Lens", Desc(sub, ExifDirectoryBase.TagLensModel));
+        Add("Focal length", Desc(sub, ExifDirectoryBase.TagFocalLength));
+        Add("Aperture", Desc(sub, ExifDirectoryBase.TagFNumber));
+        Add("Shutter", Desc(sub, ExifDirectoryBase.TagExposureTime));
+        Add("ISO", Desc(sub, ExifDirectoryBase.TagIsoEquivalent));
+        Add("Flash", Desc(sub, ExifDirectoryBase.TagFlash));
+
+        var gps = dirs.OfType<GpsDirectory>().FirstOrDefault();
+        if (gps?.GetGeoLocation() is { } loc && (loc.Latitude != 0 || loc.Longitude != 0))
+            Add("GPS", $"{loc.Latitude:0.00000}, {loc.Longitude:0.00000}");
+
+        return result;
+    }
 }

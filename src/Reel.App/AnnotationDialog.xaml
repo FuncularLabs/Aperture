@@ -4,7 +4,7 @@
         Title="Tags &amp; Notes" Height="500" Width="440"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize" MinWidth="360" MinHeight="380"
         Background="#F7F8FA" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
-        Icon="Assets/reel.ico">
+        Icon="Assets/aperture.ico">
     <Window.Resources>
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
         <SolidColorBrush x:Key="Muted" Color="#8A90A0" />

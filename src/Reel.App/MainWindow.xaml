@@ -5,13 +5,15 @@
         xmlns:vm="clr-namespace:Reel.App.ViewModels"
         xmlns:mvvm="clr-namespace:Reel.App.Mvvm"
         Title="{Binding WindowTitle}" Height="820" Width="1280"
-        Icon="Assets/reel.ico"
+        Icon="Assets/aperture.ico"
         Background="#F5F6F8"
+        AllowDrop="True" DragOver="OnWindowDragOver" Drop="OnWindowDrop"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <mvvm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
+        <mvvm:NullToVisibilityConverter x:Key="NullToVis" />
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
@@ -287,7 +289,7 @@
                 <!-- Actions (left) -->
                 <StackPanel Orientation="Horizontal">
                     <Image Source="Assets/mascot.png" Width="30" Height="30" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Text="Reel" FontWeight="Bold" FontSize="17" Foreground="{StaticResource Ink}"
+                    <TextBlock Text="Aperture" FontWeight="Bold" FontSize="17" Foreground="{StaticResource Ink}"
                                VerticalAlignment="Center" Margin="0,0,14,0" />
                     <Button Content="＋  Add Folder" Style="{StaticResource ToolButton}" Command="{Binding AddRootCommand}" />
                     <Rectangle Width="1" Fill="{StaticResource Line}" Margin="6,2" />
@@ -300,6 +302,24 @@
                                Margin="0,0,6,0" FontSize="12" />
                     <ComboBox ItemsSource="{Binding SortLabels}" SelectedItem="{Binding SortPreset, Mode=TwoWay}"
                               Width="120" VerticalAlignment="Center" Height="30" />
+                    <ToggleButton Content="◧  Preview" Style="{StaticResource ToolToggle}" Margin="8,0,0,0"
+                                  IsChecked="{Binding PreviewOpen, Mode=TwoWay}"
+                                  ToolTip="Toggle the preview / inspector pane" />
+                    <!-- sync status pill -->
+                    <Border Background="#EEF1F6" CornerRadius="11" Padding="10,4" Margin="12,0,0,0"
+                            VerticalAlignment="Center">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SyncStatus}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding SyncStatus}" Foreground="{StaticResource Muted}" FontSize="11" />
+                    </Border>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -321,6 +341,7 @@
                 <ColumnDefinition Width="210" MinWidth="140" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <!-- Roots pane -->
@@ -467,6 +488,9 @@
                                     <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
                                         <MenuItem Header="" />
                                     </MenuItem>
+                                    <MenuItem Header="Open containing folder"
+                                              Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
+                                              CommandParameter="{Binding}" />
                                     <Separator />
                                     <MenuItem Header="Tags &amp; notes…"
                                               Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
@@ -539,6 +563,98 @@
                                Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
+
+            <!-- Preview / inspector pane -->
+            <Border Grid.Column="3" Width="360" Background="{StaticResource CanvasPanel}"
+                    BorderBrush="{StaticResource CanvasLine}" BorderThickness="1,0,0,0"
+                    Visibility="{Binding PreviewOpen, Converter={StaticResource BoolToVis}}">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Margin="14,12,10,10">
+                        <TextBlock Text="PREVIEW" Foreground="{StaticResource CanvasMuted}" FontSize="11" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <Button Content="✕" HorizontalAlignment="Right" Width="24" Cursor="Hand"
+                                Background="Transparent" BorderThickness="0" Foreground="{StaticResource CanvasMuted}"
+                                Command="{Binding TogglePreviewCommand}" />
+                    </Grid>
+
+                    <!-- Zoomable / pannable image -->
+                    <Border DockPanel.Dock="Top" Height="300" Margin="10,0,10,8" CornerRadius="6" ClipToBounds="True"
+                            Background="#14141C">
+                        <Grid>
+                            <ScrollViewer x:Name="PreviewScroll" HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Hidden"
+                                          PreviewMouseWheel="OnPreviewWheel"
+                                          PreviewMouseLeftButtonDown="OnPreviewPanStart"
+                                          PreviewMouseMove="OnPreviewPanMove"
+                                          PreviewMouseLeftButtonUp="OnPreviewPanEnd" Cursor="SizeAll">
+                                <Image x:Name="PreviewImg" RenderOptions.BitmapScalingMode="HighQuality" Stretch="None"
+                                       Source="{Binding PreviewImage, NotifyOnTargetUpdated=True}"
+                                       TargetUpdated="OnPreviewImageChanged">
+                                    <Image.LayoutTransform>
+                                        <ScaleTransform x:Name="PreviewScale" ScaleX="1" ScaleY="1" />
+                                    </Image.LayoutTransform>
+                                </Image>
+                            </ScrollViewer>
+                            <TextBlock Text="Select an item to preview" Foreground="{StaticResource CanvasMuted}"
+                                       FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding PreviewImage, Converter={StaticResource NullToVis}}" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Zoom controls -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+                        <Button Content="－" Width="30" Click="OnPreviewZoomOut" Style="{StaticResource ToolButton}" />
+                        <Button Content="Fit" Width="42" Click="OnPreviewFit" Style="{StaticResource ToolButton}" />
+                        <Button Content="1:1" Width="42" Click="OnPreviewActual" Style="{StaticResource ToolButton}" />
+                        <Button Content="＋" Width="30" Click="OnPreviewZoomIn" Style="{StaticResource ToolButton}" />
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="14,4,14,14">
+                            <!-- Tags & notes -->
+                            <TextBlock Text="TAGS &amp; NOTES" Foreground="{StaticResource CanvasMuted}" FontSize="11"
+                                       FontWeight="SemiBold" Margin="0,0,0,6" />
+                            <ItemsControl ItemsSource="{Binding PreviewTile.Annotation.Tags}" Margin="0,0,0,4">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#33406A" CornerRadius="10" Padding="9,2" Margin="0,0,5,5">
+                                            <TextBlock Text="{Binding}" Foreground="#D7DAF0" FontSize="11" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding PreviewTile.Annotation.Note}" Foreground="{StaticResource CanvasInk}"
+                                       FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" />
+                            <Button Content="✎  Edit tags &amp; notes…" HorizontalAlignment="Left" Cursor="Hand"
+                                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource Accent}"
+                                    Padding="0,2" Command="{Binding EditAnnotationCommand}" CommandParameter="{Binding PreviewTile}" />
+
+                            <Border Height="1" Background="{StaticResource CanvasLine}" Margin="0,12" />
+
+                            <!-- Metadata / EXIF -->
+                            <TextBlock Text="METADATA" Foreground="{StaticResource CanvasMuted}" FontSize="11"
+                                       FontWeight="SemiBold" Margin="0,0,0,6" />
+                            <ItemsControl ItemsSource="{Binding PreviewExif}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="96" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Foreground="{StaticResource CanvasMuted}"
+                                                       FontSize="11" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="{StaticResource CanvasInk}"
+                                                       FontSize="11" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
         </Grid>
     </DockPanel>
 
@@ -572,7 +688,7 @@
                     <DropShadowEffect Color="#44000000" BlurRadius="30" ShadowDepth="4" Direction="270" />
                 </Border.Effect>
                 <StackPanel>
-                    <TextBlock Text="Welcome to Reel" FontSize="22" FontWeight="Bold" Foreground="{StaticResource Ink}" />
+                    <TextBlock Text="Welcome to Aperture" FontSize="22" FontWeight="Bold" Foreground="{StaticResource Ink}" />
                     <TextBlock Text="Add your photo folders to get started. We found these — pick the ones you want."
                                Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,16" />
                     <ItemsControl ItemsSource="{Binding FirstRunCandidates}">

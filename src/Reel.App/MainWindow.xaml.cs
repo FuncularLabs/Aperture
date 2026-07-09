@@ -138,6 +138,93 @@ public partial class MainWindow : Window
 
     private void OnSearchBlur(object sender, RoutedEventArgs e) => ViewModel?.CloseQuickPicks();
 
+    // --- Preview pane: zoom + pan ---
+
+    private double _previewZoom = 1;
+    private bool _panning;
+    private Point _panStart;
+    private double _panH, _panV;
+
+    private void SetPreviewZoom(double z)
+    {
+        _previewZoom = Math.Clamp(z, 0.1, 8);
+        PreviewScale.ScaleX = _previewZoom;
+        PreviewScale.ScaleY = _previewZoom;
+    }
+
+    private void FitPreview()
+    {
+        if (PreviewImg.Source is not System.Windows.Media.Imaging.BitmapSource bmp || bmp.PixelWidth <= 0)
+        {
+            SetPreviewZoom(1);
+            return;
+        }
+        var vw = PreviewScroll.ViewportWidth;
+        var vh = PreviewScroll.ViewportHeight;
+        if (vw <= 0 || vh <= 0)
+        {
+            SetPreviewZoom(1);
+            return;
+        }
+        SetPreviewZoom(Math.Min(1, Math.Min(vw / bmp.PixelWidth, vh / bmp.PixelHeight)));
+    }
+
+    private void OnPreviewWheel(object sender, MouseWheelEventArgs e)
+    {
+        e.Handled = true;
+        SetPreviewZoom(_previewZoom * (e.Delta > 0 ? 1.15 : 1 / 1.15));
+    }
+
+    private void OnPreviewZoomIn(object sender, RoutedEventArgs e) => SetPreviewZoom(_previewZoom * 1.2);
+    private void OnPreviewZoomOut(object sender, RoutedEventArgs e) => SetPreviewZoom(_previewZoom / 1.2);
+    private void OnPreviewActual(object sender, RoutedEventArgs e) => SetPreviewZoom(1);
+    private void OnPreviewFit(object sender, RoutedEventArgs e) => FitPreview();
+
+    private void OnPreviewImageChanged(object sender, System.Windows.Data.DataTransferEventArgs e) =>
+        Dispatcher.BeginInvoke(new Action(FitPreview), System.Windows.Threading.DispatcherPriority.Loaded);
+
+    private void OnPreviewPanStart(object sender, MouseButtonEventArgs e)
+    {
+        _panning = true;
+        _panStart = e.GetPosition(PreviewScroll);
+        _panH = PreviewScroll.HorizontalOffset;
+        _panV = PreviewScroll.VerticalOffset;
+        PreviewScroll.CaptureMouse();
+    }
+
+    private void OnPreviewPanMove(object sender, MouseEventArgs e)
+    {
+        if (!_panning)
+            return;
+        var p = e.GetPosition(PreviewScroll);
+        PreviewScroll.ScrollToHorizontalOffset(_panH - (p.X - _panStart.X));
+        PreviewScroll.ScrollToVerticalOffset(_panV - (p.Y - _panStart.Y));
+    }
+
+    private void OnPreviewPanEnd(object sender, MouseButtonEventArgs e)
+    {
+        _panning = false;
+        PreviewScroll.ReleaseMouseCapture();
+    }
+
+    // --- Drag-and-drop folders to add as watched roots ---
+
+    private void OnWindowDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnWindowDrop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+            return;
+        var folders = ((string[])e.Data.GetData(DataFormats.FileDrop))
+            .Where(System.IO.Directory.Exists).ToArray();
+        if (folders.Length > 0)
+            ViewModel?.AddFolders(folders);
+    }
+
     private void OnQuickLookBackgroundClick(object sender, MouseButtonEventArgs e)
     {
         // Close only when the dim background itself is clicked, not a button.

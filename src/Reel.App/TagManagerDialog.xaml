@@ -4,7 +4,7 @@
         Title="Manage Tags" Height="480" Width="420"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize" MinWidth="340" MinHeight="300"
         Background="#F7F8FA" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
-        Icon="Assets/reel.ico">
+        Icon="Assets/aperture.ico">
     <Window.Resources>
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
         <SolidColorBrush x:Key="Muted" Color="#8A90A0" />

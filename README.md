@@ -1,8 +1,8 @@
-# Reel
+# Aperture
 
 A fast image browser for Windows. Replaces File Explorer for the "just let me look at my photos" case — no 30-second waits on big folders like Dropbox Camera Uploads.
 
-Working name; easy to rename later.
+(Formerly "Reel". The on-disk data store is still `%LOCALAPPDATA%\Reel` so the existing index survives the rename.)
 
 ---
 
@@ -204,6 +204,15 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 ### Feedback round 9 ✅ done
 - **Snappy folder navigation.** Selecting folders in the left tree (keyboard or mouse) no longer buffers/replays keystrokes. Two causes fixed: (1) the grid rebuild used to re-read the whole item union from SQLite on *every* selection — now the union is cached and only re-read when the data actually changes (index, root add/remove/include); (2) rebuilds are now **debounced (last-one-wins) and run off the UI thread**, so rapid arrowing coalesces into one rebuild and never blocks input. A brief "Loading…" spinner covers the gap. The heavy filter/sort/tile work is computed on a background thread against immutable snapshots (fresh, unbound `SectionVm`s), then applied on the UI thread.
+
+### Feedback round 10 ✅ done — rebrand + inspector
+- **Renamed to Aperture** with a new aperture-iris logo (purple metallic blades + motion lines). The data directory stays `%LOCALAPPDATA%\Reel` so the existing index/annotations carry over untouched.
+- **Preview / inspector pane** (toolbar "◧ Preview" toggle): shows the selected item large with **zoom** (wheel or −/Fit/1:1/+) and **pan** (drag), its **tags & notes** (with an inline "Edit tags & notes…" that opens the editor), and full **metadata/EXIF** — dimensions, size, dates, plus camera/lens/exposure/ISO/GPS read on demand ([`MetadataReader.ReadExifSummary`](src/Reel.Core/Media/MetadataReader.cs)).
+- **Open containing folder** on the tile context menu (reveals the file in Explorer).
+- **Sync-status pill** in the top bar: "N items · up to date", or the live "Indexing…" progress.
+- **Drag-and-drop folders** onto the window to add them as watched roots.
+
+**Evaluated from the review notes — deferred (with reasons):** *Smart Albums / Recents / Favorites* sidebar sections (valuable, but Favorites needs a new persistent "starred" flag and Smart Albums want a saved-search model — worth a dedicated pass); *smooth tree expand/collapse animation* (WPF `TreeView` has no native animated expansion — low ROI vs. effort); *kebab menu for secondary actions* (the toolbar isn't crowded enough yet to warrant hiding actions).
 
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
