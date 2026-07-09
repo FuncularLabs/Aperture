@@ -79,6 +79,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OpenContainingFolderCommand = new RelayCommand<TileVm>(OpenContainingFolder);
         CyclePreviewCommand = new RelayCommand(CyclePreview);
         ClosePreviewCommand = new RelayCommand(() => PreviewMode = PreviewMode.Off);
+        RemovePreviewTagCommand = new RelayCommand<string>(RemovePreviewTag);
         EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
         ManageTagsCommand = new RelayCommand(ManageTags);
         OpenReadmeCommand = new RelayCommand(OpenReadme);
@@ -397,6 +398,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand OpenContainingFolderCommand { get; }
     public ICommand CyclePreviewCommand { get; }
     public ICommand ClosePreviewCommand { get; }
+    public ICommand RemovePreviewTagCommand { get; }
+
+    /// <summary>Removes a tag from the previewed item (the ✕ on a preview-pane chip).</summary>
+    private void RemovePreviewTag(string? tag)
+    {
+        var tile = SelectedTile;
+        if (tile is null || string.IsNullOrEmpty(tag))
+            return;
+        var current = AnnotationFor(tile.Row);
+        var tags = current.Tags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList();
+        _library.SaveAnnotation(tile.FullPath, tags, current.Note);
+        RefreshAnnotationsInPlace([tile]);
+    }
 
     private void OpenContainingFolder(TileVm? tile)
     {

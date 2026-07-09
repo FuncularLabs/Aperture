@@ -57,7 +57,7 @@ public sealed partial class SearchQuery
 
     private static Term Classify(string? field, string value) => field switch
     {
-        "tag" or "tags" => new Term(TermKind.Tag, value),
+        "tag" or "tags" => new Term(TermKind.Tag, Annotations.TagNormalizer.Normalize(value)),
         "note" or "notes" => new Term(TermKind.Note, value),
         "has" => new Term(TermKind.Has, value.ToLowerInvariant()),
         "is" => new Term(TermKind.Is, value.ToLowerInvariant()),

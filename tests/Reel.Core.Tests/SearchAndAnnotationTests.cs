@@ -72,10 +72,12 @@ public class SearchAndAnnotationTests
     }
 
     [Fact]
-    public void Search_QuotedValue_KeepsSpaces()
+    public void Search_QuotedTagValue_NormalizesToHyphenated()
     {
+        // Multi-word tags are hyphenated, so a quoted "date night" query matches "date-night".
         var q = SearchQuery.Parse("tag:\"date night\"");
-        Assert.True(q.Matches(Row(), Ann(["Date Night"])));
+        Assert.True(q.Matches(Row(), Ann(["Date-Night"])));
+        Assert.False(q.Matches(Row(), Ann(["date"])));
     }
 
     [Fact]

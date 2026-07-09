@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Data;
 using Reel.App.ViewModels;
 
@@ -31,6 +32,19 @@ public sealed class PreviewModeConverter : IValueConverter
             "pcolspan" => bottom ? 2 : 1,
             "browserRowSpan" => right ? 2 : 1,     // right: browser spans both rows; else one
             "browserColSpan" => bottom ? 1 : 2,    // bottom: browser one column; else both
+
+            // Inner preview layout: right = stacked (image top, tags, metadata);
+            // bottom = three columns (tags | image | metadata).
+            "row0h" => bottom ? new GridLength(1, GridUnitType.Star) : GridLength.Auto,
+            "row1h" => bottom ? new GridLength(0) : GridLength.Auto,
+            "row2h" => right ? new GridLength(1, GridUnitType.Star) : new GridLength(0),
+            "colLw" => bottom ? new GridLength(290) : new GridLength(0),
+            "colRw" => bottom ? new GridLength(290) : new GridLength(0),
+            "imgHeight" => right ? 250.0 : double.NaN,
+            "tagsRow" => bottom ? 0 : 1,
+            "tagsCol" => bottom ? 0 : 1,
+            "metaRow" => bottom ? 0 : 2,
+            "metaCol" => bottom ? 2 : 1,
             _ => Binding.DoNothing,
         };
     }

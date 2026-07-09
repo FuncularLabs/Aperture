@@ -129,7 +129,7 @@ public sealed class AnnotationDialogVm : ObservableObject
 
     private void AddTag(string? tag)
     {
-        tag = tag?.Trim();
+        tag = Reel.Core.Annotations.TagNormalizer.Normalize(tag ?? ""); // "date night" → "date-night"
         if (string.IsNullOrEmpty(tag))
             return;
 

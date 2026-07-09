@@ -128,6 +128,33 @@ public sealed class AnnotationStore
             .ToList();
     }
 
+    /// <summary>One-time migration: rewrite existing tags to the hyphenated form. Guarded by user_version.</summary>
+    public void EnsureHyphenated()
+    {
+        using var conn = _db.OpenMetadata();
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText = "PRAGMA user_version;";
+            if (Convert.ToInt64(check.ExecuteScalar()) >= 1)
+                return;
+        }
+
+        foreach (var (path, annotation) in GetAll())
+        {
+            var hyphenated = annotation.Tags
+                .Select(TagNormalizer.Normalize).Where(t => t.Length > 0).Distinct(Ci).ToList();
+            if (!hyphenated.SequenceEqual(annotation.Tags, Ci))
+                Save(path, hyphenated, annotation.Note);
+        }
+
+        using (var reset = conn.CreateCommand())
+        {
+            reset.CommandText = "DELETE FROM tag_stats; PRAGMA user_version = 1;";
+            reset.ExecuteNonQuery();
+        }
+        _seeded = false; // re-seed the recency stats from the migrated (hyphenated) tags
+    }
+
     private void EnsureSeeded()
     {
         if (_seeded)
@@ -144,7 +171,7 @@ public sealed class AnnotationStore
     public void Save(string path, IReadOnlyList<string> tags, string note)
     {
         var cleanTags = tags
-            .Select(t => t.Trim())
+            .Select(TagNormalizer.Normalize) // multi-word tags become hyphenated
             .Where(t => t.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();

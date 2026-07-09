@@ -40,6 +40,7 @@ public sealed class LibraryService : IDisposable
         _items = new ItemStore(_db);
         _thumbnails = new ThumbnailStore(_db);
         _annotations = new AnnotationStore(_db);
+        _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
         _indexer = new Indexer(_db, new ThumbnailGenerator(), new MetadataReader());
         Settings = new SettingsService(dataDir);
     }

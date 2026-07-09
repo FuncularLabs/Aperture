@@ -229,6 +229,12 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Horizontal scrollbar** appears when grid content is clipped on the right (was disabled).
 - **Preview pane can dock right, bottom, or off** — the toolbar button cycles through the three; the tags & notes band is more prominent (larger text on a lighter gray rectangle).
 
+### Feedback round 13 ✅ done
+- **Hyphenated tags**: multi-word tags are normalized to hyphens (`date night` → `date-night`) on entry, on save, and for `tag:` search values ([`TagNormalizer`](src/Reel.Core/Annotations/TagNormalizer.cs)). Existing libraries are migrated once (guarded by `PRAGMA user_version`).
+- **Grid reflows on preview open** (the horizontal scrollbar was making tiles unreachable) — the thumbnail wrap panel now re-columns to the narrower width when the right preview opens, so nothing is clipped.
+- **Bottom preview uses the margins**: tags/notes on the left, image + zoom in the center, metadata on the right (right dock stays stacked). One set of controls, repositioned by a `PreviewModeConverter`-driven grid.
+- **Removable tags in the preview** (a ✕ on each chip) and **correct zoom-button glyphs** (− / + were rendering blank).
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
