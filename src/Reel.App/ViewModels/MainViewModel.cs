@@ -62,7 +62,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ZoomInCommand = new RelayCommand(ZoomIn, () => _zoom < ZoomSizes.Length - 1);
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
         OpenSelectedCommand = new RelayCommand(OpenSelected, () => SelectedTile is not null);
-        ClearSearchCommand = new RelayCommand(() => SearchText = "");
+        ClearSearchCommand = new RelayCommand(() => { SearchInput = ""; CommitSearch(); });
         QuickPickCommand = new RelayCommand<string>(QuickPickTag);
         OpenQuickLookCommand = new RelayCommand(OpenQuickLook, () => _tiles.Count > 0);
         CloseQuickLookCommand = new RelayCommand(CloseQuickLook);
@@ -219,15 +219,45 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public double TileSize => ZoomSizes[_zoom];
 
-    /// <summary>Live text filter over file name, folder alias and camera.</summary>
-    public string SearchText
+    private string _searchInput = "";
+    private CancellationTokenSource? _searchDebounce;
+    private const int SearchDebounceMs = 700;
+
+    /// <summary>
+    /// The live text in the search box. Applying it to the grid filter is debounced
+    /// (~0.7s idle) so we don't re-filter the whole library on every keystroke; Enter
+    /// (or a quick-pick) applies it immediately via <see cref="CommitSearch"/>.
+    /// </summary>
+    public string SearchInput
     {
-        get => _searchText;
+        get => _searchInput;
         set
         {
-            if (SetProperty(ref _searchText, value))
-                RequestBuildView();
+            if (!SetProperty(ref _searchInput, value))
+                return;
+            _searchDebounce?.Cancel();
+            var cts = new CancellationTokenSource();
+            _searchDebounce = cts;
+            _ = DebouncedCommitSearch(cts.Token);
         }
+    }
+
+    private async Task DebouncedCommitSearch(CancellationToken token)
+    {
+        try { await Task.Delay(SearchDebounceMs, token); }
+        catch (OperationCanceledException) { return; }
+        CommitSearch();
+    }
+
+    /// <summary>Applies the current search input to the filter now (Enter key, quick-pick, clear).</summary>
+    public void CommitSearch()
+    {
+        _searchDebounce?.Cancel();
+        var applied = _searchInput.Trim();
+        if (applied == _searchText.Trim())
+            return;
+        _searchText = applied;
+        RequestBuildView();
     }
 
     // --- Search quick-picks (recent / most-used tags, shown when the box is focused) ---
@@ -268,8 +298,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (string.IsNullOrWhiteSpace(tag))
             return;
         var clause = tag.Contains(' ') ? $"tag:\"{tag}\"" : $"tag:{tag}";
-        var current = _searchText.TrimEnd();
-        SearchText = current.Length == 0 ? clause : $"{current} {clause}";
+        var current = _searchInput.TrimEnd();
+        SearchInput = current.Length == 0 ? clause : $"{current} {clause}";
+        CommitSearch(); // apply the picked tag immediately
     }
 
     /// <summary>Tokenized caption format string. Editing rebuilds tile captions.</summary>
@@ -597,8 +628,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (pushBack)
                 _back.Push(_location);
             _location = (rootId, relDir);
+            _searchDebounce?.Cancel();
+            _searchInput = "";
             _searchText = "";
-            OnPropertyChanged(nameof(SearchText));
+            OnPropertyChanged(nameof(SearchInput));
             SelectedItem = null;
             RequestBuildView(); // debounced + async so rapid tree navigation doesn't queue
             OnPropertyChanged(nameof(IsHome));

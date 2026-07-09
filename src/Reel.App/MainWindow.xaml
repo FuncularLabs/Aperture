@@ -189,7 +189,7 @@
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SearchText}" Value="">
+                                        <DataTrigger Binding="{Binding SearchInput}" Value="">
                                             <Setter Property="Visibility" Value="Visible" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -199,7 +199,8 @@
                         <TextBox x:Name="SearchBox" Background="Transparent" BorderThickness="0"
                                  VerticalContentAlignment="Center" Margin="7,0,26,0" FontSize="12"
                                  GotKeyboardFocus="OnSearchFocus" LostKeyboardFocus="OnSearchBlur"
-                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                                 KeyDown="OnSearchKeyDown"
+                                 Text="{Binding SearchInput, UpdateSourceTrigger=PropertyChanged}" />
                         <Button Content="✕" Command="{Binding ClearSearchCommand}" HorizontalAlignment="Right"
                                 Width="24" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Muted}"
                                 Cursor="Hand" />

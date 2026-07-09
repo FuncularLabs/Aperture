@@ -252,14 +252,32 @@ public partial class MainWindow : Window
 
     private void OnSearchFocus(object sender, RoutedEventArgs e) => ViewModel?.OpenQuickPicks();
 
-    private void OnSearchBlur(object sender, RoutedEventArgs e) => ViewModel?.CloseQuickPicks();
+    private void OnSearchBlur(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // Don't close if focus moved onto a quick-pick chip — let its command run.
+        if (e.NewFocus is DependencyObject d && IsDescendantOf(d, QuickPickPanel))
+            return;
+        ViewModel?.CloseQuickPicks();
+    }
+
+    private void OnSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ViewModel?.CommitSearch(); // apply the filter now instead of waiting out the debounce
+            e.Handled = true;
+        }
+    }
 
     /// <summary>Any click outside the search box (and its popup) dismisses the tag quick-picks.</summary>
     private void OnWindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (ViewModel is not { QuickPicksOpen: true })
             return;
-        if (!IsDescendantOf(e.OriginalSource as DependencyObject, SearchBorder))
+        // Keep the picker open when the click is in the search box or on a quick-pick
+        // chip (the popup) — otherwise the chip's command never runs.
+        var src = e.OriginalSource as DependencyObject;
+        if (!IsDescendantOf(src, SearchBorder) && !IsDescendantOf(src, QuickPickPanel))
             ViewModel.CloseQuickPicks();
     }
 
