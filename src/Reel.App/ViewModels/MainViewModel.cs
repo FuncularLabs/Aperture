@@ -77,7 +77,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
         OpenContainingFolderCommand = new RelayCommand<TileVm>(OpenContainingFolder);
-        TogglePreviewCommand = new RelayCommand(() => PreviewOpen = !PreviewOpen);
+        CyclePreviewCommand = new RelayCommand(CyclePreview);
+        ClosePreviewCommand = new RelayCommand(() => PreviewMode = PreviewMode.Off);
         EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
         ManageTagsCommand = new RelayCommand(ManageTags);
         OpenReadmeCommand = new RelayCommand(OpenReadme);
@@ -394,7 +395,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
     public ICommand OpenContainingFolderCommand { get; }
-    public ICommand TogglePreviewCommand { get; }
+    public ICommand CyclePreviewCommand { get; }
+    public ICommand ClosePreviewCommand { get; }
 
     private void OpenContainingFolder(TileVm? tile)
     {
@@ -430,7 +432,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Preview / inspector pane -------------------------------------------
 
-    private bool _previewOpen;
+    private PreviewMode _previewMode = PreviewMode.Off;
     private System.Windows.Media.Imaging.BitmapSource? _previewImage;
     private IReadOnlyList<MetaRow> _previewExif = [];
     private int _previewGen;
@@ -438,12 +440,37 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>One EXIF/metadata row in the preview pane.</summary>
     public sealed record MetaRow(string Label, string Value);
 
-    /// <summary>Whether the right-hand preview/inspector pane is shown.</summary>
-    public bool PreviewOpen
+    /// <summary>Where the preview/inspector pane is docked (or Off).</summary>
+    public PreviewMode PreviewMode
     {
-        get => _previewOpen;
-        set { if (SetProperty(ref _previewOpen, value) && value) LoadPreview(); }
+        get => _previewMode;
+        set
+        {
+            if (!SetProperty(ref _previewMode, value))
+                return;
+            OnPropertyChanged(nameof(PreviewOpen));
+            OnPropertyChanged(nameof(PreviewLabel));
+            if (value != PreviewMode.Off)
+                LoadPreview();
+        }
     }
+
+    public bool PreviewOpen => _previewMode != PreviewMode.Off;
+
+    /// <summary>Toolbar button label reflecting the current dock.</summary>
+    public string PreviewLabel => _previewMode switch
+    {
+        PreviewMode.Right => "◧  Preview",
+        PreviewMode.Bottom => "⬓  Preview",
+        _ => "◫  Preview",
+    };
+
+    private void CyclePreview() => PreviewMode = _previewMode switch
+    {
+        PreviewMode.Off => PreviewMode.Right,
+        PreviewMode.Right => PreviewMode.Bottom,
+        _ => PreviewMode.Off,
+    };
 
     /// <summary>The full-resolution, orientation-corrected image shown in the preview (async loaded).</summary>
     public System.Windows.Media.Imaging.BitmapSource? PreviewImage
@@ -463,7 +490,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private async void LoadPreview()
     {
-        if (!_previewOpen)
+        if (_previewMode == PreviewMode.Off)
             return;
         OnPropertyChanged(nameof(PreviewTile));
         var tile = SelectedTile;
@@ -478,7 +505,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var isVideo = tile.IsVideo;
         var itemId = tile.ItemId;
         var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId) : ImageLoading.LoadFullImageUpright(path, 2400));
-        if (gen == _previewGen && _previewOpen)
+        if (gen == _previewGen && _previewMode != PreviewMode.Off)
             PreviewImage = image;
     }
 
@@ -792,6 +819,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         _cursorSection.IsExpanded = expanded;
         return true;
+    }
+
+    /// <summary>Re-anchors the keyboard cursor onto a visible tile (so arrow keys follow the scroll).</summary>
+    public void SetCursorToItem(object? item)
+    {
+        if (item is not IGridItem)
+            return;
+        var nav = BuildNav();
+        var idx = nav.FindIndex(s => !s.IsHeader && ReferenceEquals(s.Item, item));
+        if (idx >= 0)
+            ApplyCursor(nav, idx);
+    }
+
+    /// <summary>Home / End: move the cursor to the first / last visible stop.</summary>
+    public object? MoveCursorToStart()
+    {
+        var nav = BuildNav();
+        return nav.Count == 0 ? null : ApplyCursor(nav, 0);
+    }
+
+    public object? MoveCursorToEnd()
+    {
+        var nav = BuildNav();
+        return nav.Count == 0 ? null : ApplyCursor(nav, nav.Count - 1);
     }
 
     // --- First run ----------------------------------------------------------

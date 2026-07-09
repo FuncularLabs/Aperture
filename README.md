@@ -223,6 +223,12 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Tag chooser**: on a multi-selection, a tag that's on only *some* items now stays in the available/suggestions list (so you can one-click apply it to all), in addition to showing as a dashed "partial" chip.
 - **Settings → ☰ hamburger** (it'll host more than settings soon).
 
+### Feedback round 12 ✅ done
+- **Teal folder icons** in the tree (a vector folder glyph that reads clearly on the dark charcoal and complements the purple logo), replacing the near-invisible black emoji.
+- **Keyboard focus follows the scroll**: Home/End (and Ctrl+Home/End) move the grid cursor to the first/last item, and if the cursor was scrolled out of view (wheel, scrollbar, Ctrl+End) the next arrow re-anchors to a visible tile instead of jumping back.
+- **Horizontal scrollbar** appears when grid content is clipped on the right (was disabled).
+- **Preview pane can dock right, bottom, or off** — the toolbar button cycles through the three; the tags & notes band is more prominent (larger text on a lighter gray rectangle).
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

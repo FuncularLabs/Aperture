@@ -14,6 +14,7 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <mvvm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
         <mvvm:NullToVisibilityConverter x:Key="NullToVis" />
+        <mvvm:PreviewModeConverter x:Key="PreviewMode" />
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
@@ -308,9 +309,9 @@
                                Margin="0,0,6,0" FontSize="12" />
                     <CheckBox Content="Pictures" IsChecked="{Binding ShowImages}" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <CheckBox Content="Videos" IsChecked="{Binding ShowVideos}" VerticalAlignment="Center" />
-                    <ToggleButton Content="◧  Preview" Style="{StaticResource ToolToggle}" Margin="10,0,0,0"
-                                  IsChecked="{Binding PreviewOpen, Mode=TwoWay}"
-                                  ToolTip="Toggle the preview / inspector pane" />
+                    <Button Content="{Binding PreviewLabel}" Style="{StaticResource ToolButton}" Margin="10,0,0,0"
+                            Command="{Binding CyclePreviewCommand}"
+                            ToolTip="Preview / inspector pane — click to cycle: right → bottom → off" />
                     <!-- sync status pill -->
                     <Border Background="#EEF1F6" CornerRadius="11" Padding="10,4" Margin="12,0,0,0"
                             VerticalAlignment="Center">
@@ -347,7 +348,6 @@
                 <ColumnDefinition Width="210" MinWidth="140" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <!-- Roots pane -->
@@ -380,8 +380,9 @@
                                     <CheckBox IsChecked="{Binding Root.IsIncluded, Mode=TwoWay}" VerticalAlignment="Center"
                                               Margin="0,0,6,0" ToolTip="Include this folder"
                                               Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}" />
-                                    <TextBlock Text="📁" FontSize="14" Margin="0,0,5,0" VerticalAlignment="Center"
-                                               Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
+                                    <Path Data="M2,5 L6,5 L7.6,6.8 L14,6.8 L14,13 L2,13 Z" Fill="#3FC2B6"
+                                          Stretch="Uniform" Width="15" Height="15" Margin="0,0,6,0" VerticalAlignment="Center"
+                                          Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
                                     <TextBlock Text="{Binding Name}" Foreground="{StaticResource CanvasInk}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" MouseLeftButtonDown="OnAliasClick">
                                         <TextBlock.Style>
@@ -421,7 +422,21 @@
                           Background="Transparent" />
 
             <!-- Thumbnail grid -->
-                <ListBox x:Name="ItemsList" Grid.Column="2"
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Browser grid; spans the cells the preview pane doesn't occupy -->
+                <Grid Grid.Row="0" Grid.Column="0"
+                      Grid.RowSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=browserRowSpan}"
+                      Grid.ColumnSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=browserColSpan}">
+                <ListBox x:Name="ItemsList"
                      ItemsSource="{Binding ItemsView}"
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      SelectionMode="Extended"
@@ -429,7 +444,7 @@
                      PreviewMouseRightButtonDown="OnGridRightButtonDown"
                      Background="{StaticResource CanvasBg}" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      VirtualizingPanel.IsVirtualizing="True"
                      VirtualizingPanel.VirtualizationMode="Recycling"
@@ -571,22 +586,30 @@
                                Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
+                </Grid>
 
-            <!-- Preview / inspector pane -->
-            <Border Grid.Column="3" Width="360" Background="{StaticResource CanvasPanel}"
-                    BorderBrush="{StaticResource CanvasLine}" BorderThickness="1,0,0,0"
-                    Visibility="{Binding PreviewOpen, Converter={StaticResource BoolToVis}}">
+            <!-- Preview / inspector pane (docks right or bottom) -->
+            <Border x:Name="PreviewPane"
+                    Grid.Row="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=prow}"
+                    Grid.Column="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=pcol}"
+                    Grid.RowSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=prowspan}"
+                    Grid.ColumnSpan="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=pcolspan}"
+                    Width="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=width}"
+                    Height="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=height}"
+                    Visibility="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=vis}"
+                    Background="{StaticResource CanvasPanel}"
+                    BorderBrush="{StaticResource CanvasLine}" BorderThickness="1">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Margin="14,12,10,10">
                         <TextBlock Text="PREVIEW" Foreground="{StaticResource CanvasMuted}" FontSize="11" FontWeight="SemiBold"
                                    VerticalAlignment="Center" />
                         <Button Content="✕" HorizontalAlignment="Right" Width="24" Cursor="Hand"
                                 Background="Transparent" BorderThickness="0" Foreground="{StaticResource CanvasMuted}"
-                                Command="{Binding TogglePreviewCommand}" />
+                                Command="{Binding ClosePreviewCommand}" />
                     </Grid>
 
                     <!-- Zoomable / pannable image -->
-                    <Border DockPanel.Dock="Top" Height="300" Margin="10,0,10,8" CornerRadius="6" ClipToBounds="True"
+                    <Border DockPanel.Dock="Top" Height="250" Margin="10,0,10,8" CornerRadius="6" ClipToBounds="True"
                             Background="#14141C">
                         <Grid>
                             <ScrollViewer x:Name="PreviewScroll" HorizontalScrollBarVisibility="Hidden"
@@ -619,24 +642,29 @@
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="14,4,14,14">
-                            <!-- Tags & notes -->
-                            <TextBlock Text="TAGS &amp; NOTES" Foreground="{StaticResource CanvasMuted}" FontSize="11"
-                                       FontWeight="SemiBold" Margin="0,0,0,6" />
-                            <ItemsControl ItemsSource="{Binding PreviewTile.Annotation.Tags}" Margin="0,0,0,4">
-                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#33406A" CornerRadius="10" Padding="9,2" Margin="0,0,5,5">
-                                            <TextBlock Text="{Binding}" Foreground="#D7DAF0" FontSize="11" />
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <TextBlock Text="{Binding PreviewTile.Annotation.Note}" Foreground="{StaticResource CanvasInk}"
-                                       FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" />
-                            <Button Content="✎  Edit tags &amp; notes…" HorizontalAlignment="Left" Cursor="Hand"
-                                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource Accent}"
-                                    Padding="0,2" Command="{Binding EditAnnotationCommand}" CommandParameter="{Binding PreviewTile}" />
+                            <!-- Tags & notes — prominent band -->
+                            <TextBlock Text="TAGS &amp; NOTES" Foreground="{StaticResource CanvasMuted}" FontSize="12"
+                                       FontWeight="SemiBold" Margin="0,0,0,7" />
+                            <Border Background="#31363F" CornerRadius="7" Padding="12,11" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <ItemsControl ItemsSource="{Binding PreviewTile.Annotation.Tags}" Margin="0,0,0,4">
+                                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="#3C4C7A" CornerRadius="11" Padding="11,4" Margin="0,0,6,6">
+                                                    <TextBlock Text="{Binding}" Foreground="#E4E7F5" FontSize="13" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Text="{Binding PreviewTile.Annotation.Note}" Foreground="{StaticResource CanvasInk}"
+                                               FontSize="14" TextWrapping="Wrap" />
+                                    <Button Content="✎  Edit tags &amp; notes…" HorizontalAlignment="Left" Cursor="Hand"
+                                            Background="Transparent" BorderThickness="0" Foreground="{StaticResource Accent}"
+                                            Padding="0" Margin="0,8,0,0" FontSize="12"
+                                            Command="{Binding EditAnnotationCommand}" CommandParameter="{Binding PreviewTile}" />
+                                </StackPanel>
+                            </Border>
 
                             <Border Height="1" Background="{StaticResource CanvasLine}" Margin="0,12" />
 
@@ -663,6 +691,7 @@
                     </ScrollViewer>
                 </DockPanel>
             </Border>
+            </Grid>
         </Grid>
     </DockPanel>
 

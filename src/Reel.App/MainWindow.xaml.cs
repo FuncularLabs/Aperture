@@ -509,7 +509,24 @@ public partial class MainWindow : Window
                 ViewModel.EditAnnotationCommand.Execute(ViewModel.SelectedTile);
                 e.Handled = true;
             }
+            else if (e.Key == Key.Home)
+            {
+                MoveCursorAndScroll(ViewModel.MoveCursorToStart());
+                e.Handled = true;
+            }
+            else if (e.Key == Key.End)
+            {
+                MoveCursorAndScroll(ViewModel.MoveCursorToEnd());
+                e.Handled = true;
+            }
             return; // leave Ctrl+arrows / Ctrl+wheel alone
+        }
+
+        if (e.Key is Key.Home or Key.End)
+        {
+            MoveCursorAndScroll(e.Key == Key.Home ? ViewModel.MoveCursorToStart() : ViewModel.MoveCursorToEnd());
+            e.Handled = true;
+            return;
         }
 
         // On a section header, Left/Right collapse/expand it (rather than moving the cursor).
@@ -532,6 +549,12 @@ public partial class MainWindow : Window
 
         if (direction is not null)
         {
+            // Keyboard focus follows the scroll: if the cursor tile was scrolled out of
+            // view (wheel, scrollbar, Ctrl+End…), re-anchor to a visible tile first so the
+            // arrow doesn't jump back to wherever the cursor used to be.
+            if (!ViewModel.CursorIsHeader && !IsSelectedVisible() && TopVisibleItem() is { } top)
+                ViewModel.SetCursorToItem(top);
+
             var target = ViewModel.MoveGrid(direction, ColumnsPerRow());
             if (target is not null)
                 try { ItemsList.ScrollIntoView(target); } catch { }
@@ -547,6 +570,49 @@ public partial class MainWindow : Window
                 try { ItemsList.ScrollIntoView(target); } catch { }
             e.Handled = true;
         }
+    }
+
+    private void MoveCursorAndScroll(object? target)
+    {
+        if (target is not null)
+            try { ItemsList.ScrollIntoView(target); } catch { }
+        ItemsList.Focus();
+    }
+
+    /// <summary>True if the cursor's tile is among the grid's realized (roughly on-screen) containers.</summary>
+    private bool IsSelectedVisible()
+    {
+        if (ViewModel?.SelectedItem is not { } sel)
+            return false;
+        var realized = new System.Collections.Generic.HashSet<object>();
+        CollectRealizedItems(ItemsList, realized);
+        return realized.Contains(sel);
+    }
+
+    private static void CollectRealizedItems(DependencyObject root, System.Collections.Generic.HashSet<object> set)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is System.Windows.Controls.ListBoxItem { IsVisible: true } li && li.DataContext is { } dc)
+                set.Add(dc);
+            else
+                CollectRealizedItems(child, set);
+        }
+    }
+
+    private object? TopVisibleItem()
+    {
+        for (double y = 6; y < ItemsList.ActualHeight - 4; y += 20)
+        {
+            var hit = VisualTreeHelper.HitTest(ItemsList, new Point(24, y))?.VisualHit as DependencyObject;
+            while (hit is not null and not System.Windows.Controls.ListBoxItem)
+                hit = VisualTreeHelper.GetParent(hit);
+            if ((hit as System.Windows.Controls.ListBoxItem)?.DataContext is { } dc)
+                return dc;
+        }
+        return null;
     }
 
     private int ColumnsPerRow()
