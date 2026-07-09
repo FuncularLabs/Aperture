@@ -527,6 +527,18 @@
                     </DataTemplate>
                 </ListBox.Resources>
                 </ListBox>
+
+            <!-- Brief spinner while the right pane rebuilds off the UI thread -->
+            <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center" Panel.ZIndex="20"
+                    Background="#E6282B32" CornerRadius="10" Padding="18,12"
+                    Visibility="{Binding IsLoadingView, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <ProgressBar IsIndeterminate="True" Width="90" Height="4" VerticalAlignment="Center"
+                                 Foreground="{StaticResource Accent}" Background="#3A3E46" BorderThickness="0" />
+                    <TextBlock Text="Loading…" Foreground="{StaticResource CanvasInk}" FontSize="12"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
         </Grid>
     </DockPanel>
 

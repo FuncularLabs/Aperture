@@ -202,6 +202,9 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Search quick-picks.** Focusing the search box pops up your top tags. When usage is highly skewed (a few tags dominate) it offers the **most-used**; otherwise it offers the **most-recent** — a distribution the code decides ([`TagQuickPicks`](src/Reel.Core/Annotations/TagQuickPicks.cs)). Clicking one adds a `tag:` clause.
 - **`tag:` search is OR.** Multiple `tag:` clauses match items with *any* of them (e.g. `tag:beach tag:city`), still AND-ed with non-tag terms.
 
+### Feedback round 9 ✅ done
+- **Snappy folder navigation.** Selecting folders in the left tree (keyboard or mouse) no longer buffers/replays keystrokes. Two causes fixed: (1) the grid rebuild used to re-read the whole item union from SQLite on *every* selection — now the union is cached and only re-read when the data actually changes (index, root add/remove/include); (2) rebuilds are now **debounced (last-one-wins) and run off the UI thread**, so rapid arrowing coalesces into one rebuild and never blocks input. A brief "Loading…" spinner covers the gap. The heavy filter/sort/tile work is computed on a background thread against immutable snapshots (fresh, unbound `SectionVm`s), then applied on the UI thread.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.

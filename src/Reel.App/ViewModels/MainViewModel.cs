@@ -30,6 +30,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private int _activeIndexers;
     private long _lastStreamRefreshTick;
 
+    private bool _isLoadingView;
+    private CancellationTokenSource? _buildDebounce;
+    private int _buildGeneration;
+
     private List<IGridItem> _tiles = [];
     private object? _selectedItem;
     private int _zoom;
@@ -85,7 +89,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         LoadRoots();
         LoadAnnotations();
-        BuildView();
+        LoadRows();
+        BuildViewImmediate();
         BuildTree();
         SelectDefaultNode();
         MaybeStartFirstRun();
@@ -99,9 +104,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private Annotation AnnotationFor(LibraryRow row) =>
         _annotations.GetValueOrDefault(row.FullPath) ?? Annotation.Empty;
-
-    private TileVm MakeTile(LibraryRow row, string format) =>
-        new(row, Thumbnails, format, AnnotationFor(row));
 
     private void EditAnnotation(TileVm? tile)
     {
@@ -217,7 +219,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (SetProperty(ref _searchText, value))
-                BuildView();
+                RequestBuildView();
         }
     }
 
@@ -273,7 +275,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             _library.Settings.Update(s => s.CaptionFormat = value);
             OnPropertyChanged();
-            BuildView();
+            RequestBuildView();
         }
     }
 
@@ -287,7 +289,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             _library.Settings.Update(s => s.GroupByDate = value);
             OnPropertyChanged();
-            BuildView();
+            RequestBuildView();
         }
     }
 
@@ -318,7 +320,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             _library.Settings.Update(s => s.SortPreset = value);
             OnPropertyChanged();
-            BuildView();
+            RequestBuildView();
         }
     }
 
@@ -421,7 +423,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _searchText = "";
             OnPropertyChanged(nameof(SearchText));
             SelectedItem = null;
-            BuildView();
+            RequestBuildView(); // debounced + async so rapid tree navigation doesn't queue
             OnPropertyChanged(nameof(IsHome));
             SelectPath(rootId, relDir); // keep the tree's selection in sync
         }
@@ -834,7 +836,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _library.SetAlias(rootVm.Id, alias);
         BuildTree();
-        BuildView(); // captions reference {alias}
+        RequestBuildView(); // captions reference {alias}
     }
 
     private void AddRoot()
@@ -868,15 +870,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Roots.Remove(rootVm);
         if (wasCurrent)
             _location = (null, "");
+        LoadRows();
         BuildTree();
         SelectDefaultNode();
-        BuildView();
+        RequestBuildView();
     }
 
     private void OnRootIncludedChanged(RootVm rootVm, bool included)
     {
         _library.SetIncluded(rootVm.Id, included);
-        BuildView();
+        LoadRows();
+        RequestBuildView();
     }
 
     private static string DeriveAlias(string path)
@@ -887,52 +891,119 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Union / sections / status ------------------------------------------
 
-    private void BuildView()
+    private const int BuildDebounceMs = 140;
+
+    /// <summary>True while an async rebuild is running — drives the right-pane spinner.</summary>
+    public bool IsLoadingView
+    {
+        get => _isLoadingView;
+        private set => SetProperty(ref _isLoadingView, value);
+    }
+
+    /// <summary>Re-reads the union of included items. Call only when the underlying data changed.</summary>
+    private void LoadRows() => _allRows = _library.GetUnion();
+
+    /// <summary>Rebuilds the grid synchronously from the cached rows (startup / one-off data changes).</summary>
+    private void BuildViewImmediate() => ApplyView(ComputeView(CaptureBuildInputs()));
+
+    /// <summary>
+    /// Debounced, last-one-wins async rebuild. Rapid triggers — arrowing the folder
+    /// tree, typing in search — coalesce, and the heavy filter/sort/tile work runs off
+    /// the UI thread so keystrokes never queue behind it. A brief spinner covers the gap.
+    /// </summary>
+    private async void RequestBuildView()
+    {
+        _buildDebounce?.Cancel();
+        var cts = new CancellationTokenSource();
+        _buildDebounce = cts;
+        var token = cts.Token;
+        try { await Task.Delay(BuildDebounceMs, token); }
+        catch (OperationCanceledException) { return; }
+
+        var generation = ++_buildGeneration;
+        IsLoadingView = true;
+        var inputs = CaptureBuildInputs();
+
+        ViewBuild build;
+        try { build = await Task.Run(() => ComputeView(inputs), token); }
+        catch (OperationCanceledException) { return; }
+
+        if (generation != _buildGeneration)
+            return; // a newer request superseded this one
+        ApplyView(build);
+        IsLoadingView = false;
+    }
+
+    private sealed record BuildInputs(
+        List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
+        (long? RootId, string RelDir) Location, bool GroupByDate,
+        Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion);
+
+    private sealed record ViewBuild(
+        List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections);
+
+    /// <summary>Snapshots everything the compute needs — must run on the UI thread.</summary>
+    private BuildInputs CaptureBuildInputs() => new(
+        _allRows,
+        _library.Settings.Current.CaptionFormat,
+        CurrentSort,
+        _searchText.Trim(),
+        EffectiveLocation(),
+        GroupByDate,
+        _annotations,
+        _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded));
+
+    /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
+    private ViewBuild ComputeView(BuildInputs input)
+    {
+        Annotation Ann(LibraryRow r) => input.Annotations.GetValueOrDefault(r.FullPath) ?? Annotation.Empty;
+
+        // Searching = a flat, global Gmail-style query over the whole library;
+        // otherwise the current folder's direct media (subfolders live in the tree).
+        List<LibraryRow> media;
+        if (input.Query.Length > 0)
+        {
+            var search = SearchQuery.Parse(input.Query);
+            media = input.Rows.Where(r => search.Matches(r, Ann(r))).ToList();
+        }
+        else
+        {
+            media = ComputeMediaFor(input.Rows, input.Location);
+        }
+
+        // Only date sorts get collapsible date sections; other sorts flatten to a global list.
+        var useSections = input.GroupByDate && input.Sort.Grouped && media.Count > 0;
+        var sections = new Dictionary<long, SectionVm>();
+        List<TileVm> tiles;
+        if (useSections)
+        {
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections);
+        }
+        else
+        {
+            LibrarySorter.Sort(media, input.Sort.Levels);
+            tiles = media.Select(r => new TileVm(r, Thumbnails, input.Format, Ann(r))).ToList();
+        }
+
+        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections);
+    }
+
+    /// <summary>Applies a computed build to the live view — UI thread only.</summary>
+    private void ApplyView(ViewBuild build)
     {
         ClearCursorHighlight();
         _cursorSection = null;
         _selectedTiles = []; // stale references across a view rebuild would act on the wrong tiles
 
-        _allRows = _library.GetUnion();
+        _sections.Clear();
+        foreach (var (key, section) in build.Sections)
+            _sections[key] = section;
 
-        var format = _library.Settings.Current.CaptionFormat;
-        var sort = CurrentSort;
-        var levels = sort.Levels;
-        var query = _searchText.Trim();
-
-        // Searching = a flat, global Gmail-style query over the whole library;
-        // otherwise the current folder's direct media (subfolders live in the tree).
-        List<LibraryRow> media;
-        if (query.Length > 0)
-        {
-            var search = SearchQuery.Parse(query);
-            media = _allRows.Where(r => search.Matches(r, AnnotationFor(r))).ToList();
-        }
-        else
-        {
-            media = ComputeMedia(_allRows);
-        }
-
-        // Only date sorts get collapsible date sections; other sorts flatten to a global list.
-        var useSections = GroupByDate && sort.Grouped && media.Count > 0;
-
-        List<TileVm> mediaTiles;
-        if (useSections)
-        {
-            mediaTiles = BuildSectioned(media, format, levels);
-        }
-        else
-        {
-            LibrarySorter.Sort(media, levels);
-            mediaTiles = media.Select(r => MakeTile(r, format)).ToList();
-            _sections.Clear();
-        }
-
-        _mediaTiles = mediaTiles;
-        _tiles = mediaTiles.Cast<IGridItem>().ToList();
+        _mediaTiles = build.MediaTiles;
+        _tiles = build.Tiles;
         _view.Source = _tiles;
         _view.GroupDescriptions.Clear();
-        if (useSections)
+        if (build.UseSections)
             _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(IGridItem.Section)));
 
         OnPropertyChanged(nameof(ItemsView));
@@ -940,21 +1011,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UpdateWindowTitle();
     }
 
-    /// <summary>Media files directly inside the current folder (non-recursive).</summary>
-    private List<LibraryRow> ComputeMedia(List<LibraryRow> rows)
+    /// <summary>Media files directly inside the given folder (non-recursive).</summary>
+    private static List<LibraryRow> ComputeMediaFor(List<LibraryRow> rows, (long? RootId, string RelDir) loc)
     {
-        var loc = EffectiveLocation();
         if (loc.RootId is null)
             return [];
 
-        var rootId = loc.RootId.Value;
-        var relDir = loc.RelDir;
         var media = new List<LibraryRow>();
         foreach (var r in rows)
-        {
-            if (r.Item.RootId == rootId && string.Equals(GetDir(r.Item.RelPath), relDir, StringComparison.OrdinalIgnoreCase))
+            if (r.Item.RootId == loc.RootId.Value
+                && string.Equals(GetDir(r.Item.RelPath), loc.RelDir, StringComparison.OrdinalIgnoreCase))
                 media.Add(r);
-        }
         return media;
     }
 
@@ -1105,7 +1172,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             Breadcrumb[i].IsLast = i == Breadcrumb.Count - 1;
     }
 
-    private List<TileVm> BuildSectioned(List<LibraryRow> rows, string format, IReadOnlyList<Reel.Core.Settings.SortLevel> levels)
+    /// <summary>
+    /// Pure sectioned build: creates fresh <see cref="SectionVm"/>s (safe to build off
+    /// the UI thread since they aren't bound yet), restoring prior expansion from
+    /// <paramref name="expansion"/> and defaulting genuinely-new sections to expanded
+    /// for roughly the newest two screens. Populates <paramref name="sections"/>.
+    /// </summary>
+    private List<TileVm> BuildSectionedPure(
+        List<LibraryRow> rows, string format, IReadOnlyList<Reel.Core.Settings.SortLevel> levels,
+        Func<LibraryRow, Annotation> ann, Dictionary<long, bool> expansion, Dictionary<long, SectionVm> sections)
     {
         var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList());
 
@@ -1118,45 +1193,31 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var tiles = new List<TileVm>(rows.Count);
         var counts = new Dictionary<long, int>();
         var order = new List<SectionVm>();
-        var seen = new HashSet<long>();
-        var newlyCreated = new HashSet<long>();
 
         foreach (var r in rows)
         {
             var bucket = bucketByItem[r.Item.Id];
             counts[bucket.Key] = counts.GetValueOrDefault(bucket.Key) + 1;
 
-            if (!_sections.TryGetValue(bucket.Key, out var section))
+            if (!sections.TryGetValue(bucket.Key, out var section))
             {
                 section = new SectionVm { Key = bucket.Key, Label = bucket.Label };
-                _sections[bucket.Key] = section;
-                newlyCreated.Add(bucket.Key);
+                sections[bucket.Key] = section;
+                order.Add(section);
             }
 
-            if (seen.Add(bucket.Key))
-                order.Add(section);
-
-            var tile = MakeTile(r, format);
-            tile.Section = section;
-            tiles.Add(tile);
+            tiles.Add(new TileVm(r, Thumbnails, format, ann(r)) { Section = section });
         }
 
-        foreach (var section in order)
-            section.Count = counts[section.Key];
-
-        // Only newly-created sections get a default expansion; user toggles on
-        // existing sections survive a rebuild.
         long cumulative = 0;
         foreach (var section in order)
         {
-            if (newlyCreated.Contains(section.Key))
-                section.IsExpanded = cumulative < ExpandTargetItems;
+            section.Count = counts[section.Key];
+            section.IsExpanded = expansion.TryGetValue(section.Key, out var wasExpanded)
+                ? wasExpanded                       // preserve the user's toggle across rebuilds
+                : cumulative < ExpandTargetItems;   // default: expand the newest ~2 screens
             cumulative += section.Count;
         }
-
-        // Drop sections that no longer have any items.
-        foreach (var key in _sections.Keys.Where(k => !seen.Contains(k)).ToList())
-            _sections.Remove(key);
 
         return tiles;
     }
@@ -1226,7 +1287,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     rootVm.Status = "";
                 }
                 UpdateIndexingText();
-                BuildView();
+                LoadRows();
+                BuildViewImmediate();
                 BuildTree();
                 SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
             });
@@ -1258,7 +1320,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (now - _lastStreamRefreshTick > 1200)
             {
                 _lastStreamRefreshTick = now;
-                BuildView();
+                LoadRows();
+                BuildViewImmediate();
             }
         }
     }
