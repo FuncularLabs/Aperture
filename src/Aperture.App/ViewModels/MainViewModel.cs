@@ -200,6 +200,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Root nodes of the left folder tree (roots → lazy subfolders).</summary>
     public ObservableCollection<FolderNodeVm> FolderTree { get; } = [];
 
+    /// <summary>Item count across all included folders — the badge on the "Everything" library node.</summary>
+    public int TotalItemCount => _allRows.Count;
+
     /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
     public ICollectionView? ItemsView => _view.View;
 
@@ -552,7 +555,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var path = tile.FullPath;
         var isVideo = tile.IsVideo;
         var itemId = tile.ItemId;
-        var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId) : ImageLoading.LoadFullImageUpright(path, 2400));
+        var mtime = tile.Item.MTimeUtc.Ticks;
+        var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId, mtime) : ImageLoading.LoadFullImageUpright(path, 2400));
         if (gen == _previewGen && _previewMode != PreviewMode.Off)
             PreviewImage = image;
     }
@@ -699,7 +703,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SelectedItem = null;
             RequestBuildView(); // debounced + async so rapid tree navigation doesn't queue
             OnPropertyChanged(nameof(IsHome));
-            SelectPath(rootId, relDir); // keep the tree's selection in sync
+            if (rootId is null)
+                ClearTreeSelection(FolderTree); // "Everything" — no folder node should stay highlighted
+            else
+                SelectPath(rootId, relDir); // keep the tree's selection in sync
         }
         finally
         {
@@ -761,7 +768,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Pics: the full-resolution image, EXIF-oriented like the tile/Photos.
         // Videos: the cached frame thumbnail.
         var image = tile.IsVideo
-            ? DecodeThumbnail(tile.ItemId)
+            ? DecodeThumbnail(tile.ItemId, tile.Item.MTimeUtc.Ticks)
             : ImageLoading.LoadFullImageUpright(tile.FullPath);
         if (image is null)
             return;
@@ -1067,7 +1074,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private async void LoadQuickLook(int index, TileVm tile)
     {
         var image = await Task.Run(() => tile.IsVideo
-            ? DecodeThumbnail(tile.ItemId)
+            ? DecodeThumbnail(tile.ItemId, tile.Item.MTimeUtc.Ticks)
             : ImageLoading.LoadFullImageUpright(tile.FullPath, maxLongestEdge: 1600));
 
         // Ignore if the user moved on while we decoded.
@@ -1075,9 +1082,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             QuickLookImage = image;
     }
 
-    private System.Windows.Media.Imaging.BitmapSource? DecodeThumbnail(long itemId)
+    private System.Windows.Media.Imaging.BitmapSource? DecodeThumbnail(long itemId, long srcMtimeTicks)
     {
-        var bytes = _library.GetThumbnail(itemId, ThumbSize.Large);
+        var bytes = _library.GetThumbnail(itemId, ThumbSize.Large, srcMtimeTicks);
         return bytes is null ? null : ImageLoading.Decode(bytes, 0);
     }
 
@@ -1218,7 +1225,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Re-reads the union of included items. Call only when the underlying data changed.</summary>
-    private void LoadRows() => _allRows = _library.GetUnion();
+    private void LoadRows()
+    {
+        _allRows = _library.GetUnion();
+        OnPropertyChanged(nameof(TotalItemCount));
+    }
 
     /// <summary>Rebuilds the grid synchronously from the cached rows (startup / one-off data changes).</summary>
     private void BuildViewImmediate() => ApplyView(ComputeView(CaptureBuildInputs()));
@@ -1422,6 +1433,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (node is not null)
             NavigateTo(node.RootId, node.RelDir);
+    }
+
+    /// <summary>Clears selection on every loaded tree node — used when navigating to "Everything".</summary>
+    private static void ClearTreeSelection(IEnumerable<FolderNodeVm> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            node.IsSelected = false;
+            if (node.Children.Count > 0)
+                ClearTreeSelection(node.Children);
+        }
     }
 
     /// <summary>Expands the tree to and selects the node for a location (keeps the tree in sync).</summary>

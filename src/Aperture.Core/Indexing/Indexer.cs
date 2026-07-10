@@ -28,7 +28,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var files = FileScanner.Scan(root.Path, includeVideos, ct);
 
         var existing = new ItemStore(_db).GetExisting(root.Id);
-        var thumbCounts = new ThumbnailStore(_db).GetCounts();
+        var thumbInfo = new ThumbnailStore(_db).GetInfo();
         var expectedThumbs = ThumbSizes.All.Length;
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -57,8 +57,14 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     && row.MTimeTicks == file.MTimeTicks
                     && row.SizeBytes == file.SizeBytes)
                 {
-                    // Unchanged. Only touch disk if thumbnails are incomplete.
-                    if (!thumbCounts.TryGetValue(row.Id, out var count) || count < expectedThumbs)
+                    // Unchanged file. Regenerate thumbnails only if the cache is incomplete
+                    // OR its source mtime no longer matches this file — the latter catches a
+                    // realigned cache (metadata rebuilt, ids now map to different files) that
+                    // would otherwise serve the wrong image for this item.
+                    var thumbsFresh = thumbInfo.TryGetValue(row.Id, out var ti)
+                                      && ti.Count >= expectedThumbs
+                                      && ti.SrcMtimeTicks == file.MTimeTicks;
+                    if (!thumbsFresh)
                     {
                         var set = GenerateThumbnails(file);
                         if (set is null)

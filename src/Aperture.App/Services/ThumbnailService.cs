@@ -21,22 +21,26 @@ public sealed class ThumbnailService(LibraryService library)
     private const int DecodePixelWidth = 384;
 
     private readonly LibraryService _library = library;
-    private readonly LruCache<long, BitmapSource> _cache = new(MaxDecoded);
 
-    public async Task<BitmapSource?> LoadAsync(long itemId, ThumbSize size)
+    // Keyed by (itemId, source mtime) so that if a file's mtime changes (or a
+    // realigned cache is healed), the stale decoded bitmap is not reused.
+    private readonly LruCache<(long ItemId, long SrcMtime), BitmapSource> _cache = new(MaxDecoded);
+
+    public async Task<BitmapSource?> LoadAsync(long itemId, ThumbSize size, long srcMtimeTicks)
     {
-        if (_cache.TryGet(itemId, out var cached))
+        var key = (itemId, srcMtimeTicks);
+        if (_cache.TryGet(key, out var cached))
             return cached;
 
-        var bitmap = await Task.Run(() => Decode(itemId, size)).ConfigureAwait(true);
+        var bitmap = await Task.Run(() => Decode(itemId, size, srcMtimeTicks)).ConfigureAwait(true);
         if (bitmap is not null)
-            _cache.Set(itemId, bitmap);
+            _cache.Set(key, bitmap);
         return bitmap;
     }
 
-    private BitmapSource? Decode(long itemId, ThumbSize size)
+    private BitmapSource? Decode(long itemId, ThumbSize size, long srcMtimeTicks)
     {
-        var bytes = _library.GetThumbnail(itemId, size);
+        var bytes = _library.GetThumbnail(itemId, size, srcMtimeTicks);
         if (bytes is null || bytes.Length == 0)
             return null;
 

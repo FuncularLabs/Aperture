@@ -73,7 +73,13 @@ public sealed class LibraryService : IDisposable
 
     public int CountForRoot(long rootId) => _items.CountForRoot(rootId);
 
-    public byte[]? GetThumbnail(long itemId, ThumbSize size) => _thumbnails.Get(itemId, size);
+    /// <summary>
+    /// Cached thumbnail bytes for an item. Pass <paramref name="expectedSrcMtimeTicks"/>
+    /// (the item's own mtime) so a stale/realigned cache entry is skipped rather than
+    /// served for the wrong file.
+    /// </summary>
+    public byte[]? GetThumbnail(long itemId, ThumbSize size, long? expectedSrcMtimeTicks = null) =>
+        _thumbnails.Get(itemId, size, expectedSrcMtimeTicks);
 
     // --- Annotations (tags + notes) -----------------------------------------
 

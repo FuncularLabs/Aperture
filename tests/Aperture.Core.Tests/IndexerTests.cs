@@ -134,6 +134,48 @@ public class IndexerTests
     }
 
     [Fact]
+    public void Thumbnails_Get_WithheldWhenSourceMtimeMismatches()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("p.jpg"), 400, 300);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var item = scope.Items.GetForRoot(root.Id).Single();
+        var mtime = item.MTimeUtc.Ticks;
+
+        Assert.NotNull(scope.Thumbnails.Get(item.Id, ThumbSize.Large, mtime));     // fresh → served
+        Assert.Null(scope.Thumbnails.Get(item.Id, ThumbSize.Large, mtime + 1));    // stale → withheld, not wrong image
+        Assert.NotNull(scope.Thumbnails.Get(item.Id, ThumbSize.Large));            // unguarded call still served
+    }
+
+    [Fact]
+    public void IndexRoot_RegeneratesThumbnails_WhenCachedSourceMtimeIsStale()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("p.jpg"), 400, 300);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var item = scope.Items.GetForRoot(root.Id).Single();
+
+        // Simulate a realigned cache: thumbs exist for this id but were built from a
+        // different source (their src mtime no longer matches the item's mtime).
+        using (var conn = scope.Database.OpenThumbnails())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE thumbs SET src_mtime_ticks = src_mtime_ticks - 1 WHERE item_id = @id;";
+            cmd.Parameters.AddWithValue("@id", item.Id);
+            cmd.ExecuteNonQuery();
+        }
+        Assert.Null(scope.Thumbnails.Get(item.Id, ThumbSize.Large, item.MTimeUtc.Ticks)); // guard withholds stale
+
+        // Re-indexing the unchanged file heals the cache instead of leaving the wrong image.
+        var result = scope.Indexer.IndexRoot(root);
+        Assert.Equal(1, result.Skipped);
+        Assert.Equal(3, result.ThumbnailsGenerated);
+        Assert.NotNull(scope.Thumbnails.Get(item.Id, ThumbSize.Large, item.MTimeUtc.Ticks));
+    }
+
+    [Fact]
     public void IndexRoot_ReportsProgress_ThroughToDone()
     {
         using var scope = new ApertureScope();
