@@ -40,11 +40,16 @@ public sealed class ReelSettings
     public long ThumbnailCacheCapMb { get; set; } = 2048;
 
     // --- Window / layout persistence ---
-    public double? WindowWidth { get; set; }
-    public double? WindowHeight { get; set; }
-    public double? WindowLeft { get; set; }
-    public double? WindowTop { get; set; }
-    public bool WindowMaximized { get; set; }
+
+    /// <summary>
+    /// Native WINDOWPLACEMENT as [normalLeft, normalTop, normalRight, normalBottom, showCmd].
+    /// Restored with Set/GetWindowPlacement so size, position, monitor and maximized state
+    /// survive across launches even on a multi-monitor / mixed-DPI setup.
+    /// </summary>
+    public int[]? WindowPlacement { get; set; }
+
+    /// <summary>Width, in DIPs, of the left folder pane.</summary>
+    public double? NavWidth { get; set; }
 
     /// <summary>Set once the first-run folder detection has been offered.</summary>
     public bool FirstRunDone { get; set; }

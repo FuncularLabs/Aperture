@@ -63,6 +63,9 @@
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
         <SolidColorBrush x:Key="Muted" Color="#8A90A0" />
         <SolidColorBrush x:Key="Accent" Color="#3A72F0" />
+        <!-- Brand accents: the teal of the folder icons and the purple of the app logo. -->
+        <Color x:Key="FolderTealColor">#3FC2B6</Color>
+        <Color x:Key="LogoPurpleColor">#744DA9</Color>
         <SolidColorBrush x:Key="ThumbBg" Color="#EEF0F4" />
         <SolidColorBrush x:Key="SelBg" Color="#E6EEFF" />
         <SolidColorBrush x:Key="SelBorder" Color="#3A72F0" />
@@ -397,7 +400,7 @@
         <!-- Body -->
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="210" MinWidth="140" />
+                <ColumnDefinition x:Name="NavColumn" Width="210" MinWidth="140" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
@@ -603,13 +606,19 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    Margin="4,0,0,0" />
                                     </Border>
-                                    <!-- Tags/notes badge — bigger, accent ring -->
+                                    <!-- Tags/notes badge — teal→purple brand gradient, white ring for contrast -->
                                     <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
-                                            Background="#D9141821" CornerRadius="12" Width="24" Height="24"
-                                            BorderBrush="{StaticResource Accent}" BorderThickness="1.5"
+                                            CornerRadius="12" Width="24" Height="24"
+                                            BorderBrush="#F2FFFFFF" BorderThickness="1.5"
                                             Visibility="{Binding HasAnnotation, Converter={StaticResource BoolToVis}}">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="{StaticResource FolderTealColor}" Offset="0" />
+                                                <GradientStop Color="{StaticResource LogoPurpleColor}" Offset="1" />
+                                            </LinearGradientBrush>
+                                        </Border.Background>
                                         <Border.Effect>
-                                            <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="0" Opacity="0.45" />
+                                            <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="0" Opacity="0.55" />
                                         </Border.Effect>
                                         <TextBlock Text="🏷" FontSize="12" Foreground="White"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />

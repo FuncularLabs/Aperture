@@ -1111,23 +1111,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Window layout persistence ------------------------------------------
 
-    public (double? Width, double? Height, double? Left, double? Top, bool Maximized) RestoreWindow()
-    {
-        var s = _library.Settings.Current;
-        return (s.WindowWidth, s.WindowHeight, s.WindowLeft, s.WindowTop, s.WindowMaximized);
-    }
+    /// <summary>Saved native window placement (size/position/monitor/maximized), or null on first run.</summary>
+    public int[]? GetWindowPlacement() => _library.Settings.Current.WindowPlacement;
 
-    public void SaveWindow(double width, double height, double left, double top, bool maximized)
-    {
-        _library.Settings.Update(s =>
-        {
-            s.WindowWidth = width;
-            s.WindowHeight = height;
-            s.WindowLeft = left;
-            s.WindowTop = top;
-            s.WindowMaximized = maximized;
-        });
-    }
+    public void SaveWindowPlacement(int[] placement) =>
+        _library.Settings.Update(s => s.WindowPlacement = placement);
+
+    /// <summary>Saved width of the left folder pane, or null on first run.</summary>
+    public double? GetNavWidth() => _library.Settings.Current.NavWidth;
+
+    public void SaveNavWidth(double width) =>
+        _library.Settings.Update(s => s.NavWidth = width);
 
     // --- Roots --------------------------------------------------------------
 

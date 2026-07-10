@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Reel.App.ViewModels;
 
@@ -12,32 +14,26 @@ public partial class MainWindow : Window
         InitializeComponent();
         PreviewKeyDown += OnWindowPreviewKeyDown;
         PreviewMouseDown += OnWindowPreviewMouseDown;
+        SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;
 
+    /// <summary>Restore window geometry before the window is shown, so there's no reposition flash.</summary>
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        if (ViewModel?.GetWindowPlacement() is { Length: 5 } p)
+            ApplyWindowPlacement(p);
+        if (ViewModel?.GetNavWidth() is { } w && w >= NavColumn.MinWidth)
+            NavColumn.Width = new GridLength(w);
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (ViewModel is null)
             return;
-
-        var (w, h, left, top, max) = ViewModel.RestoreWindow();
-        if (w is > 200 && h is > 200)
-        {
-            Width = w.Value;
-            Height = h.Value;
-        }
-        // Only restore position if it lands on a visible screen.
-        if (left is { } l && top is { } t && IsOnScreen(l, t, Width, Height))
-        {
-            WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = l;
-            Top = t;
-        }
-        if (max)
-            WindowState = WindowState.Maximized;
 
         _lastLocationKey = ViewModel.LocationKey;
         ViewModel.ViewApplying += OnViewApplying;
@@ -134,18 +130,55 @@ public partial class MainWindow : Window
         if (ViewModel is null)
             return;
 
-        var bounds = RestoreBounds; // normal (un-maximized) bounds
-        ViewModel.SaveWindow(bounds.Width, bounds.Height, bounds.Left, bounds.Top,
-            WindowState == WindowState.Maximized);
+        if (TryGetWindowPlacement() is { } placement)
+            ViewModel.SaveWindowPlacement(placement);
+        ViewModel.SaveNavWidth(NavColumn.ActualWidth);
     }
 
-    private static bool IsOnScreen(double left, double top, double width, double height)
+    // --- Native window placement (robust across monitors + DPI) ---
+
+    private const int SW_SHOWNORMAL = 1;
+    private const int SW_SHOWMINIMIZED = 2;
+    private const int SW_SHOWMAXIMIZED = 3;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WINDOWPLACEMENT
     {
-        // The bounding rectangle of all monitors (device-independent units).
-        var virtualScreen = new System.Windows.Rect(
-            SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
-            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
-        return virtualScreen.IntersectsWith(new System.Windows.Rect(left, top, width, height));
+        public int length, flags, showCmd;
+        public int minX, minY, maxX, maxY;
+        public int left, top, right, bottom; // rcNormalPosition
+    }
+
+    [DllImport("user32.dll")] private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+    [DllImport("user32.dll")] private static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    /// <summary>Current placement as [left, top, right, bottom, showCmd], or null if unavailable.</summary>
+    private int[]? TryGetWindowPlacement()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+            return null;
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        if (!GetWindowPlacement(hwnd, ref wp))
+            return null;
+        // Never persist "minimized" — restore to a normal window next launch.
+        var show = wp.showCmd == SW_SHOWMINIMIZED ? SW_SHOWNORMAL : wp.showCmd;
+        return [wp.left, wp.top, wp.right, wp.bottom, show];
+    }
+
+    private void ApplyWindowPlacement(int[] p)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+            return;
+        var wp = new WINDOWPLACEMENT
+        {
+            length = Marshal.SizeOf<WINDOWPLACEMENT>(),
+            showCmd = p[4] == SW_SHOWMINIMIZED ? SW_SHOWNORMAL : p[4],
+            left = p[0], top = p[1], right = p[2], bottom = p[3],
+        };
+        // SetWindowPlacement clamps to a visible monitor, so an unplugged screen is handled for us.
+        SetWindowPlacement(hwnd, ref wp);
     }
 
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)

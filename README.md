@@ -252,6 +252,11 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
   - Fixed: right-clicking the quick-look viewer used to *dismiss* it (its background close-on-click fired for any mouse button, and the image wasn't hit-testable). It now closes only on a **left**-click of the dim margin; the central image is a transparent hit-target that hosts the menu. `PreviewTile` is also now kept current even when the inspector pane is closed, which the quick-look menu depends on.
 - **Open from the preview** — double-clicking the image (inspector or quick-look), or pressing Enter, launches the file with the same action as a tile double-click (`OpenSelectedCommand`, i.e. shell-open with the folder as working dir). A single click on the quick-look image no longer dismisses it (so the double-click can land); Esc/Space/✕/margin-click still close it.
 
+### Feedback round 17 ✅ done — layout memory + brand tag badge
+- **Window geometry is remembered** across launches — size, position, **monitor**, and maximized state — via the native `WINDOWPLACEMENT` API (`Get/SetWindowPlacement`), which round-trips correctly on multi-monitor / mixed-DPI setups where the old device-independent save/restore drifted. `SetWindowPlacement` also clamps onto a visible monitor, so an unplugged screen is handled.
+- **Left folder-pane width is remembered** (the nav splitter position persists as `NavWidth`).
+- **Tag badge is higher-contrast and on-brand** — the 🏷 annotation badge is now a teal→purple gradient (the folder-icon teal `#3FC2B6` into the app-logo purple `#744DA9`) with a white ring and drop shadow, instead of a dark chip with a blue ring.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -287,4 +292,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and sixteen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and seventeen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
