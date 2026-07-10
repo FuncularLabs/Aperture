@@ -20,6 +20,7 @@ public sealed class LibraryService : IDisposable
     private readonly ItemStore _items;
     private readonly ThumbnailStore _thumbnails;
     private readonly AnnotationStore _annotations;
+    private readonly Annotations.AnnotationTransfer _transfer;
     private readonly Indexer _indexer;
     private readonly Dictionary<long, RootWatcher> _watchers = [];
     private readonly Lock _watchersLock = new();
@@ -41,6 +42,7 @@ public sealed class LibraryService : IDisposable
         _thumbnails = new ThumbnailStore(_db);
         _annotations = new AnnotationStore(_db);
         _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
+        _transfer = new Annotations.AnnotationTransfer(_annotations, _roots);
         _indexer = new Indexer(_db, new ThumbnailGenerator(), new MetadataReader());
         Settings = new SettingsService(dataDir);
     }
@@ -95,6 +97,12 @@ public sealed class LibraryService : IDisposable
     public void RenameTag(string oldTag, string newTag) => _annotations.RenameTag(oldTag, newTag);
 
     public void DeleteTag(string tag) => _annotations.DeleteTag(tag);
+
+    /// <summary>Writes all tags + notes to a portable JSON file. Returns the entry count.</summary>
+    public int ExportAnnotations(string filePath) => _transfer.Export(filePath);
+
+    /// <summary>Upserts tags + notes from a portable JSON file (root-relative remap + merge).</summary>
+    public Annotations.ImportSummary ImportAnnotations(string filePath) => _transfer.Import(filePath);
 
     // --- Indexing ------------------------------------------------------------
 

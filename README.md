@@ -182,7 +182,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Tooltip location**: since search spans subfolders, each tile's tooltip shows its `FOLDERS`-relative path, e.g. `in [Camera Uploads/2014]`.
 - **Open like a double-click**: files now shell-execute their default `open` verb with the containing folder as the working directory (instead of via `explorer.exe`) — the closest replica of an Explorer double-click, which is what gives folder-aware viewers their context. Note: whether Windows Photos pages siblings with its Back/Forward arrows is decided by Photos itself once it has the file + folder; Reel can only hand it off faithfully.
 
-**Deferred/refinement:** note markdown; sidecar export of annotations (deferred at the user's request).
+**Deferred/refinement:** note markdown. *(Sidecar/portable export of annotations shipped in round 15.)*
 
 ### Feedback round 6 ✅ done
 - **"Copy image" / quick-look orientation**: rotated phone photos (EXIF orientation ≠ 1) were copied/previewed sideways because WPF's `BitmapImage` ignores EXIF orientation. Both paths now decode through SkiaSharp's orientation logic — the *same* `SKCodec.EncodedOrigin` + matrix code the thumbnails use — so a copied image is byte-for-byte the same orientation as the tile and Windows Photos. Verified end-to-end (the reported file copies as 2252×4000 portrait, not 4000×2252 landscape). New Core tests cover the axis-swap, the no-orientation case, and the longest-edge cap.
@@ -239,6 +239,13 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Preview pane is a real, resizable split** now: the browser grid and the pane are genuine grid cells with a **`GridSplitter`** between them (drag the pane's left edge when docked right, top edge when docked bottom). Opening/closing/resizing the pane reflows the thumbnail wrap panel and resets scrollbars exactly like a window resize — no more clipped, unreachable tiles on the right/bottom. (Configured in `ConfigurePreviewLayout`.)
 - **Keyboard nav scrolls collapsed section titles into view**: Home/End scroll to the very top/bottom, and landing on a section header (even a collapsed, item-less one) brings that header into view (`BringHeaderIntoView`). Previously Ctrl+End could move the cursor to the last collapsed title without moving the scroll position.
 
+### Feedback round 15 ✅ done — search debounce, tile badges, tag import/export
+- **Debounced search.** The box no longer rebuilds the view on every keystroke — live input (`SearchInput`) is decoupled from the applied filter (`_searchText`) and commits after a ~700 ms last-one-wins pause, or immediately on **Enter**, the clear button, or a quick-pick click.
+- **Quick-pick click fixed.** Clicking a tag chip under the search box silently did nothing (the click-outside dismiss handler and the box's focus-lost handler were both closing the popup before the chip's command ran). Both now exempt the quick-pick panel, so a chip click applies its `tag:` clause again.
+- **Prominent video play badge** — a centered, larger translucent play button (with a subtle ring + drop shadow) replaces the small bottom-left corner glyph, so videos read as videos at a glance.
+- **Prominent tag badge** — the 🏷 annotation badge (top-right) is bigger, with an accent ring and drop shadow.
+- **Import / export tags & notes** (☰ menu). Export writes every annotation to a portable JSON file carrying **actual tag text** plus both the absolute path and a **root-relative** locator (root alias + path under the root). Import is an **upsert**: it remaps each entry to local content (alias match → same relative path under any root → original absolute path), **unions** tags into any existing annotation and fills an empty note (a differing note is appended, never overwritten) — so nothing is clobbered and re-importing is idempotent. Built for moving annotations between profiles/machines. Core-tested (round-trip remap + merge + idempotency; unresolved/skip counts). ([`AnnotationTransfer`](src/Reel.Core/Annotations/AnnotationTransfer.cs))
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -274,4 +281,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and eight rounds of feedback. 74 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and fifteen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.

@@ -280,6 +280,16 @@
                                     Padding="8,6" Margin="0,0,0,6" Command="{Binding ManageTagsCommand}"
                                     Background="Transparent" BorderThickness="0" Cursor="Hand"
                                     Foreground="{StaticResource Ink}" />
+                            <Button Content="⬆  Export tags &amp; notes…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Margin="0,0,0,6" Command="{Binding ExportAnnotationsCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}"
+                                    ToolTip="Save all tags &amp; notes to a portable JSON file." />
+                            <Button Content="⬇  Import tags &amp; notes…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Margin="0,0,0,6" Command="{Binding ImportAnnotationsCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}"
+                                    ToolTip="Merge tags &amp; notes from a JSON file (upsert; remaps folders by alias)." />
                             <Button Content="📖  View README (help)" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                     Padding="8,6" Command="{Binding OpenReadmeCommand}"
                                     Background="Transparent" BorderThickness="0" Cursor="Hand"
@@ -540,19 +550,28 @@
                                             <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill" />
                                         </Border.Background>
                                     </Border>
-                                    <!-- Video badge -->
-                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="7"
-                                            Background="#B0000000" CornerRadius="10" Width="20" Height="20"
+                                    <!-- Video play badge — centered, prominent -->
+                                    <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Background="#73000000" CornerRadius="24" Width="48" Height="48"
+                                            BorderBrush="#59FFFFFF" BorderThickness="1.5"
                                             Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="▶" Foreground="White" FontSize="9"
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#000000" BlurRadius="10" ShadowDepth="0" Opacity="0.5" />
+                                        </Border.Effect>
+                                        <TextBlock Text="▶" Foreground="White" FontSize="20"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   Margin="2,0,0,0" />
+                                                   Margin="4,0,0,0" />
                                     </Border>
-                                    <!-- Tags/notes badge -->
-                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="7"
-                                            Background="#CC1F2430" CornerRadius="9" Padding="4,1"
+                                    <!-- Tags/notes badge — bigger, accent ring -->
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
+                                            Background="#D9141821" CornerRadius="12" Width="24" Height="24"
+                                            BorderBrush="{StaticResource Accent}" BorderThickness="1.5"
                                             Visibility="{Binding HasAnnotation, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="🏷" FontSize="9" Foreground="White" VerticalAlignment="Center" />
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="0" Opacity="0.45" />
+                                        </Border.Effect>
+                                        <TextBlock Text="🏷" FontSize="12" Foreground="White"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
                                 </Grid>
                             </Border>

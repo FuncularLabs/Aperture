@@ -82,6 +82,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RemovePreviewTagCommand = new RelayCommand<string>(RemovePreviewTag);
         EditAnnotationCommand = new RelayCommand<TileVm>(EditAnnotation);
         ManageTagsCommand = new RelayCommand(ManageTags);
+        ImportAnnotationsCommand = new RelayCommand(ImportAnnotations);
+        ExportAnnotationsCommand = new RelayCommand(ExportAnnotations);
         OpenReadmeCommand = new RelayCommand(OpenReadme);
         NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
         NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
@@ -581,6 +583,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     public ICommand EditAnnotationCommand { get; }
     public ICommand ManageTagsCommand { get; }
+    public ICommand ImportAnnotationsCommand { get; }
+    public ICommand ExportAnnotationsCommand { get; }
     public ICommand OpenReadmeCommand { get; }
     public ICommand NavigateHomeCommand { get; }
 
@@ -601,6 +605,65 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (vm.Changed)
             RefreshAllAnnotationsInPlace();
     }
+
+    private void ExportAnnotations()
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export tags & notes",
+            Filter = "Aperture tags (*.json)|*.json|All files (*.*)|*.*",
+            FileName = $"aperture-tags-{DateTime.Now:yyyy-MM-dd}.json",
+            DefaultExt = ".json",
+            AddExtension = true,
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        try
+        {
+            var count = _library.ExportAnnotations(dialog.FileName);
+            Notify($"Exported tags & notes for {count:n0} item(s).");
+        }
+        catch (Exception ex)
+        {
+            Notify($"Export failed:\n{ex.Message}", warn: true);
+        }
+    }
+
+    private void ImportAnnotations()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Import tags & notes",
+            Filter = "Aperture tags (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        try
+        {
+            var summary = _library.ImportAnnotations(dialog.FileName);
+            RefreshAllAnnotationsInPlace(); // badges + quick-pick tags reflect the merged set
+
+            var message = $"Applied tags & notes to {summary.Applied:n0} item(s).";
+            if (summary.Unresolved > 0)
+                message += $"\n{summary.Unresolved:n0} could not be matched to a local folder.";
+            if (summary.Skipped > 0)
+                message += $"\n{summary.Skipped:n0} empty entr(ies) skipped.";
+            Notify(message);
+        }
+        catch (Exception ex)
+        {
+            Notify($"Import failed:\n{ex.Message}", warn: true);
+        }
+    }
+
+    private static void Notify(string message, bool warn = false) =>
+        System.Windows.MessageBox.Show(
+            message, "Aperture",
+            System.Windows.MessageBoxButton.OK,
+            warn ? System.Windows.MessageBoxImage.Warning : System.Windows.MessageBoxImage.Information);
     public ICommand NavigateUpCommand { get; }
     public ICommand NavigateBackCommand { get; }
     public ICommand NavigateCrumbCommand { get; }
