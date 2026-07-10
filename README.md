@@ -109,3 +109,8 @@ images and a short video. Nothing there is anyone's personal photo. See
 Daily-driver quality on Windows, backed by 87 Core unit tests. Built as a series of
 milestones (indexer/cache → union grid → sections/sort/captions → daily-driver polish)
 plus many rounds of usage feedback; see the commit history for the full trail.
+
+## License
+
+Code is [MIT](LICENSE). The bundled sample photographs are under the Unsplash License
+(see [`sample/NOTICE.md`](sample/NOTICE.md)); the synthetic sample images/video are original.
