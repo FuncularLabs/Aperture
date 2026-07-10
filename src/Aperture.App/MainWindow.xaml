@@ -585,6 +585,8 @@
                      SelectionMode="Extended"
                      SelectionChanged="OnGridSelectionChanged"
                      PreviewMouseRightButtonDown="OnGridRightButtonDown"
+                     PreviewMouseLeftButtonDown="OnGridPreviewLeftDown"
+                     PreviewMouseMove="OnGridPreviewMove"
                      Background="{StaticResource CanvasBg}" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -705,12 +707,13 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    Margin="4,0,0,0" />
                                     </Border>
-                                    <!-- Tags/notes badge — teal→purple brand gradient; click to edit tags & notes -->
+                                    <!-- Tags/notes badge — teal→purple brand gradient; click to edit tags & notes.
+                                         Scopes to this one tile (via OnTileBadgeClick) — multi-select edits go through
+                                         the right-click "Tags & notes…" menu instead. -->
                                     <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
                                             Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0"
                                             ToolTip="Edit tags &amp; notes"
-                                            Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
-                                            CommandParameter="{Binding}"
+                                            Click="OnTileBadgeClick"
                                             Visibility="{Binding HasAnnotation, Converter={StaticResource BoolToVis}}">
                                         <Button.Template>
                                             <ControlTemplate TargetType="Button">

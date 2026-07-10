@@ -31,7 +31,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Ship the README next to the exe, with its images under docs/ so the relative
+         paths resolve when the README is viewed from the distributed app folder.
+         (Relative paths — not base64 — because GitHub sanitizes/rejects data: URIs.) -->
     <Content Include="..\..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\logo.png" Link="docs\logo.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\screenshot.png" Link="docs\screenshot.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

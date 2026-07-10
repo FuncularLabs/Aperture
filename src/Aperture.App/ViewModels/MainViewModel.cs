@@ -95,11 +95,37 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         LoadRoots();
         LoadAnnotations();
-        LoadRows();
-        BuildViewImmediate();
-        BuildTree();
-        SelectDefaultNode();
+        InitializeViewAsync(); // reads the union + builds the first view off the UI thread (spinner meanwhile)
         MaybeStartFirstRun();
+    }
+
+    /// <summary>
+    /// Startup view build. The union read and the tile/section compute — the heavy part on a large
+    /// library — run off the UI thread behind the loading spinner, so the window paints immediately
+    /// and the keyboard is responsive instead of frozen while the first view is prepared.
+    /// </summary>
+    private async void InitializeViewAsync()
+    {
+        var generation = ++_buildGeneration;
+        IsLoadingView = true;
+
+        _allRows = await Task.Run(_library.GetUnion);
+        OnPropertyChanged(nameof(TotalItemCount));
+        if (generation != _buildGeneration)
+            return; // a data-change rebuild already superseded startup
+
+        BuildTree();          // needs _allRows; builds the (UI-bound) tree nodes on the UI thread
+        SelectDefaultNode();
+
+        var inputs = CaptureBuildInputs();
+        ViewBuild build;
+        try { build = await Task.Run(() => ComputeView(inputs)); }
+        catch (OperationCanceledException) { return; }
+        if (generation != _buildGeneration)
+            return;
+
+        ApplyView(build);
+        IsLoadingView = false;
     }
 
     private void LoadAnnotations()

@@ -634,6 +634,80 @@ public partial class MainWindow : Window
         return source as System.Windows.Controls.ListBoxItem;
     }
 
+    /// <summary>
+    /// The tag/note badge acts on its own tile only: reset the selection to that tile, then open the
+    /// dialog. Multi-select edits go through the right-click "Tags &amp; notes…" menu instead.
+    /// </summary>
+    private void OnTileBadgeClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is FrameworkElement { DataContext: TileVm tile } && ViewModel is not null)
+        {
+            ItemsList.SelectedItems.Clear();
+            ItemsList.SelectedItem = tile;
+            ViewModel.SetSelectedItems(ItemsList.SelectedItems);
+            ViewModel.EditAnnotationCommand.Execute(tile);
+        }
+    }
+
+    // --- Drag a tile (or the whole selection) out to the shell as real file(s) ---
+    // Lets you drop images straight onto an email, a folder, or any file-drop target.
+    private Point _tileDragStart;
+    private bool _tileDragArmed;
+    private string[] _pendingDragPaths = [];
+
+    private void OnGridPreviewLeftDown(object sender, MouseButtonEventArgs e)
+    {
+        _tileDragArmed = false;
+        _pendingDragPaths = [];
+
+        // Arm only when the press lands on a media tile — not a header, empty space, or a
+        // button (the tag badge handles its own click). Selection still happens normally.
+        if (ContainerFrom(e.OriginalSource as DependencyObject) is not { DataContext: TileVm pressed } container
+            || IsWithinButton(e.OriginalSource as DependencyObject))
+            return;
+
+        // Capture the drag set BEFORE WPF collapses the selection on mouse-down: pressing an
+        // already-selected tile drags the whole selection (Explorer-style); otherwise just this one.
+        var selected = ItemsList.SelectedItems.OfType<TileVm>().ToList();
+        var basis = container.IsSelected && selected.Count > 1 ? selected : [pressed];
+        _pendingDragPaths = basis
+            .Select(t => t.FullPath)
+            .Where(System.IO.File.Exists)
+            .Distinct(System.StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        _tileDragStart = e.GetPosition(null);
+        _tileDragArmed = _pendingDragPaths.Length > 0;
+    }
+
+    private void OnGridPreviewMove(object sender, MouseEventArgs e)
+    {
+        if (!_tileDragArmed || e.LeftButton != MouseButtonState.Pressed)
+            return;
+
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _tileDragStart.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(pos.Y - _tileDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        _tileDragArmed = false; // one drag per press
+        var data = new DataObject(DataFormats.FileDrop, _pendingDragPaths);
+        try { DragDrop.DoDragDrop(ItemsList, data, DragDropEffects.Copy); }
+        catch { /* the drag loop can throw if the window is torn down mid-drag */ }
+    }
+
+    private static bool IsWithinButton(DependencyObject? source)
+    {
+        while (source is not null and not System.Windows.Controls.ListBoxItem)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase)
+                return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
+
     private void OnItemsDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // Ignore double-clicks that aren't on an item (e.g. section header / empty space).
