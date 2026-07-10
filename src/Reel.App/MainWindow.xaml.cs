@@ -473,13 +473,36 @@ public partial class MainWindow : Window
             ViewModel?.CloseQuickLookCommand.Execute(null);
     }
 
-    /// <summary>Double-click the quick-look image = launch it, like a tile. A single click is
-    /// swallowed so it doesn't dismiss the overlay (which would otherwise pre-empt the double-click).</summary>
+    /// <summary>
+    /// Quick-look image clicks: double-click launches the item; a single click on the image
+    /// itself is swallowed (so the double-click can land); a single click in the letterbox
+    /// around the image dismisses the overlay, just like clicking the outer margin.
+    /// </summary>
     private void OnQuickLookImageClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2)
+        {
             ViewModel?.OpenSelectedCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+        if (!ClickIsOnImage(e.GetPosition(QuickLookImageArea)))
+            ViewModel?.CloseQuickLookCommand.Execute(null);
         e.Handled = true;
+    }
+
+    /// <summary>True if a point (in QuickLookImageArea coordinates) lands on the letterboxed image itself.</summary>
+    private bool ClickIsOnImage(Point p)
+    {
+        if (QuickLookImg.Source is not System.Windows.Media.Imaging.BitmapSource bmp || bmp.PixelWidth <= 0)
+            return false;
+        double sw = QuickLookImageArea.ActualWidth, sh = QuickLookImageArea.ActualHeight;
+        if (sw <= 0 || sh <= 0)
+            return false;
+        var scale = Math.Min(sw / bmp.PixelWidth, sh / bmp.PixelHeight);
+        double dw = bmp.PixelWidth * scale, dh = bmp.PixelHeight * scale;
+        double ox = (sw - dw) / 2, oy = (sh - dh) / 2;
+        return p.X >= ox && p.X <= ox + dw && p.Y >= oy && p.Y <= oy + dh;
     }
 
     // --- Folder tree ---

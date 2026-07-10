@@ -15,14 +15,15 @@
         <!-- Removable tag chip. Shared tags (on every selected item) show a solid
              fill; partial tags (on some) show a dashed outline + a "pertains to" tip. -->
         <DataTemplate x:Key="ChipTemplate">
-            <Grid Margin="0,0,6,6" ToolTip="{Binding ScopeTooltip}">
-                <Rectangle x:Name="fill" RadiusX="11" RadiusY="11" Fill="#E6EEFF" />
-                <Rectangle x:Name="dash" RadiusX="11" RadiusY="11" Fill="#F1F4FA"
-                           Stroke="#9DB0D8" StrokeThickness="1.2" StrokeDashArray="2 2" Visibility="Collapsed" />
-                <StackPanel Orientation="Horizontal" Margin="9,3,4,3">
-                    <TextBlock Text="{Binding Name}" Foreground="#274B8F" VerticalAlignment="Center" />
-                    <Button Content="✕" FontSize="10" Margin="6,0,0,0" Padding="3,0" Background="Transparent"
-                            BorderThickness="0" Foreground="#5A79B0" Cursor="Hand"
+            <Grid Margin="0,0,7,7" ToolTip="{Binding ScopeTooltip}">
+                <Rectangle x:Name="fill" RadiusX="13" RadiusY="13" Fill="#C7DBFF" />
+                <Rectangle x:Name="dash" RadiusX="13" RadiusY="13" Fill="#E8EEFA"
+                           Stroke="#7E97CC" StrokeThickness="1.4" StrokeDashArray="2 2" Visibility="Collapsed" />
+                <StackPanel Orientation="Horizontal" Margin="12,5,6,5">
+                    <TextBlock Text="{Binding Name}" Foreground="#16306E" FontSize="14" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <Button Content="✕" FontSize="11" Margin="7,0,0,0" Padding="3,0" Background="Transparent"
+                            BorderThickness="0" Foreground="#375C9E" Cursor="Hand"
                             Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             CommandParameter="{Binding}" />
                 </StackPanel>

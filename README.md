@@ -262,6 +262,10 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Click the preview canvas to dismiss it** — a click (no drag) anywhere on the inspector preview's image area closes the pane; dragging still pans a zoomed image. (The full-screen quick-view keeps its own double-click-to-open + right-click menu.)
 - **The 🏷 tile badge opens Tags & Notes** — clicking the badge in a tile's upper-right edits that item's tags & notes.
 
+### Feedback round 19 ✅ done
+- **Quick-view dismiss fixed** — clicking beside the image now closes the viewer. The transparent hit-target over the central area used to swallow clicks in the *letterbox* (the dark bands next to a portrait/landscape image), so only the thin outer margin dismissed. Now a click anywhere off the actual image pixels (letterbox or margin) closes it; a click on the image is still swallowed so the double-click-to-open can land.
+- **Bigger, higher-contrast tag chips** — the applied-tags chips at the top of the Tags & Notes dialog are larger (14px semibold, roomier) with a stronger fill and darker text.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -297,4 +301,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and eighteen rounds of feedback. 84 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and nineteen rounds of feedback. 84 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
