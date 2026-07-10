@@ -248,8 +248,9 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 ### Feedback round 16 ✅ done — title version + preview parity
 - **Version in the title bar** — the window title now reads `Aperture vX.Y.Z  —  <folder>` (was just `Aperture — <folder>`).
-- **Preview pane has the tile context menu** — right-clicking the previewed image opens the same menu as a thumbnail (Open, Open with, Open containing folder, Tags & notes, Copy image/thumbnail, Copy name/path, Copy, Cut), targeting the previewed item. "Copy image" vs "Copy thumbnail" flips correctly for images vs videos.
-- **Open from the preview** — double-clicking the previewed image, or pressing Enter while it's focused, launches the file with the same action as a tile double-click (`OpenSelectedCommand`, i.e. shell-open with the folder as working dir).
+- **The tile context menu on both previews** — right-clicking the image in the docked inspector pane *and* in the full-screen quick-look viewer opens the same menu as a thumbnail (Open, Open with, Open containing folder, Tags & notes, Copy image/thumbnail, Copy name/path, Copy, Cut), targeting the previewed item. "Copy image" vs "Copy thumbnail" flips correctly for images vs videos. The menu is a single shared resource (`PreviewContextMenu`, `x:Shared="False"`).
+  - Fixed: right-clicking the quick-look viewer used to *dismiss* it (its background close-on-click fired for any mouse button, and the image wasn't hit-testable). It now closes only on a **left**-click of the dim margin; the central image is a transparent hit-target that hosts the menu. `PreviewTile` is also now kept current even when the inspector pane is closed, which the quick-look menu depends on.
+- **Open from the preview** — double-clicking the image (inspector or quick-look), or pressing Enter, launches the file with the same action as a tile double-click (`OpenSelectedCommand`, i.e. shell-open with the folder as working dir). A single click on the quick-look image no longer dismisses it (so the double-click can land); Esc/Space/✕/margin-click still close it.
 
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).

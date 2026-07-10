@@ -162,6 +162,10 @@ public partial class MainWindow : Window
                     ViewModel.CloseQuickLookCommand.Execute(null);
                     e.Handled = true;
                     break;
+                case Key.Enter:
+                    ViewModel.OpenSelectedCommand.Execute(null); // launch the viewed item, like a tile
+                    e.Handled = true;
+                    break;
                 case Key.Left:
                     ViewModel.QuickLookPrevCommand.Execute(null);
                     e.Handled = true;
@@ -440,9 +444,19 @@ public partial class MainWindow : Window
 
     private void OnQuickLookBackgroundClick(object sender, MouseButtonEventArgs e)
     {
-        // Close only when the dim background itself is clicked, not a button.
-        if (ReferenceEquals(e.OriginalSource, sender))
+        // Left-click on the dim background (not a button/image) closes. Right-click must
+        // NOT close — it opens the image's context menu instead.
+        if (e.ChangedButton == MouseButton.Left && ReferenceEquals(e.OriginalSource, sender))
             ViewModel?.CloseQuickLookCommand.Execute(null);
+    }
+
+    /// <summary>Double-click the quick-look image = launch it, like a tile. A single click is
+    /// swallowed so it doesn't dismiss the overlay (which would otherwise pre-empt the double-click).</summary>
+    private void OnQuickLookImageClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+            ViewModel?.OpenSelectedCommand.Execute(null);
+        e.Handled = true;
     }
 
     // --- Folder tree ---

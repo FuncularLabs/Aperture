@@ -211,6 +211,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _selectedItem, value))
             {
                 OnPropertyChanged(nameof(SelectedTile));
+                OnPropertyChanged(nameof(PreviewTile)); // keep current even when the inspector pane is closed (quick-look menu depends on it)
                 LoadPreview(); // no-op when the preview pane is closed
             }
         }
@@ -539,7 +540,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_previewMode == PreviewMode.Off)
             return;
-        OnPropertyChanged(nameof(PreviewTile));
         var tile = SelectedTile;
         PreviewExif = BuildExif(tile);
 

@@ -17,6 +17,47 @@
         <mvvm:PreviewModeConverter x:Key="PreviewMode" />
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
+
+        <!-- The tile right-click menu, reused by the preview pane and the quick-look overlay.
+             x:Shared="False" so the same menu can attach to more than one element. Targets the
+             previewed/quick-looked item (PreviewTile == the selected tile). -->
+        <ContextMenu x:Key="PreviewContextMenu" x:Shared="False"
+                     Visibility="{Binding Data.PreviewTile, Source={StaticResource Vm}, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
+            <MenuItem Header="Open"
+                      Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
+            <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
+                <MenuItem Header="" />
+            </MenuItem>
+            <MenuItem Header="Open containing folder"
+                      Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <Separator />
+            <MenuItem Header="Tags &amp; notes…"
+                      Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <Separator />
+            <MenuItem Header="Copy image"
+                      Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource InverseBoolToVis}}"
+                      Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <MenuItem Header="Copy thumbnail"
+                      Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource BoolToVis}}"
+                      Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <MenuItem Header="Copy file name"
+                      Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <MenuItem Header="Copy full path"
+                      Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <Separator />
+            <MenuItem Header="Copy" InputGestureText="Ctrl+C"
+                      Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+            <MenuItem Header="Cut" InputGestureText="Ctrl+X"
+                      Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+        </ContextMenu>
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
         <SolidColorBrush x:Key="Ink" Color="#1F2430" />
@@ -638,47 +679,9 @@
                             </StackPanel>
                             <Border x:Name="PreviewImageHost" Focusable="True" FocusVisualStyle="{x:Null}"
                                     KeyDown="OnPreviewKeyDown"
+                                    ContextMenu="{StaticResource PreviewContextMenu}"
                                     Height="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=imgHeight}"
                                     CornerRadius="6" ClipToBounds="True" Background="#14141C">
-                                <!-- Same right-click menu as a tile, targeting the previewed item -->
-                                <Border.ContextMenu>
-                                    <ContextMenu Visibility="{Binding Data.PreviewTile, Source={StaticResource Vm}, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
-                                        <MenuItem Header="Open"
-                                                  Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
-                                        <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
-                                            <MenuItem Header="" />
-                                        </MenuItem>
-                                        <MenuItem Header="Open containing folder"
-                                                  Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <Separator />
-                                        <MenuItem Header="Tags &amp; notes…"
-                                                  Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <Separator />
-                                        <MenuItem Header="Copy image"
-                                                  Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource InverseBoolToVis}}"
-                                                  Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <MenuItem Header="Copy thumbnail"
-                                                  Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource BoolToVis}}"
-                                                  Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <MenuItem Header="Copy file name"
-                                                  Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <MenuItem Header="Copy full path"
-                                                  Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <Separator />
-                                        <MenuItem Header="Copy" InputGestureText="Ctrl+C"
-                                                  Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                        <MenuItem Header="Cut" InputGestureText="Ctrl+X"
-                                                  Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
-                                                  CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
-                                    </ContextMenu>
-                                </Border.ContextMenu>
                                 <Grid>
                                     <ScrollViewer x:Name="PreviewScroll" HorizontalScrollBarVisibility="Hidden"
                                                   VerticalScrollBarVisibility="Hidden"
@@ -772,8 +775,17 @@
         <!-- Quick-look overlay -->
         <Grid x:Name="QuickLookOverlay" Background="#EE0E1014" MouseDown="OnQuickLookBackgroundClick"
               Visibility="{Binding QuickLookOpen, Converter={StaticResource BoolToVis}}">
-            <Image Source="{Binding QuickLookImage}" Stretch="Uniform" Margin="72,60,72,72"
-                   RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" />
+            <!-- Transparent hit-target over the central image area, so the tile context menu
+                 (right-click) and double-click-to-open work regardless of how the image letterboxes.
+                 A single click is swallowed so it no longer closes the overlay (that enables the
+                 double-click); click the dim margin, or Esc/Space, to close. The nav/close buttons
+                 live in the margins, outside this border. -->
+            <Border Margin="72,60,72,72" Background="Transparent" Cursor="Hand"
+                    ContextMenu="{StaticResource PreviewContextMenu}"
+                    MouseLeftButtonDown="OnQuickLookImageClick">
+                <Image Source="{Binding QuickLookImage}" Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" />
+            </Border>
 
             <TextBlock Text="{Binding QuickLookCaption}" Foreground="#F0FFFFFF" FontSize="13"
                        HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,20" IsHitTestVisible="False" />
