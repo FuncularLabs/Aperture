@@ -114,9 +114,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (generation != _buildGeneration)
             return; // a data-change rebuild already superseded startup
 
-        BuildTree();          // needs _allRows; builds the (UI-bound) tree nodes on the UI thread
-        SelectDefaultNode();
-
+        // Build the grid FIRST — it's the content the user came to see. The union read and the
+        // tile/section compute run off the UI thread; only ApplyView touches the UI, so the spinner
+        // animates for most of the wait and the tiles appear as soon as possible.
         var inputs = CaptureBuildInputs();
         ViewBuild build;
         try { build = await Task.Run(() => ComputeView(inputs)); }
@@ -125,7 +125,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
 
         ApplyView(build);
-        IsLoadingView = false;
+        IsLoadingView = false; // tiles are up — drop the spinner even though the tree is still to come
+
+        // The folder tree fills in afterward; it doesn't gate seeing the photos.
+        BuildTree();
+        SelectDefaultNode();
     }
 
     private void LoadAnnotations()
@@ -584,7 +588,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var isVideo = tile.IsVideo;
         var itemId = tile.ItemId;
         var mtime = tile.Item.MTimeUtc.Ticks;
-        var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId, mtime) : ImageLoading.LoadFullImageUpright(path, 2400));
+        var image = await Task.Run(() => isVideo ? DecodeThumbnail(itemId, path, mtime) : ImageLoading.LoadFullImageUpright(path, 2400));
         if (gen == _previewGen && _previewMode != PreviewMode.Off)
             PreviewImage = image;
     }
@@ -796,7 +800,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Pics: the full-resolution image, EXIF-oriented like the tile/Photos.
         // Videos: the cached frame thumbnail.
         var image = tile.IsVideo
-            ? DecodeThumbnail(tile.ItemId, tile.Item.MTimeUtc.Ticks)
+            ? DecodeThumbnail(tile.ItemId, tile.FullPath, tile.Item.MTimeUtc.Ticks)
             : ImageLoading.LoadFullImageUpright(tile.FullPath);
         if (image is null)
             return;
@@ -1110,7 +1114,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private async void LoadQuickLook(int index, TileVm tile)
     {
         var image = await Task.Run(() => tile.IsVideo
-            ? DecodeThumbnail(tile.ItemId, tile.Item.MTimeUtc.Ticks)
+            ? DecodeThumbnail(tile.ItemId, tile.FullPath, tile.Item.MTimeUtc.Ticks)
             : ImageLoading.LoadFullImageUpright(tile.FullPath, maxLongestEdge: 1600));
 
         // Ignore if the user moved on while we decoded.
@@ -1118,15 +1122,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             QuickLookImage = image;
     }
 
-    private System.Windows.Media.Imaging.BitmapSource? DecodeThumbnail(long itemId, long srcMtimeTicks)
+    private System.Windows.Media.Imaging.BitmapSource? DecodeThumbnail(long itemId, string path, long srcMtimeTicks)
     {
-        var bytes = _library.GetThumbnail(itemId, ThumbSize.Large, srcMtimeTicks);
+        var bytes = _library.GetOrCreateThumbnail(itemId, path, ThumbSize.Large, srcMtimeTicks, isVideo: true);
         return bytes is null ? null : ImageLoading.Decode(bytes, 0);
     }
 
     /// <summary>Kick a background reconcile of every root, then watch it. Cached rows are already on screen.</summary>
-    public void StartBackgroundRefresh()
+    public async void StartBackgroundRefresh()
     {
+        // Give the window a moment to paint and the on-screen tiles to load (or regenerate) their
+        // thumbnails before a full reconcile starts contending for disk + CPU. Without this, indexing
+        // tens of thousands of files immediately starves the visible tiles and they sit blank.
+        await Task.Delay(StartupReconcileDelayMs);
         foreach (var rootVm in Roots.ToList())
             _ = IndexRootAsync(rootVm.Model, watchAfter: true);
     }
@@ -1252,6 +1260,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // --- Union / sections / status ------------------------------------------
 
     private const int BuildDebounceMs = 140;
+
+    /// <summary>How long startup waits before the first full reconcile, so visible thumbnails load uncontended.</summary>
+    private const int StartupReconcileDelayMs = 2500;
 
     /// <summary>True while an async rebuild is running — drives the right-pane spinner.</summary>
     public bool IsLoadingView

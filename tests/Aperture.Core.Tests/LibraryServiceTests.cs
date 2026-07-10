@@ -1,10 +1,35 @@
 using Aperture.Core.Library;
+using Aperture.Core.Models;
 using Aperture.Core.Tests.Support;
 
 namespace Aperture.Core.Tests;
 
 public class LibraryServiceTests
 {
+    [Fact]
+    public void GetOrCreateThumbnail_RegeneratesWhenCacheIsMissingOrStale()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        TestImages.Write(Path.Combine(lib.Path, "p.jpg"), 400, 300);
+
+        using var service = new LibraryService(dataDir.Path);
+        service.IndexRoot(service.AddRoot(lib.Path, "L"));
+        var row = service.GetUnion().Single();
+        var mtime = row.Item.MTimeUtc.Ticks;
+
+        // The guard withholds a thumbnail whose expected source mtime doesn't match the cache…
+        Assert.NotNull(service.GetThumbnail(row.Item.Id, ThumbSize.Large, mtime));
+        Assert.Null(service.GetThumbnail(row.Item.Id, ThumbSize.Large, mtime + 1));
+
+        // …but GetOrCreateThumbnail regenerates it from the source on the spot and re-caches it,
+        // so the just-shown tile paints without waiting for the background reconcile.
+        var bytes = service.GetOrCreateThumbnail(row.Item.Id, row.FullPath, ThumbSize.Large, mtime + 1, isVideo: false);
+        Assert.NotNull(bytes);
+        Assert.True(bytes!.Length > 0);
+        Assert.NotNull(service.GetThumbnail(row.Item.Id, ThumbSize.Large, mtime + 1)); // now cached under the new mtime
+    }
+
     [Fact]
     public void GetUnion_ExcludesUnincludedRoots()
     {

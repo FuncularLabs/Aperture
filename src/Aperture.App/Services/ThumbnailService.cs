@@ -26,21 +26,22 @@ public sealed class ThumbnailService(LibraryService library)
     // realigned cache is healed), the stale decoded bitmap is not reused.
     private readonly LruCache<(long ItemId, long SrcMtime), BitmapSource> _cache = new(MaxDecoded);
 
-    public async Task<BitmapSource?> LoadAsync(long itemId, ThumbSize size, long srcMtimeTicks)
+    public async Task<BitmapSource?> LoadAsync(long itemId, string path, bool isVideo, ThumbSize size, long srcMtimeTicks)
     {
         var key = (itemId, srcMtimeTicks);
         if (_cache.TryGet(key, out var cached))
             return cached;
 
-        var bitmap = await Task.Run(() => Decode(itemId, size, srcMtimeTicks)).ConfigureAwait(true);
+        var bitmap = await Task.Run(() => Decode(itemId, path, isVideo, size, srcMtimeTicks)).ConfigureAwait(true);
         if (bitmap is not null)
             _cache.Set(key, bitmap);
         return bitmap;
     }
 
-    private BitmapSource? Decode(long itemId, ThumbSize size, long srcMtimeTicks)
+    private BitmapSource? Decode(long itemId, string path, bool isVideo, ThumbSize size, long srcMtimeTicks)
     {
-        var bytes = _library.GetThumbnail(itemId, size, srcMtimeTicks);
+        // Regenerates on the spot if the cached thumb is missing/stale, so a just-shown tile isn't blank.
+        var bytes = _library.GetOrCreateThumbnail(itemId, path, size, srcMtimeTicks, isVideo);
         if (bytes is null || bytes.Length == 0)
             return null;
 

@@ -22,6 +22,7 @@ public sealed class LibraryService : IDisposable
     private readonly AnnotationStore _annotations;
     private readonly Annotations.AnnotationTransfer _transfer;
     private readonly Indexer _indexer;
+    private readonly ThumbnailGenerator _thumbnailGen = new();
     private readonly Dictionary<long, RootWatcher> _watchers = [];
     private readonly Lock _watchersLock = new();
 
@@ -43,7 +44,7 @@ public sealed class LibraryService : IDisposable
         _annotations = new AnnotationStore(_db);
         _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
         _transfer = new Annotations.AnnotationTransfer(_annotations, _roots);
-        _indexer = new Indexer(_db, new ThumbnailGenerator(), new MetadataReader());
+        _indexer = new Indexer(_db, _thumbnailGen, new MetadataReader());
         Settings = new SettingsService(dataDir);
     }
 
@@ -80,6 +81,27 @@ public sealed class LibraryService : IDisposable
     /// </summary>
     public byte[]? GetThumbnail(long itemId, ThumbSize size, long? expectedSrcMtimeTicks = null) =>
         _thumbnails.Get(itemId, size, expectedSrcMtimeTicks);
+
+    /// <summary>
+    /// Returns a valid thumbnail for a tile, regenerating it from the source on the spot when the cache
+    /// is missing or stale (src mtime mismatch). This lets a just-shown tile paint immediately instead of
+    /// waiting for the background reconcile to reach it in scan order — key to instant-feeling startup on a
+    /// realigned/partial cache. Returns null only if the source can't be decoded.
+    /// </summary>
+    public byte[]? GetOrCreateThumbnail(long itemId, string path, ThumbSize size, long mtimeTicks, bool isVideo)
+    {
+        var bytes = _thumbnails.Get(itemId, size, mtimeTicks);
+        if (bytes is { Length: > 0 })
+            return bytes;
+
+        if (!File.Exists(path))
+            return null;
+        var set = isVideo ? _thumbnailGen.GenerateVideo(path, ThumbSizes.All) : _thumbnailGen.Generate(path, ThumbSizes.All);
+        if (set is null)
+            return null;
+        _thumbnails.Put(itemId, mtimeTicks, set);
+        return set.Thumbs.TryGetValue(size, out var data) ? data.Bytes : null;
+    }
 
     // --- Annotations (tags + notes) -----------------------------------------
 

@@ -107,7 +107,7 @@ public sealed class TileVm(LibraryRow row, ThumbnailService thumbnails, string c
 
     private async void BeginLoad()
     {
-        var bitmap = await _thumbnails.LoadAsync(ItemId, ThumbSize.Large, Item.MTimeUtc.Ticks);
+        var bitmap = await _thumbnails.LoadAsync(ItemId, FullPath, IsVideo, ThumbSize.Large, Item.MTimeUtc.Ticks);
         if (bitmap is not null)
             Thumbnail = bitmap;
     }

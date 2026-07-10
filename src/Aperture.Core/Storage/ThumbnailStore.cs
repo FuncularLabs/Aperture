@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Aperture.Core.Media;
 using Aperture.Core.Models;
 
 namespace Aperture.Core.Storage;
@@ -7,6 +8,44 @@ namespace Aperture.Core.Storage;
 public sealed class ThumbnailStore(ApertureDatabase database)
 {
     private readonly ApertureDatabase _db = database;
+
+    /// <summary>
+    /// Upserts a freshly-generated thumbnail set for one item (used by on-demand regeneration when a
+    /// visible tile's cached thumbnail is missing or stale, so it needn't wait for the background reconcile).
+    /// </summary>
+    public void Put(long itemId, long srcMtimeTicks, ThumbnailSet set)
+    {
+        var now = DateTime.UtcNow.Ticks;
+        using var conn = _db.OpenThumbnails();
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO thumbs (item_id, size, src_mtime_ticks, width, height, data, bytes, created_ticks, last_used_ticks)
+            VALUES (@item, @size, @src, @w, @h, @data, @bytes, @created, @used)
+            ON CONFLICT(item_id, size) DO UPDATE SET
+                src_mtime_ticks = excluded.src_mtime_ticks, width = excluded.width, height = excluded.height,
+                data = excluded.data, bytes = excluded.bytes, created_ticks = excluded.created_ticks,
+                last_used_ticks = excluded.last_used_ticks;
+            """;
+        var item = cmd.Parameters.Add("@item", SqliteType.Integer);
+        var size = cmd.Parameters.Add("@size", SqliteType.Integer);
+        var src = cmd.Parameters.Add("@src", SqliteType.Integer);
+        var w = cmd.Parameters.Add("@w", SqliteType.Integer);
+        var h = cmd.Parameters.Add("@h", SqliteType.Integer);
+        var data = cmd.Parameters.Add("@data", SqliteType.Blob);
+        var bytes = cmd.Parameters.Add("@bytes", SqliteType.Integer);
+        var created = cmd.Parameters.Add("@created", SqliteType.Integer);
+        var used = cmd.Parameters.Add("@used", SqliteType.Integer);
+        foreach (var (sz, d) in set.Thumbs)
+        {
+            item.Value = itemId; size.Value = (int)sz; src.Value = srcMtimeTicks;
+            w.Value = d.Width; h.Value = d.Height; data.Value = d.Bytes; bytes.Value = d.Bytes.Length;
+            created.Value = now; used.Value = now;
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
 
     /// <summary>
     /// Returns the encoded JPEG bytes for a thumbnail, or null if not cached. When
