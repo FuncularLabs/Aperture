@@ -40,6 +40,24 @@ public partial class MainWindow : Window
         ViewModel.ViewApplied += OnViewApplied;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         ConfigurePreviewLayout(ViewModel.PreviewMode);
+
+        // Land keyboard focus on the "Everything" library so a single Tab drops into the grid.
+        Dispatcher.BeginInvoke(new Action(() => EverythingButton.Focus()),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>Tab from the "Everything" library jumps straight to the grid's first item.</summary>
+    private void OnEverythingKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) == 0 && ViewModel is not null)
+        {
+            ItemsList.Focus();
+            var first = ViewModel.MoveCursorToFirstItem(); // selects the first tile
+            GridScroll()?.ScrollToTop();
+            if (first is not null)
+                try { ItemsList.ScrollIntoView(first); } catch { }
+            e.Handled = true;
+        }
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

@@ -161,8 +161,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void SelectDefaultNode()
     {
-        if (_location.RootId is null && FolderTree.Count > 0)
-            NavigateTo(FolderTree[0].RootId, "", pushBack: false);
+        // Default landing view is "Everything" (the union). The Home view was already built
+        // during construction, so just make sure no folder node is left highlighted.
+        if (_location.RootId is null)
+            ClearTreeSelection(FolderTree);
         else
             SelectPath(_location.RootId, _location.RelDir);
     }
@@ -960,6 +962,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return nav.Count == 0 ? null : ApplyCursor(nav, 0);
     }
 
+    /// <summary>Selects the first media tile (skipping a leading date-section header) — used when Tabbing into the grid.</summary>
+    public object? MoveCursorToFirstItem()
+    {
+        var nav = BuildNav();
+        var idx = nav.FindIndex(s => !s.IsHeader);
+        return idx < 0 ? null : ApplyCursor(nav, idx);
+    }
+
     public object? MoveCursorToEnd()
     {
         var nav = BuildNav();
@@ -1363,8 +1373,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Media files directly inside the given folder (non-recursive).</summary>
     private static List<LibraryRow> ComputeMediaFor(List<LibraryRow> rows, (long? RootId, string RelDir) loc)
     {
+        // "Everything" (no root) shows the whole union; a folder shows its direct media
+        // (subfolders live in the tree, so they aren't duplicated as tiles here).
         if (loc.RootId is null)
-            return [];
+            return [.. rows];
 
         var media = new List<LibraryRow>();
         foreach (var r in rows)

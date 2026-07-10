@@ -417,7 +417,8 @@
                          (the union of every included folder) exists for now; add/remove comes later. -->
                     <TextBlock DockPanel.Dock="Top" Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}"
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
-                    <Button DockPanel.Dock="Top" Command="{Binding NavigateHomeCommand}" Margin="8,0,8,2"
+                    <Button x:Name="EverythingButton" DockPanel.Dock="Top" Command="{Binding NavigateHomeCommand}"
+                            Margin="8,0,8,2" KeyboardNavigation.TabIndex="0" PreviewKeyDown="OnEverythingKeyDown"
                             HorizontalContentAlignment="Stretch" Cursor="Hand" Padding="0" BorderThickness="0"
                             Foreground="{StaticResource CanvasInk}" FontSize="14"
                             ToolTip="Show everything across all folders">
