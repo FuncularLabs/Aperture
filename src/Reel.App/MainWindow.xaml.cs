@@ -380,11 +380,29 @@ public partial class MainWindow : Window
 
     private void OnPreviewPanStart(object sender, MouseButtonEventArgs e)
     {
+        // Double-click the previewed image = the same launch as a tile double-click.
+        if (e.ClickCount == 2)
+        {
+            ViewModel?.OpenSelectedCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+        PreviewImageHost.Focus(); // so Enter opens the previewed item
         _panning = true;
         _panStart = e.GetPosition(PreviewScroll);
         _panH = PreviewScroll.HorizontalOffset;
         _panV = PreviewScroll.VerticalOffset;
         PreviewScroll.CaptureMouse();
+    }
+
+    /// <summary>Enter while the preview has focus launches the item, exactly like a tile.</summary>
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ViewModel?.OpenSelectedCommand.Execute(null);
+            e.Handled = true;
+        }
     }
 
     private void OnPreviewPanMove(object sender, MouseEventArgs e)
@@ -485,8 +503,12 @@ public partial class MainWindow : Window
     /// <summary>Populate the shell "Open with" submenu for the right-clicked tile.</summary>
     private void OnOpenWithSubmenuOpened(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.MenuItem menu
-            || menu.DataContext is not TileVm tile)
+        if (sender is not System.Windows.Controls.MenuItem menu)
+            return;
+        // Grid menu: DataContext is the tile. Preview menu: DataContext is the VM,
+        // so fall back to the previewed item.
+        var tile = menu.DataContext as TileVm ?? ViewModel?.PreviewTile;
+        if (tile is null)
             return;
 
         menu.Items.Clear();

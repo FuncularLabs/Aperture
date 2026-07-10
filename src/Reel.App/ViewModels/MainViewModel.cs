@@ -186,11 +186,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root)
         {
             var full = _location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir);
-            WindowTitle = $"Aperture  —  {full}";
+            WindowTitle = $"{AppVersion}  —  {full}";
         }
         else
         {
-            WindowTitle = "Aperture";
+            WindowTitle = AppVersion;
         }
     }
 

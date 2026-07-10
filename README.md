@@ -246,6 +246,11 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Prominent tag badge** — the 🏷 annotation badge (top-right) is bigger, with an accent ring and drop shadow.
 - **Import / export tags & notes** (☰ menu). Export writes every annotation to a portable JSON file carrying **actual tag text** plus both the absolute path and a **root-relative** locator (root alias + path under the root). Import is an **upsert**: it remaps each entry to local content (alias match → same relative path under any root → original absolute path), **unions** tags into any existing annotation and fills an empty note (a differing note is appended, never overwritten) — so nothing is clobbered and re-importing is idempotent. Built for moving annotations between profiles/machines. Core-tested (round-trip remap + merge + idempotency; unresolved/skip counts). ([`AnnotationTransfer`](src/Reel.Core/Annotations/AnnotationTransfer.cs))
 
+### Feedback round 16 ✅ done — title version + preview parity
+- **Version in the title bar** — the window title now reads `Aperture vX.Y.Z  —  <folder>` (was just `Aperture — <folder>`).
+- **Preview pane has the tile context menu** — right-clicking the previewed image opens the same menu as a thumbnail (Open, Open with, Open containing folder, Tags & notes, Copy image/thumbnail, Copy name/path, Copy, Cut), targeting the previewed item. "Copy image" vs "Copy thumbnail" flips correctly for images vs videos.
+- **Open from the preview** — double-clicking the previewed image, or pressing Enter while it's focused, launches the file with the same action as a tile double-click (`OpenSelectedCommand`, i.e. shell-open with the folder as working dir).
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -281,4 +286,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and fifteen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and sixteen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
