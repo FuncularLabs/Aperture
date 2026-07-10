@@ -16,12 +16,23 @@ public static class TagQuickPicks
         if (usage.Count == 0)
             return ([], false);
 
-        var byUsage = IsSkewed([.. usage.Select(u => u.Count)]);
-        var ordered = byUsage
+        var ordered = Ranked(usage, out var byUsage);
+        return (ordered.Take(max).Select(u => u.Name).ToList(), byUsage);
+    }
+
+    /// <summary>
+    /// All tags in the same blended (popularity-vs-recency) order as <see cref="Select"/>,
+    /// uncapped — for suggestion lists that want the most relevant tags first.
+    /// </summary>
+    public static List<string> Order(IReadOnlyList<TagUsage> usage) =>
+        usage.Count == 0 ? [] : Ranked(usage, out _).Select(u => u.Name).ToList();
+
+    private static IEnumerable<TagUsage> Ranked(IReadOnlyList<TagUsage> usage, out bool byUsage)
+    {
+        byUsage = IsSkewed([.. usage.Select(u => u.Count)]);
+        return byUsage
             ? usage.OrderByDescending(u => u.Count).ThenByDescending(u => u.LastUsedTicks)
             : usage.OrderByDescending(u => u.LastUsedTicks).ThenByDescending(u => u.Count);
-
-        return (ordered.Take(max).Select(u => u.Name).ToList(), byUsage);
     }
 
     /// <summary>

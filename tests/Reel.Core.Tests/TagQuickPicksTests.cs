@@ -38,4 +38,16 @@ public class TagQuickPicksTests
         // Under the 4-tag threshold there isn't enough of a distribution to judge.
         Assert.False(TagQuickPicks.IsSkewed([50, 1]));
     }
+
+    [Fact]
+    public void Order_ReturnsAllTags_InTheSameBlendedRankAsSelect()
+    {
+        var usage = new[] { U("a", 2, 100), U("b", 2, 400), U("c", 2, 300), U("d", 2, 200) };
+        var ordered = TagQuickPicks.Order(usage);
+        Assert.Equal(["b", "c", "d", "a"], ordered);              // even usage → recency, uncapped
+        Assert.Equal(TagQuickPicks.Select(usage, 2).Tags, ordered.Take(2)); // Select is Order capped
+    }
+
+    [Fact]
+    public void Order_Empty_ReturnsEmpty() => Assert.Empty(TagQuickPicks.Order([]));
 }

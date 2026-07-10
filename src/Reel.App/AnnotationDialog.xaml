@@ -78,21 +78,53 @@
         </Grid>
 
         <StackPanel Grid.Row="4" Margin="0,0,0,12">
-            <TextBlock Text="Suggestions" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,0,0,4" />
-            <ItemsControl ItemsSource="{Binding Suggestions}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Button Content="{Binding}" Margin="0,0,6,6" Padding="9,3" Cursor="Hand"
-                                Background="#EEF1F6" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                Foreground="{StaticResource Ink}"
-                                Command="{Binding DataContext.PickTagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                CommandParameter="{Binding}" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <Grid Margin="0,0,0,4">
+                <TextBlock Text="Suggestions" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" />
+                <!-- Expand/collapse the suggestion list (it starts ~2 rows tall and scrolls). -->
+                <ToggleButton x:Name="MoreTags" HorizontalAlignment="Right" Cursor="Hand" Padding="4,0"
+                              Background="Transparent" BorderThickness="0"
+                              Visibility="{Binding HasSuggestions, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Foreground="{StaticResource Accent}" FontSize="11">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="Show all  ▾" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsChecked, ElementName=MoreTags}" Value="True">
+                                        <Setter Property="Text" Value="Show less  ▴" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </ToggleButton>
+            </Grid>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer">
+                        <!-- ~2 rows of chips by default; the toggle opens it up (still scrolls). -->
+                        <Setter Property="MaxHeight" Value="66" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsChecked, ElementName=MoreTags}" Value="True">
+                                <Setter Property="MaxHeight" Value="210" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <ItemsControl ItemsSource="{Binding Suggestions}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Content="{Binding}" Margin="0,0,6,6" Padding="9,3" Cursor="Hand"
+                                    Background="#EEF1F6" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                    Foreground="{StaticResource Ink}"
+                                    Command="{Binding DataContext.PickTagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    CommandParameter="{Binding}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
         </StackPanel>
 
         <DockPanel Grid.Row="5">
@@ -105,7 +137,7 @@
             </Border>
             <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}"
                      AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                     Padding="6,4" BorderBrush="{StaticResource Line}" BorderThickness="1" />
+                     MinHeight="90" Padding="6,4" BorderBrush="{StaticResource Line}" BorderThickness="1" />
         </DockPanel>
 
         <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">

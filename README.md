@@ -257,6 +257,11 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Left folder-pane width is remembered** (the nav splitter position persists as `NavWidth`).
 - **Tag badge is higher-contrast and on-brand** — the 🏷 annotation badge is now a teal→purple gradient (the folder-icon teal `#3FC2B6` into the app-logo purple `#744DA9`) with a white ring and drop shadow, instead of a dark chip with a blue ring.
 
+### Feedback round 18 ✅ done — tag dialog + preview polish
+- **Tags & Notes dialog**: the note field now keeps a **minimum height** so it's always usable, and the **Suggestions** list starts ~2 rows tall, **scrolls**, and has a **Show all / Show less** toggle. Suggestions are ordered by the same **blended popularity-vs-recency** rank as the search quick-picks ([`TagQuickPicks.Order`](src/Reel.Core/Annotations/TagQuickPicks.cs)).
+- **Click the preview canvas to dismiss it** — a click (no drag) anywhere on the inspector preview's image area closes the pane; dragging still pans a zoomed image. (The full-screen quick-view keeps its own double-click-to-open + right-click menu.)
+- **The 🏷 tile badge opens Tags & Notes** — clicking the badge in a tile's upper-right edits that item's tags & notes.
+
 ### Later (post-v1, if warranted)
 - Face grouping (opt-in, local models).
 - Ratings/tags with sidecar `.reel.json` or extended attributes.
@@ -292,4 +297,4 @@ Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). 
 
 ## Status
 
-M1–M4 complete plus video thumbnails and seventeen rounds of feedback. 82 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.
+M1–M4 complete plus video thumbnails and eighteen rounds of feedback. 84 xUnit tests over the Core engine (indexer, thumbnails, orientation, watcher, union, formatting, search, annotations, tag management, multi-item merge, tag recency, quick-pick distribution, annotation import/export). The WPF app has been verified end-to-end against real photo/video libraries (grid, sections, collapse, filter, zoom, quick-look, first-run, settings, tags & notes, tag manager, search, copy-image orientation). See each milestone above for what shipped and what was deferred.

@@ -105,7 +105,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void LoadAnnotations()
     {
         _annotations = _library.GetAllAnnotations();
-        _availableTags = _library.GetTagsByRecency();
+        // Dialog suggestions use the blended popularity-vs-recency order (most relevant first).
+        _availableTags = TagQuickPicks.Order(_library.GetTagUsage());
     }
 
     private Annotation AnnotationFor(LibraryRow row) =>

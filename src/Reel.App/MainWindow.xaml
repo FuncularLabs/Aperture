@@ -606,23 +606,33 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    Margin="4,0,0,0" />
                                     </Border>
-                                    <!-- Tags/notes badge — teal→purple brand gradient, white ring for contrast -->
-                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
-                                            CornerRadius="12" Width="24" Height="24"
-                                            BorderBrush="#F2FFFFFF" BorderThickness="1.5"
+                                    <!-- Tags/notes badge — teal→purple brand gradient; click to edit tags & notes -->
+                                    <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
+                                            Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0"
+                                            ToolTip="Edit tags &amp; notes"
+                                            Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
+                                            CommandParameter="{Binding}"
                                             Visibility="{Binding HasAnnotation, Converter={StaticResource BoolToVis}}">
-                                        <Border.Background>
-                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                <GradientStop Color="{StaticResource FolderTealColor}" Offset="0" />
-                                                <GradientStop Color="{StaticResource LogoPurpleColor}" Offset="1" />
-                                            </LinearGradientBrush>
-                                        </Border.Background>
-                                        <Border.Effect>
-                                            <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="0" Opacity="0.55" />
-                                        </Border.Effect>
-                                        <TextBlock Text="🏷" FontSize="12" Foreground="White"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <ContentPresenter />
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                        <Border CornerRadius="12" Width="24" Height="24"
+                                                BorderBrush="#F2FFFFFF" BorderThickness="1.5">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="{StaticResource FolderTealColor}" Offset="0" />
+                                                    <GradientStop Color="{StaticResource LogoPurpleColor}" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                            <Border.Effect>
+                                                <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="0" Opacity="0.55" />
+                                            </Border.Effect>
+                                            <TextBlock Text="🏷" FontSize="12" Foreground="White"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                    </Button>
                                 </Grid>
                             </Border>
                             <TextBlock Text="{Binding Caption}" Foreground="{StaticResource CanvasMuted}"
@@ -686,8 +696,7 @@
                                 <Button Content="+" FontSize="15" Width="34" Click="OnPreviewZoomIn" Style="{StaticResource ToolButton}"
                                         ToolTip="Zoom in" />
                             </StackPanel>
-                            <Border x:Name="PreviewImageHost" Focusable="True" FocusVisualStyle="{x:Null}"
-                                    KeyDown="OnPreviewKeyDown"
+                            <Border x:Name="PreviewImageHost"
                                     ContextMenu="{StaticResource PreviewContextMenu}"
                                     Height="{Binding PreviewMode, Converter={StaticResource PreviewMode}, ConverterParameter=imgHeight}"
                                     CornerRadius="6" ClipToBounds="True" Background="#14141C">

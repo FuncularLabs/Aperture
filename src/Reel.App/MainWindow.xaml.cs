@@ -374,6 +374,7 @@ public partial class MainWindow : Window
 
     private double _previewZoom = 1;
     private bool _panning;
+    private bool _panDragged;
     private Point _panStart;
     private double _panH, _panV;
 
@@ -417,29 +418,12 @@ public partial class MainWindow : Window
 
     private void OnPreviewPanStart(object sender, MouseButtonEventArgs e)
     {
-        // Double-click the previewed image = the same launch as a tile double-click.
-        if (e.ClickCount == 2)
-        {
-            ViewModel?.OpenSelectedCommand.Execute(null);
-            e.Handled = true;
-            return;
-        }
-        PreviewImageHost.Focus(); // so Enter opens the previewed item
         _panning = true;
+        _panDragged = false;
         _panStart = e.GetPosition(PreviewScroll);
         _panH = PreviewScroll.HorizontalOffset;
         _panV = PreviewScroll.VerticalOffset;
         PreviewScroll.CaptureMouse();
-    }
-
-    /// <summary>Enter while the preview has focus launches the item, exactly like a tile.</summary>
-    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter)
-        {
-            ViewModel?.OpenSelectedCommand.Execute(null);
-            e.Handled = true;
-        }
     }
 
     private void OnPreviewPanMove(object sender, MouseEventArgs e)
@@ -447,14 +431,20 @@ public partial class MainWindow : Window
         if (!_panning)
             return;
         var p = e.GetPosition(PreviewScroll);
+        if (Math.Abs(p.X - _panStart.X) > 3 || Math.Abs(p.Y - _panStart.Y) > 3)
+            _panDragged = true;
         PreviewScroll.ScrollToHorizontalOffset(_panH - (p.X - _panStart.X));
         PreviewScroll.ScrollToVerticalOffset(_panV - (p.Y - _panStart.Y));
     }
 
     private void OnPreviewPanEnd(object sender, MouseButtonEventArgs e)
     {
+        var wasPanning = _panning;
         _panning = false;
         PreviewScroll.ReleaseMouseCapture();
+        // A click on the preview canvas (no drag) dismisses the pane; a drag pans the zoomed image.
+        if (wasPanning && !_panDragged)
+            ViewModel?.ClosePreviewCommand.Execute(null);
     }
 
     // --- Drag-and-drop folders to add as watched roots ---
