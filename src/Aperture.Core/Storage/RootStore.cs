@@ -1,81 +1,68 @@
-using Microsoft.Data.Sqlite;
 using Aperture.Core.Models;
 
 namespace Aperture.Core.Storage;
 
-/// <summary>CRUD for the <c>roots</c> table.</summary>
+/// <summary>
+/// CRUD for the <c>roots</c> table, via FunkyORM (Funcular Labs' own ORM). Maps the ticks-based
+/// <see cref="RootRow"/> entity to/from the DateTime-based <see cref="Root"/> domain model.
+/// </summary>
 public sealed class RootStore(ApertureDatabase database)
 {
     private readonly ApertureDatabase _db = database;
 
+    private static Root ToModel(RootRow r) => new()
+    {
+        Id = r.Id,
+        Path = r.Path,
+        Alias = r.Alias,
+        Included = r.Included,
+        ColorTag = r.ColorTag,
+        AddedUtc = new DateTime(r.AddedTicks, DateTimeKind.Utc),
+    };
+
     /// <summary>Inserts a root and returns it with its assigned id.</summary>
     public Root Add(Root root)
     {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO roots (path, alias, included, color_tag, added_ticks)
-            VALUES (@path, @alias, @included, @color, @added)
-            RETURNING id;
-            """;
-        cmd.Parameters.AddWithValue("@path", root.Path);
-        cmd.Parameters.AddWithValue("@alias", root.Alias);
-        cmd.Parameters.AddWithValue("@included", root.Included ? 1 : 0);
-        cmd.Parameters.AddWithValue("@color", (object?)root.ColorTag ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@added", root.AddedUtc.ToUniversalTime().Ticks);
-        root.Id = (long)cmd.ExecuteScalar()!;
+        var row = new RootRow
+        {
+            Path = root.Path,
+            Alias = root.Alias,
+            Included = root.Included,
+            ColorTag = root.ColorTag,
+            AddedTicks = root.AddedUtc.ToUniversalTime().Ticks,
+        };
+        root.Id = _db.Provider.Insert<RootRow, long>(row);
         return root;
     }
 
-    public List<Root> GetAll()
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, path, alias, included, color_tag, added_ticks
-            FROM roots
-            ORDER BY alias COLLATE NOCASE;
-            """;
-        using var reader = cmd.ExecuteReader();
-        var roots = new List<Root>();
-        while (reader.Read())
-        {
-            roots.Add(new Root
-            {
-                Id = reader.GetInt64(0),
-                Path = reader.GetString(1),
-                Alias = reader.GetString(2),
-                Included = reader.GetInt64(3) != 0,
-                ColorTag = reader.IsDBNull(4) ? null : reader.GetString(4),
-                AddedUtc = new DateTime(reader.GetInt64(5), DateTimeKind.Utc),
-            });
-        }
-        return roots;
-    }
+    public List<Root> GetAll() =>
+        _db.Provider.GetList<RootRow>()
+            .OrderBy(r => r.Alias, StringComparer.OrdinalIgnoreCase) // COLLATE NOCASE, in memory (roots are few)
+            .Select(ToModel)
+            .ToList();
 
     public void SetIncluded(long rootId, bool included)
     {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE roots SET included = @inc WHERE id = @id;";
-        cmd.Parameters.AddWithValue("@inc", included ? 1 : 0);
-        cmd.Parameters.AddWithValue("@id", rootId);
-        cmd.ExecuteNonQuery();
+        if (_db.Provider.Get<RootRow>(rootId) is { } row)
+        {
+            row.Included = included;
+            _db.Provider.Update(row);
+        }
     }
 
     public void SetAlias(long rootId, string alias)
     {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE roots SET alias = @alias WHERE id = @id;";
-        cmd.Parameters.AddWithValue("@alias", alias);
-        cmd.Parameters.AddWithValue("@id", rootId);
-        cmd.ExecuteNonQuery();
+        if (_db.Provider.Get<RootRow>(rootId) is { } row)
+        {
+            row.Alias = alias;
+            _db.Provider.Update(row);
+        }
     }
 
     /// <summary>
-    /// Returns the ids of all items owned by a root — callers use this to purge
-    /// the matching thumbnails before deleting the root (cross-DB cascade).
+    /// Ids of all items owned by a root — callers purge the matching thumbnails before deleting the
+    /// root (cross-DB cascade). Kept as a raw id projection: FunkyORM materializes whole entities, so
+    /// a large root would mean pulling every column just to read the key.
     /// </summary>
     public List<long> GetItemIds(long rootId)
     {
@@ -90,13 +77,19 @@ public sealed class RootStore(ApertureDatabase database)
         return ids;
     }
 
-    /// <summary>Deletes the root; its items cascade via foreign key.</summary>
+    /// <summary>Deletes the root; its items cascade via foreign key. (FunkyORM requires a transaction for deletes.)</summary>
     public void Remove(long rootId)
     {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM roots WHERE id = @id;";
-        cmd.Parameters.AddWithValue("@id", rootId);
-        cmd.ExecuteNonQuery();
+        _db.Provider.BeginTransaction();
+        try
+        {
+            _db.Provider.Delete<RootRow>(rootId);
+            _db.Provider.CommitTransaction();
+        }
+        catch
+        {
+            _db.Provider.RollbackTransaction();
+            throw;
+        }
     }
 }

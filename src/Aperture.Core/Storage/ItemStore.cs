@@ -1,9 +1,8 @@
-using Microsoft.Data.Sqlite;
 using Aperture.Core.Models;
 
 namespace Aperture.Core.Storage;
 
-/// <summary>Read queries over the <c>items</c> table. Bulk writes live in the indexer.</summary>
+/// <summary>Read queries over the <c>items</c> table, via FunkyORM. Bulk writes live in the indexer.</summary>
 public sealed class ItemStore(ApertureDatabase database)
 {
     private readonly ApertureDatabase _db = database;
@@ -11,7 +10,32 @@ public sealed class ItemStore(ApertureDatabase database)
     /// <summary>Lightweight row used to decide whether a file needs re-indexing.</summary>
     public readonly record struct ExistingItem(long Id, long MTimeTicks, long SizeBytes);
 
-    /// <summary>Maps rel_path -> existing row for one root, for incremental diffing.</summary>
+    private static MediaItem ToModel(ItemRow r) => new()
+    {
+        Id = r.Id,
+        RootId = r.RootId,
+        RelPath = r.RelPath,
+        FileName = r.FileName,
+        Ext = r.Ext,
+        SizeBytes = r.SizeBytes,
+        MTimeUtc = new DateTime(r.MtimeTicks, DateTimeKind.Utc),
+        TakenUtc = r.TakenTicks is { } t ? new DateTime(t, DateTimeKind.Unspecified) : null,
+        Width = r.Width,
+        Height = r.Height,
+        Camera = r.Camera,
+        Orientation = r.Orientation,
+        IndexedUtc = new DateTime(r.IndexedTicks, DateTimeKind.Utc),
+        Kind = (MediaKind)r.Kind,
+    };
+
+    // Default view order: EXIF-taken date (falling back to mtime) desc, then alias, then file name.
+    private static long SortKey(ItemRow r) => r.TakenTicks ?? r.MtimeTicks;
+
+    /// <summary>
+    /// Maps rel_path -> existing row for one root, for incremental diffing. Kept as a raw, four-column
+    /// projection: this runs on every index reconcile, so materializing whole entities (all columns,
+    /// for tens of thousands of rows) would be needlessly heavy.
+    /// </summary>
     public Dictionary<string, ExistingItem> GetExisting(long rootId)
     {
         using var conn = _db.OpenMetadata();
@@ -21,96 +45,37 @@ public sealed class ItemStore(ApertureDatabase database)
         using var reader = cmd.ExecuteReader();
         var map = new Dictionary<string, ExistingItem>(StringComparer.Ordinal);
         while (reader.Read())
-        {
-            map[reader.GetString(1)] = new ExistingItem(
-                reader.GetInt64(0), reader.GetInt64(2), reader.GetInt64(3));
-        }
+            map[reader.GetString(1)] = new ExistingItem(reader.GetInt64(0), reader.GetInt64(2), reader.GetInt64(3));
         return map;
     }
 
-    public int CountForRoot(long rootId)
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM items WHERE root_id = @root;";
-        cmd.Parameters.AddWithValue("@root", rootId);
-        return (int)(long)cmd.ExecuteScalar()!;
-    }
+    public int CountForRoot(long rootId) =>
+        _db.Provider.Query<ItemRow>().Where(i => i.RootId == rootId).Count();
 
     /// <summary>All items for a root, newest first. Convenience for tests and M2 wiring.</summary>
-    public List<MediaItem> GetForRoot(long rootId)
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, root_id, rel_path, file_name, ext, size_bytes, mtime_ticks,
-                   taken_ticks, width, height, camera, orientation, indexed_ticks, kind
-            FROM items
-            WHERE root_id = @root
-            ORDER BY COALESCE(taken_ticks, mtime_ticks) DESC;
-            """;
-        cmd.Parameters.AddWithValue("@root", rootId);
-        return Read(cmd);
-    }
+    public List<MediaItem> GetForRoot(long rootId) =>
+        _db.Provider.Query<ItemRow>().Where(i => i.RootId == rootId).ToList()
+            .OrderByDescending(SortKey)
+            .Select(ToModel)
+            .ToList();
 
     /// <summary>
-    /// All items belonging to <em>included</em> roots, joined with their root's
-    /// alias/color, newest first. This is the query that backs the grid. Sort is
-    /// EXIF-taken-date (falling back to mtime) descending, alias as a tiebreak —
-    /// M3 makes it configurable.
+    /// All items belonging to <em>included</em> roots, joined with their root's alias/color/path,
+    /// newest first — the query that backs the grid. FunkyORM resolves the roots join from the
+    /// <c>[RemoteProperty]</c> attributes on <see cref="LibraryRowEntity"/> (no hand-written JOIN).
+    /// The multi-level default order is applied in memory (the app re-sorts per the user's chosen sort).
     /// </summary>
-    public List<LibraryRow> GetIncludedUnion()
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT i.id, i.root_id, i.rel_path, i.file_name, i.ext, i.size_bytes, i.mtime_ticks,
-                   i.taken_ticks, i.width, i.height, i.camera, i.orientation, i.indexed_ticks, i.kind,
-                   r.alias, r.color_tag, r.path
-            FROM items i
-            JOIN roots r ON r.id = i.root_id
-            WHERE r.included = 1
-            ORDER BY COALESCE(i.taken_ticks, i.mtime_ticks) DESC, r.alias COLLATE NOCASE, i.file_name COLLATE NOCASE;
-            """;
-        using var reader = cmd.ExecuteReader();
-        var rows = new List<LibraryRow>();
-        while (reader.Read())
-        {
-            rows.Add(new LibraryRow
+    public List<LibraryRow> GetIncludedUnion() =>
+        _db.Provider.Query<LibraryRowEntity>().Where(x => x.RootIncluded).ToList()
+            .OrderByDescending(SortKey)
+            .ThenBy(x => x.RootAlias, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.FileName, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new LibraryRow
             {
-                Item = ReadItem(reader),
-                RootAlias = reader.GetString(14),
-                RootColor = reader.IsDBNull(15) ? null : reader.GetString(15),
-                RootPath = reader.GetString(16),
-            });
-        }
-        return rows;
-    }
-
-    private static MediaItem ReadItem(SqliteDataReader reader) => new()
-    {
-        Id = reader.GetInt64(0),
-        RootId = reader.GetInt64(1),
-        RelPath = reader.GetString(2),
-        FileName = reader.GetString(3),
-        Ext = reader.GetString(4),
-        SizeBytes = reader.GetInt64(5),
-        MTimeUtc = new DateTime(reader.GetInt64(6), DateTimeKind.Utc),
-        TakenUtc = reader.IsDBNull(7) ? null : new DateTime(reader.GetInt64(7), DateTimeKind.Unspecified),
-        Width = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-        Height = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-        Camera = reader.IsDBNull(10) ? null : reader.GetString(10),
-        Orientation = reader.IsDBNull(11) ? null : reader.GetInt32(11),
-        IndexedUtc = new DateTime(reader.GetInt64(12), DateTimeKind.Utc),
-        Kind = (MediaKind)reader.GetInt32(13),
-    };
-
-    private static List<MediaItem> Read(SqliteCommand cmd)
-    {
-        using var reader = cmd.ExecuteReader();
-        var items = new List<MediaItem>();
-        while (reader.Read())
-            items.Add(ReadItem(reader));
-        return items;
-    }
+                Item = ToModel(x),
+                RootAlias = x.RootAlias,
+                RootColor = x.RootColor,
+                RootPath = x.RootPath,
+            })
+            .ToList();
 }

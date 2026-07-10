@@ -1,8 +1,14 @@
+<p align="center"><img src="docs/logo.png" width="120" alt="Aperture Image Viewer logo"></p>
+
 # Aperture Image Viewer
 
 A fast, local image & video browser for Windows. It replaces File Explorer for the
 "just let me look at my photos" case — no multi-second waits on big, image-heavy
 folders like a Dropbox *Camera Uploads* or a *Screenshots* dump.
+
+> Built by [Funcular Labs](https://github.com/FuncularLabs) as a real-world showcase for
+> **[FunkyORM](https://github.com/FuncularLabs/Funcular.FunkyOrm)**, our .NET micro-ORM —
+> Aperture's SQLite data access runs on it.
 
 Aperture keeps a **persistent local index + thumbnail cache**, so the first scan of a
 folder is the only slow one; every open after that paints instantly. Everything stays
@@ -88,9 +94,13 @@ to reset from scratch. Set the `APERTURE_DATA_DIR` environment variable to reloc
   import/export round-trip, and the data migration.
 
 Thumbnails decode with **SkiaSharp** (JPEG/PNG/HEIC/WEBP) with a Windows shell fallback for
-exotic formats and video frames. EXIF via **MetadataExtractor**. Storage is raw
-**Microsoft.Data.Sqlite** (metadata and thumbnail BLOBs split into two files so BLOBs don't
-bloat the metadata page cache).
+exotic formats and video frames. EXIF via **MetadataExtractor**.
+
+Storage is **SQLite**, with the roots/items data access running on
+**[FunkyORM](https://github.com/FuncularLabs/Funcular.FunkyOrm)** (Funcular Labs' own micro-ORM) —
+the grid's union query is resolved via FunkyORM's `[RemoteProperty]` join attributes rather than
+hand-written SQL. Schema DDL and the thumbnail BLOB store use raw `Microsoft.Data.Sqlite` (metadata
+and thumbnail BLOBs live in two files so BLOBs don't bloat the metadata page cache).
 
 ---
 

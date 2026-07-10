@@ -1,3 +1,4 @@
+using Funcular.Data.Orm.Sqlite;
 using Microsoft.Data.Sqlite;
 
 namespace Aperture.Core.Storage;
@@ -20,6 +21,7 @@ public sealed class ApertureDatabase
 
     private readonly string _metadataConnectionString;
     private readonly string _thumbnailConnectionString;
+    private SqliteOrmDataProvider? _provider;
 
     public ApertureDatabase(string directory)
     {
@@ -34,6 +36,7 @@ public sealed class ApertureDatabase
             DataSource = MetadataPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = true,
+            ForeignKeys = true, // FunkyORM's own connections must cascade items when a root is deleted
         }.ToString();
 
         _thumbnailConnectionString = new SqliteConnectionStringBuilder
@@ -43,6 +46,14 @@ public sealed class ApertureDatabase
             Pooling = true,
         }.ToString();
     }
+
+    /// <summary>
+    /// Shared FunkyORM provider over the metadata DB — the roots/items stores use this for
+    /// CRUD and queries (dogfooding Funcular Labs' own ORM). WAL/pragmas are applied to the
+    /// file in <see cref="Initialize"/>; WAL persists in the DB header, so pooled provider
+    /// connections inherit it. Non-transactional ops each take their own pooled connection.
+    /// </summary>
+    public SqliteOrmDataProvider Provider => _provider ??= new SqliteOrmDataProvider(_metadataConnectionString);
 
     /// <summary>Opens a metadata connection with WAL + pragmas applied.</summary>
     public SqliteConnection OpenMetadata() => Open(_metadataConnectionString);
