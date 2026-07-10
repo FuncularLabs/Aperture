@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aperture.Core\Aperture.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="VirtualizingWrapPanel" Version="2.5.2" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\aperture.ico</ApplicationIcon>
+    <AssemblyName>Aperture</AssemblyName>
+    <Version>0.6.0</Version>
+    <AssemblyTitle>Aperture Image Viewer</AssemblyTitle>
+    <Product>Aperture Image Viewer</Product>
+    <Description>A fast local image &amp; video browser for Windows.</Description>
+    <Company>Aperture Image Viewer</Company>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\aperture.ico" />
+    <Resource Include="Assets\mascot.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

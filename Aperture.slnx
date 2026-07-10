@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Aperture.App/Aperture.App.csproj" />
+  </Folder>
+</Solution>

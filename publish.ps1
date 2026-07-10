@@ -1,4 +1,4 @@
-# Publishes Reel as a framework-dependent Windows app into .\publish\.
+# Publishes Aperture as a framework-dependent Windows app into .\publish\.
 # Requires the .NET 10 Desktop Runtime on the target machine.
 #
 # Usage:  pwsh ./publish.ps1            (framework-dependent, small)
@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $out = Join-Path $PSScriptRoot "publish"
 
 $args = @(
-    "publish", (Join-Path $PSScriptRoot "src/Reel.App/Reel.App.csproj"),
+    "publish", (Join-Path $PSScriptRoot "src/Aperture.App/Aperture.App.csproj"),
     "-c", "Release",
     "-r", "win-x64",
     "-o", $out,
@@ -25,7 +25,7 @@ if ($SelfContained) {
     $args += @("--self-contained", "false")
 }
 
-Write-Host "Publishing Reel ($([bool]$SelfContained ? 'self-contained' : 'framework-dependent'))..." -ForegroundColor Cyan
+Write-Host "Publishing Aperture ($([bool]$SelfContained ? 'self-contained' : 'framework-dependent'))..." -ForegroundColor Cyan
 & dotnet @args
 
-Write-Host "`nDone -> $out\Reel.App.exe" -ForegroundColor Green
+Write-Host "`nDone -> $out\Aperture.exe" -ForegroundColor Green

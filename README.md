@@ -74,9 +74,9 @@ Explicit non-goals for v1: edit, rate, tag, face detection, cloud sync, video tr
 
 ## Architecture
 
-- **`Reel.Core`** — indexer, watcher, thumbnail pipeline, SQLite schema, models. No WPF references. Testable in isolation.
-- **`Reel.App`** — WPF UI, ViewModels, virtualization, hotkeys, settings persistence.
-- **`Reel.Core.Tests`** — xUnit tests around the indexer and token/caption/sort engine.
+- **`Aperture.Core`** — indexer, watcher, thumbnail pipeline, SQLite schema, models. No WPF references. Testable in isolation.
+- **`Aperture.App`** — WPF UI, ViewModels, virtualization, hotkeys, settings persistence.
+- **`Aperture.Core.Tests`** — xUnit tests around the indexer and token/caption/sort engine.
 
 Thumbnail decode: SkiaSharp for JPEG/PNG/HEIC/WEBP. Windows `IThumbnailProvider` fallback for exotic formats.
 
@@ -92,7 +92,7 @@ Small, working slice at each milestone. Each ends with an app you can actually u
 
 ### M1 — Indexer & thumbnail cache ✅ done
 The engine, headless.
-- Root model + SQLite schema. **Build decision:** one central store (`%LOCALAPPDATA%\Reel\`) with a `root_id` column rather than a DB file per root — union queries are the core feature and are trivial against a single table. Metadata (`reel.db`) and thumbnail BLOBs (`thumbs.db`) are split into two files so BLOBs don't pollute the metadata page cache.
+- Root model + SQLite schema. **Build decision:** one central store (`%LOCALAPPDATA%\Reel\`) with a `root_id` column rather than a DB file per root — union queries are the core feature and are trivial against a single table. Metadata (`aperture.db`) and thumbnail BLOBs (`thumbs.db`) are split into two files so BLOBs don't pollute the metadata page cache.
 - Background scanner: fault-tolerant recursive enumerate, extract EXIF (capture date, camera, orientation), capture size + mtime, upsert.
 - Thumbnail pipeline: single SkiaSharp decode → orientation-corrected → resize to 3 sizes (128/256/512) → store JPEG BLOB.
 - `FileSystemWatcher` with 500 ms debounce coalescing bursts into one re-index trigger.
@@ -141,7 +141,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Quick-look overlay** (`Space`): full-res image on a dim backdrop, `←/→` to move, `Esc`/click to close; videos show their large thumbnail.
 - Root **alias rename** (double-click or right-click → Rename), persisted; captions update.
 - **Settings pane** (popup): video toggle, date grouping, caption format, sort presets, hidden-folder reset.
-- **Persistence**: window size/position/maximized and zoom restored across runs (`settings.json`). `REEL_DATA_DIR` env var relocates the store.
+- **Persistence**: window size/position/maximized and zoom restored across runs (`settings.json`). `APERTURE_DATA_DIR` env var relocates the store.
 - `publish.ps1` — framework-dependent (default) or `-SelfContained` single-file publish.
 
 **Deferred/refinement:** color tags, section-expansion persistence, per-root zoom, cache-cap/thumb-size settings, MSIX packaging.
@@ -171,7 +171,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 ### Feedback round 4 ✅ done
 - **Branding**: larger logo + "Reel" wordmark in the toolbar; the window title shows the current folder's full path.
 - **Tree order**: subfolders sort name-**descending** by default (year folders newest-first).
-- **Tags & Notes** (`Ctrl+T` or right-click → "Tags & notes…"): one dialog with a tag chip editor (type to add, pick from suggestions, ✕ to remove — new tags grow the suggestion list) and a free-text note. Stored keyed by path in `reel.db` (survive re-index / root re-add). Annotated tiles show a 🏷 badge; tooltip shows tags + note.
+- **Tags & Notes** (`Ctrl+T` or right-click → "Tags & notes…"): one dialog with a tag chip editor (type to add, pick from suggestions, ✕ to remove — new tags grow the suggestion list) and a free-text note. Stored keyed by path in `aperture.db` (survive re-index / root re-add). Annotated tiles show a 🏷 badge; tooltip shows tags + note.
 - **Gmail-style search**: `tag:x`, `note:x`, `has:tag`/`has:note`, `is:video`/`is:image`/`is:tagged`, `type:mp4`, `name:`, `camera:`, `folder:`, quoted values (`tag:"date night"`); bare words match name/alias/camera/tags/note; terms are AND-ed. Search is now global across the library. Core-tested.
 
 ### Feedback round 5 ✅ done
@@ -193,13 +193,13 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Tag/note on many items at once** (`Ctrl+T` or right-click → "Tags & notes…" with several selected):
   - **Tags** show as an aggregate. A tag on *every* selected item is solid; a tag on *some* shows a **dashed outline** with a "Pertains to K of N selected" tooltip. **Adding** a tag applies it to all; the **✕** removes it from all that have it.
   - **Notes**: the field shows the majority note; saving applies it to every item that has that note **or no note**. Items carrying a *different* note are called out ("N selected items have different notes — they won't be changed") and left untouched, so a bulk note edit never clobbers a distinct note.
-- Multi-item merge rules live in `Reel.Core.Annotations.AnnotationMerge` and are unit-tested (add/remove/case-folding, note majority + exclusion).
+- Multi-item merge rules live in `Aperture.Core.Annotations.AnnotationMerge` and are unit-tested (add/remove/case-folding, note majority + exclusion).
 
 ### Feedback round 8 ✅ done
 - **Tags ordered by recency of use.** A per-tag last-used timestamp (`tag_stats`) is bumped whenever a tag is *added* to an item (never on removal). Tag lists — dialog chips + suggestions and the tag manager — now sort most-recently-used first. Recency is a per-tag (lookup-level) fact, not per (item, tag). Existing libraries are backfilled from current usage.
 - **Medium-dark canvas.** The left folder pane and the tile grid use a medium-dark theme (approaching VS dark, a touch lighter — `#22252B` / `#282B32`), with light text, legible captions/section headers, and dark-appropriate selection/hover. The toolbar, status bar, and dialogs stay light.
 - **Folder tree expanded by default** — every node is expanded on load (and after background rebuilds).
-- **Search quick-picks.** Focusing the search box pops up your top tags. When usage is highly skewed (a few tags dominate) it offers the **most-used**; otherwise it offers the **most-recent** — a distribution the code decides ([`TagQuickPicks`](src/Reel.Core/Annotations/TagQuickPicks.cs)). Clicking one adds a `tag:` clause.
+- **Search quick-picks.** Focusing the search box pops up your top tags. When usage is highly skewed (a few tags dominate) it offers the **most-used**; otherwise it offers the **most-recent** — a distribution the code decides ([`TagQuickPicks`](src/Aperture.Core/Annotations/TagQuickPicks.cs)). Clicking one adds a `tag:` clause.
 - **`tag:` search is OR.** Multiple `tag:` clauses match items with *any* of them (e.g. `tag:beach tag:city`), still AND-ed with non-tag terms.
 
 ### Feedback round 9 ✅ done
@@ -207,7 +207,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 
 ### Feedback round 10 ✅ done — rebrand + inspector
 - **Renamed to Aperture** with a new aperture-iris logo (purple metallic blades + motion lines). The data directory stays `%LOCALAPPDATA%\Reel` so the existing index/annotations carry over untouched.
-- **Preview / inspector pane** (toolbar "◧ Preview" toggle): shows the selected item large with **zoom** (wheel or −/Fit/1:1/+) and **pan** (drag), its **tags & notes** (with an inline "Edit tags & notes…" that opens the editor), and full **metadata/EXIF** — dimensions, size, dates, plus camera/lens/exposure/ISO/GPS read on demand ([`MetadataReader.ReadExifSummary`](src/Reel.Core/Media/MetadataReader.cs)).
+- **Preview / inspector pane** (toolbar "◧ Preview" toggle): shows the selected item large with **zoom** (wheel or −/Fit/1:1/+) and **pan** (drag), its **tags & notes** (with an inline "Edit tags & notes…" that opens the editor), and full **metadata/EXIF** — dimensions, size, dates, plus camera/lens/exposure/ISO/GPS read on demand ([`MetadataReader.ReadExifSummary`](src/Aperture.Core/Media/MetadataReader.cs)).
 - **Open containing folder** on the tile context menu (reveals the file in Explorer).
 - **Sync-status pill** in the top bar: "N items · up to date", or the live "Indexing…" progress.
 - **Drag-and-drop folders** onto the window to add them as watched roots.
@@ -230,7 +230,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Preview pane can dock right, bottom, or off** — the toolbar button cycles through the three; the tags & notes band is more prominent (larger text on a lighter gray rectangle).
 
 ### Feedback round 13 ✅ done
-- **Hyphenated tags**: multi-word tags are normalized to hyphens (`date night` → `date-night`) on entry, on save, and for `tag:` search values ([`TagNormalizer`](src/Reel.Core/Annotations/TagNormalizer.cs)). Existing libraries are migrated once (guarded by `PRAGMA user_version`).
+- **Hyphenated tags**: multi-word tags are normalized to hyphens (`date night` → `date-night`) on entry, on save, and for `tag:` search values ([`TagNormalizer`](src/Aperture.Core/Annotations/TagNormalizer.cs)). Existing libraries are migrated once (guarded by `PRAGMA user_version`).
 - **Grid reflows on preview open** (the horizontal scrollbar was making tiles unreachable) — the thumbnail wrap panel now re-columns to the narrower width when the right preview opens, so nothing is clipped.
 - **Bottom preview uses the margins**: tags/notes on the left, image + zoom in the center, metadata on the right (right dock stays stacked). One set of controls, repositioned by a `PreviewModeConverter`-driven grid.
 - **Removable tags in the preview** (a ✕ on each chip) and **correct zoom-button glyphs** (− / + were rendering blank).
@@ -244,7 +244,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Quick-pick click fixed.** Clicking a tag chip under the search box silently did nothing (the click-outside dismiss handler and the box's focus-lost handler were both closing the popup before the chip's command ran). Both now exempt the quick-pick panel, so a chip click applies its `tag:` clause again.
 - **Prominent video play badge** — a centered, larger translucent play button (with a subtle ring + drop shadow) replaces the small bottom-left corner glyph, so videos read as videos at a glance.
 - **Prominent tag badge** — the 🏷 annotation badge (top-right) is bigger, with an accent ring and drop shadow.
-- **Import / export tags & notes** (☰ menu). Export writes every annotation to a portable JSON file carrying **actual tag text** plus both the absolute path and a **root-relative** locator (root alias + path under the root). Import is an **upsert**: it remaps each entry to local content (alias match → same relative path under any root → original absolute path), **unions** tags into any existing annotation and fills an empty note (a differing note is appended, never overwritten) — so nothing is clobbered and re-importing is idempotent. Built for moving annotations between profiles/machines. Core-tested (round-trip remap + merge + idempotency; unresolved/skip counts). ([`AnnotationTransfer`](src/Reel.Core/Annotations/AnnotationTransfer.cs))
+- **Import / export tags & notes** (☰ menu). Export writes every annotation to a portable JSON file carrying **actual tag text** plus both the absolute path and a **root-relative** locator (root alias + path under the root). Import is an **upsert**: it remaps each entry to local content (alias match → same relative path under any root → original absolute path), **unions** tags into any existing annotation and fills an empty note (a differing note is appended, never overwritten) — so nothing is clobbered and re-importing is idempotent. Built for moving annotations between profiles/machines. Core-tested (round-trip remap + merge + idempotency; unresolved/skip counts). ([`AnnotationTransfer`](src/Aperture.Core/Annotations/AnnotationTransfer.cs))
 
 ### Feedback round 16 ✅ done — title version + preview parity
 - **Version in the title bar** — the window title now reads `Aperture vX.Y.Z  —  <folder>` (was just `Aperture — <folder>`).
@@ -258,7 +258,7 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 - **Tag badge is higher-contrast and on-brand** — the 🏷 annotation badge is now a teal→purple gradient (the folder-icon teal `#3FC2B6` into the app-logo purple `#744DA9`) with a white ring and drop shadow, instead of a dark chip with a blue ring.
 
 ### Feedback round 18 ✅ done — tag dialog + preview polish
-- **Tags & Notes dialog**: the note field now keeps a **minimum height** so it's always usable, and the **Suggestions** list starts ~2 rows tall, **scrolls**, and has a **Show all / Show less** toggle. Suggestions are ordered by the same **blended popularity-vs-recency** rank as the search quick-picks ([`TagQuickPicks.Order`](src/Reel.Core/Annotations/TagQuickPicks.cs)).
+- **Tags & Notes dialog**: the note field now keeps a **minimum height** so it's always usable, and the **Suggestions** list starts ~2 rows tall, **scrolls**, and has a **Show all / Show less** toggle. Suggestions are ordered by the same **blended popularity-vs-recency** rank as the search quick-picks ([`TagQuickPicks.Order`](src/Aperture.Core/Annotations/TagQuickPicks.cs)).
 - **Click the preview canvas to dismiss it** — a click (no drag) anywhere on the inspector preview's image area closes the pane; dragging still pans a zoomed image. (The full-screen quick-view keeps its own double-click-to-open + right-click menu.)
 - **The 🏷 tile badge opens Tags & Notes** — clicking the badge in a tile's upper-right edits that item's tags & notes.
 
@@ -279,10 +279,10 @@ Verified: an Android H.264 clip that shows the VLC cone in Explorer renders its 
 ```
 Reel.sln
 src/
-  Reel.Core/    class lib, net10.0
-  Reel.App/     WPF app,  net10.0-windows
+  Aperture.Core/    class lib, net10.0
+  Aperture.App/     WPF app,  net10.0-windows
 tests/
-  Reel.Core.Tests/  xUnit, net10.0
+  Aperture.Core.Tests/  xUnit, net10.0
 ```
 
 ## Getting started
@@ -290,14 +290,14 @@ tests/
 ```powershell
 dotnet build
 dotnet test
-dotnet run --project src\Reel.App
+dotnet run --project src\Aperture.App
 
 # Build a distributable exe (needs .NET 10 Desktop Runtime on the target):
 pwsh ./publish.ps1                 # framework-dependent
 pwsh ./publish.ps1 -SelfContained  # bundles the runtime
 ```
 
-Data lives in `%LOCALAPPDATA%\Reel\` (`reel.db`, `thumbs.db`, `settings.json`). Delete that folder to reset. Set `REEL_DATA_DIR` to relocate it.
+Data lives in `%LOCALAPPDATA%\Reel\` (`aperture.db`, `thumbs.db`, `settings.json`). Delete that folder to reset. Set `APERTURE_DATA_DIR` to relocate it.
 
 ## Status
 

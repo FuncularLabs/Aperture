@@ -3,7 +3,7 @@
   <!--
     Override the transitive SQLitePCLRaw native bundle. Microsoft.Data.Sqlite 10.0.9
     pulls in bundle_e_sqlite3 2.1.11, which carries GHSA-2m69-gcr7-jv3q (high). The fix
-    ships in the 3.0.x line. This pin is verified against the Reel.Core test suite
+    ships in the 3.0.x line. This pin is verified against the Aperture.Core test suite
     (real SQLite read/write/BLOB round-trips) — revisit when Microsoft.Data.Sqlite
     references a patched bundle itself.
   -->
