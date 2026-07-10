@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Funcular.Data.Orm.Attributes;
 
@@ -39,6 +40,25 @@ public class ItemRow
     public int? Orientation { get; set; }
     [Column("indexed_ticks")] public long IndexedTicks { get; set; }
     public int Kind { get; set; }
+}
+
+/// <summary>The <c>annotations</c> table (tags + note per file, keyed by path).</summary>
+[Table("annotations")]
+public class AnnotationRow
+{
+    [Key] public string Path { get; set; } = "";     // string PK — [Key] since it's not the Id convention
+    public string Tags { get; set; } = "[]";          // JSON array of tag strings
+    public string Note { get; set; } = "";
+    [Column("updated_ticks")] public long UpdatedTicks { get; set; }
+}
+
+/// <summary>The <c>tag_stats</c> table (per-tag recency/use, keyed by name).</summary>
+[Table("tag_stats")]
+public class TagStatRow
+{
+    [Key] public string Name { get; set; } = "";      // string PK
+    [Column("last_used_ticks")] public long LastUsedTicks { get; set; }
+    [Column("use_count")] public int UseCount { get; set; }
 }
 
 /// <summary>

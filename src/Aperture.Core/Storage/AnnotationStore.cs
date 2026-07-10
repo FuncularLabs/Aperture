@@ -23,36 +23,17 @@ public sealed class AnnotationStore
         _stats = new TagStatsStore(database);
     }
 
-    public Annotation Get(string path)
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tags, note FROM annotations WHERE path = @p;";
-        cmd.Parameters.AddWithValue("@p", path);
-        using var reader = cmd.ExecuteReader();
-        return reader.Read()
-            ? new Annotation { Tags = ParseTags(reader.GetString(0)), Note = reader.GetString(1) }
+    public Annotation Get(string path) =>
+        _db.Provider.Get<AnnotationRow>(path) is { } r
+            ? new Annotation { Tags = ParseTags(r.Tags), Note = r.Note }
             : Annotation.Empty;
-    }
 
     /// <summary>Every annotation keyed by path — loaded once and cached by the UI.</summary>
-    public Dictionary<string, Annotation> GetAll()
-    {
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT path, tags, note FROM annotations;";
-        using var reader = cmd.ExecuteReader();
-        var map = new Dictionary<string, Annotation>(StringComparer.OrdinalIgnoreCase);
-        while (reader.Read())
-        {
-            map[reader.GetString(0)] = new Annotation
-            {
-                Tags = ParseTags(reader.GetString(1)),
-                Note = reader.GetString(2),
-            };
-        }
-        return map;
-    }
+    public Dictionary<string, Annotation> GetAll() =>
+        _db.Provider.GetList<AnnotationRow>()
+            .ToDictionary(r => r.Path,
+                          r => new Annotation { Tags = ParseTags(r.Tags), Note = r.Note },
+                          StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Distinct tags across all files, for pick lists / autocomplete.</summary>
     public List<string> GetAllTags()
@@ -182,27 +163,39 @@ public sealed class AnnotationStore
         var existing = Get(path).Tags;
         var added = cleanTags.Where(t => !existing.Any(e => Ci.Equals(e, t))).ToList();
 
-        using var conn = _db.OpenMetadata();
-        using var cmd = conn.CreateCommand();
+        var p = _db.Provider;
 
+        // Nothing left to store → remove the row (FunkyORM requires a transaction for deletes).
         if (cleanTags.Count == 0 && cleanNote.Length == 0)
         {
-            cmd.CommandText = "DELETE FROM annotations WHERE path = @p;";
-            cmd.Parameters.AddWithValue("@p", path);
-            cmd.ExecuteNonQuery();
+            p.BeginTransaction();
+            try
+            {
+                p.Delete<AnnotationRow>(a => a.Path == path);
+                p.CommitTransaction();
+            }
+            catch
+            {
+                p.RollbackTransaction();
+                throw;
+            }
             return;
         }
 
-        cmd.CommandText = """
-            INSERT INTO annotations (path, tags, note, updated_ticks)
-            VALUES (@p, @tags, @note, @ticks)
-            ON CONFLICT(path) DO UPDATE SET tags = excluded.tags, note = excluded.note, updated_ticks = excluded.updated_ticks;
-            """;
-        cmd.Parameters.AddWithValue("@p", path);
-        cmd.Parameters.AddWithValue("@tags", JsonSerializer.Serialize(cleanTags));
-        cmd.Parameters.AddWithValue("@note", cleanNote);
-        cmd.Parameters.AddWithValue("@ticks", DateTime.UtcNow.Ticks);
-        cmd.ExecuteNonQuery();
+        // Upsert keyed by path (string [Key]): update in place, else insert.
+        var json = JsonSerializer.Serialize(cleanTags);
+        var now = DateTime.UtcNow.Ticks;
+        if (p.Get<AnnotationRow>(path) is { } row)
+        {
+            row.Tags = json;
+            row.Note = cleanNote;
+            row.UpdatedTicks = now;
+            p.Update(row);
+        }
+        else
+        {
+            p.Insert(new AnnotationRow { Path = path, Tags = json, Note = cleanNote, UpdatedTicks = now });
+        }
 
         if (added.Count > 0)
             _stats.RecordUse(added);
