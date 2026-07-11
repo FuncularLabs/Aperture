@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Determine tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.tag }}'
+          } else {
+            $env:GITHUB_REF_NAME
+          }
+          if (-not $tag) { throw "No tag provided." }
+          $version = $tag -replace '^v',''
+          # Numeric base for assembly/file version (strip any -prerelease suffix).
+          $base = ($version -split '-')[0]
+          $isPre = $version -match '-'
+          "tag=$tag"          >> $env:GITHUB_OUTPUT
+          "version=$version"  >> $env:GITHUB_OUTPUT
+          "base=$base"        >> $env:GITHUB_OUTPUT
+          "prerelease=$($isPre.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "Building $tag (base=$base, prerelease=$isPre)"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Aperture.slnx
+
+      - name: Test
+        run: dotnet test tests/Aperture.Core.Tests/Aperture.Core.Tests.csproj -c Release --verbosity minimal
+
+      - name: Publish framework-dependent single-file
+        shell: pwsh
+        run: |
+          dotnet publish src/Aperture.App/Aperture.App.csproj `
+            -c Release -r win-x64 --self-contained false `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=none -p:DebugSymbols=false `
+            -p:Version=${{ steps.tag.outputs.base }} `
+            -p:InformationalVersion=${{ steps.tag.outputs.version }} `
+            --nologo
+
+      - name: Stage asset
+        id: stage
+        shell: pwsh
+        run: |
+          $src = "src/Aperture.App/bin/Release/net10.0-windows/win-x64/publish/Aperture.exe"
+          if (-not (Test-Path $src)) { throw "Published exe not found at $src" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $dest = "dist/Aperture-${{ steps.tag.outputs.tag }}-win-x64.exe"
+          Copy-Item $src $dest -Force
+          $size = (Get-Item $dest).Length
+          "asset=$dest" >> $env:GITHUB_OUTPUT
+          "sizeMB=$([Math]::Round($size / 1MB, 2))" >> $env:GITHUB_OUTPUT
+
+      # ===== Authenticode signing via Azure Trusted Signing =====
+      # Shared Funcular Labs account (same one Markdown Midget uses). The service principal in the
+      # AZURE_* secrets already holds the Certificate Profile Signer role; only --description differs.
+      - name: Install azuretrustedsigntool
+        run: dotnet tool install --global azuretrustedsigntool
+
+      - name: Locate signtool.exe (Windows SDK, preinstalled on windows-latest)
+        id: signtool
+        shell: pwsh
+        run: |
+          $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+                    -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -like "*\x64\*" } |
+                  Sort-Object FullName -Descending |
+                  Select-Object -First 1
+          if (-not $tool) { throw "signtool.exe not found on runner" }
+          Write-Host "signtool: $($tool.FullName)"
+          "path=$($tool.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Sign the exe (Azure Trusted Signing)
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        shell: pwsh
+        run: |
+          # NB: use long-form --signtoolexe; the tool's short -e is double-registered and throws.
+          azuretrustedsigntool sign `
+            --file "${{ steps.stage.outputs.asset }}" `
+            --accountname func-az-artifact-signing `
+            --profilename funcular-labs-public-trust `
+            --trustedendpoint https://cus.codesigning.azure.net/ `
+            --signtoolexe "${{ steps.signtool.outputs.path }}" `
+            --description "Aperture Image Viewer" `
+            --verbose
+
+      - name: Verify Authenticode signature
+        shell: pwsh
+        run: |
+          & "${{ steps.signtool.outputs.path }}" verify /pa /v "${{ steps.stage.outputs.asset }}"
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verify failed (exit $LASTEXITCODE)" }
+          $sig = Get-AuthenticodeSignature "${{ steps.stage.outputs.asset }}"
+          Write-Host "Status:  $($sig.Status)"
+          Write-Host "Subject: $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "Signature status is $($sig.Status), expected Valid" }
+
+      - name: Build release notes from CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.tag.outputs.version }}"
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $sizeMB = "${{ steps.stage.outputs.sizeMB }}"
+
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          $end = $lines.Count
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($start -lt 0 -and $lines[$i] -match "^##\s+\[$([regex]::Escape($version))\]") {
+              $start = $i + 1
+              continue
+            }
+            if ($start -ge 0 -and $lines[$i] -match '^##\s+\[') {
+              $end = $i; break
+            }
+          }
+          if ($start -lt 0) {
+            Write-Warning "No CHANGELOG entry for [$version]; using generic notes."
+            $body = "See [CHANGELOG.md](https://github.com/FuncularLabs/Aperture/blob/main/CHANGELOG.md) for full history."
+          } else {
+            $body = ($lines[$start..($end-1)] -join "`n").TrimEnd()
+            $body += "`n`nSee [CHANGELOG.md](https://github.com/FuncularLabs/Aperture/blob/main/CHANGELOG.md) for full history."
+          }
+
+          $boilerplate = @(
+            ''
+            '## Download'
+            ''
+            "**``Aperture-$tag-win-x64.exe``** — single-file, framework-dependent build (~$sizeMB MB)."
+            ''
+            '## Requirements'
+            ''
+            '- **Windows 10/11 (x64)**'
+            '- **.NET 10 Desktop Runtime** — https://dotnet.microsoft.com/download/dotnet/10.0'
+            ''
+            '## Notes'
+            ''
+            '- The download is **signed** by Funcular Labs via Azure Trusted Signing (Authenticode). If Windows SmartScreen warns on a very new release, the reputation graph builds up quickly for signed installers.'
+            '- Your index/thumbnail cache lives under `%LocalAppData%\Aperture` and never leaves your machine.'
+          ) -join "`n"
+
+          $full = $body + "`n" + $boilerplate
+          Set-Content -Path release-notes.md -Value $full -Encoding utf8
+          "Extracted notes (first 400 chars):"
+          $full.Substring(0, [Math]::Min(400, $full.Length))
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Aperture Image Viewer ${{ steps.tag.outputs.tag }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+          files: ${{ steps.stage.outputs.asset }}
+          fail_on_unmatched_files: true

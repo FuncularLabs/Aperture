@@ -1,8 +1,7 @@
-# Publishing to GitHub — 1-2-3
+# Publishing to GitHub
 
-Prep only. **Nothing here has been run** — creating/pushing the repo waits for a go.
-
-Repo target: **`github.com/FuncularLabs/Aperture`** (public, no release/package yet).
+Repo: **`github.com/FuncularLabs/Aperture`** — **private** for now (flip to public when ready).
+CI (`.github/workflows/ci.yml`) and a signed release pipeline (`release.yml`) are in the tree.
 
 ## Pre-flight (already done ✓)
 - `LICENSE` — MIT, **© 2026 Funcular Labs**.
@@ -15,12 +14,11 @@ Repo target: **`github.com/FuncularLabs/Aperture`** (public, no release/package 
 
 ## Do-before-push checklist
 - [x] Copyright holder set to **Funcular Labs** (LICENSE + csproj).
-- [x] Version bumped to **0.7.0** (minor — FunkyORM dogfood + rebrand finish).
+- [x] Version set to **0.7.0-beta1** (first public beta).
+- [x] CI + signed release workflows added.
 - [ ] Rename the local folder `C:\code\Reel` → `C:\code\Aperture` (close any IDE/app holding it first):
       `Rename-Item C:\code\Reel C:\code\Aperture`  — git history is preserved (the `.git` dir moves with it).
-- [ ] Run a clean `dotnet build Aperture.slnx -c Debug` + `dotnet test` (currently green, 87 tests).
-- [ ] Adversarial pass over the branch (per house rules) before the push.
-- [ ] Remove throwaway `_recovery/` if no longer needed (gitignored, but tidy).
+- [ ] Add the three `AZURE_*` signing secrets (org-level or on the repo) so the release job can sign — see below.
 
 ## Code signing (Authenticode) — reuse the Funcular Labs Trusted Signing account
 Aperture reuses the **same** Azure Trusted Signing setup as Markdown Midget — Trusted Signing has no
@@ -38,24 +36,16 @@ and signs any number of that publisher's products. Nothing new needs to be provi
   it's a shared publisher signing resource. Retag to reflect that — e.g. drop `Product` and add
   `Purpose: code-signing`, `Scope: funcular-labs-shared`. Tags are inventory-only; they do **not** gate
   which products can be signed, so this is cosmetic/accuracy, not a functional requirement.
-- The Aperture release workflow will mirror Markdown Midget's `.github/workflows/release.yml` minus the
-  Node/editor-bundle steps (Aperture has no JS editor). Deferred to the CI/release step below.
+- The release workflow (`.github/workflows/release.yml`) mirrors Markdown Midget's, minus the Node/editor
+  steps: it publishes a framework-dependent single-file `Aperture.exe`, signs it with `--description
+  "Aperture Image Viewer"`, and attaches it to a GitHub Release built from `CHANGELOG.md`.
 
-## 1-2-3 (run when given the go)
-
-```powershell
-# 1) Create the empty public repo on GitHub (no README/license — we have our own)
-gh repo create FuncularLabs/Aperture --public --description "A fast, local image & video browser for Windows — a FunkyORM showcase."
-
-# 2) Point the local repo at it (from C:\code\Aperture, after the folder rename above)
-cd C:\code\Aperture
-git remote add origin https://github.com/FuncularLabs/Aperture.git
-
-# 3) Push main
-git push -u origin main
-```
+## Cutting a release
+1. Ensure `CHANGELOG.md` has a `## [<version>]` section for the version.
+2. Tag and push: `git tag v0.7.0-beta1 && cd C:\code\Reel && git push origin v0.7.0-beta1`.
+3. The `Release` workflow builds → tests → publishes → **signs** → creates the (pre)release with the exe.
+   (`-beta`/`-rc` tags are marked as prereleases automatically.)
 
 Notes:
 - Local git history is intact (the Reel→Aperture rebrand preserved it), so the full commit trail comes along.
-- No packages/releases are configured — this is source-only for now.
 - The `.git` config user is "Paul Smith"; commits are co-authored with Claude per house convention.

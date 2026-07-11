@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows.Data;
 using System.Windows.Input;
 using Microsoft.Win32;
@@ -201,9 +202,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ThumbnailService Thumbnails { get; }
 
-    /// <summary>"Aperture Image Viewer vX.Y.Z" from the assembly version, for the title bar + About row.</summary>
-    public string AppVersion =>
-        "Aperture Image Viewer v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.0");
+    /// <summary>"Aperture Image Viewer vX.Y.Z[-suffix]" — from InformationalVersion so a prerelease tag shows.</summary>
+    public string AppVersion
+    {
+        get
+        {
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var info = asm.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            var version = info?.Split('+')[0]                      // drop any +<commit> build metadata
+                          ?? asm.GetName().Version?.ToString(3) ?? "0.7.0";
+            return "Aperture Image Viewer v" + version;
+        }
+    }
 
     private string _windowTitle = "Aperture Image Viewer";
 

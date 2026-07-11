@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Aperture.slnx
+
+      - name: Build
+        run: dotnet build Aperture.slnx -c Release --no-restore
+
+      # The test project isn't in the slnx (app-only solution), so it restores/builds itself here.
+      - name: Test
+        run: dotnet test tests/Aperture.Core.Tests/Aperture.Core.Tests.csproj -c Release
