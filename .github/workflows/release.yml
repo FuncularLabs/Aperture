@@ -80,6 +80,24 @@ jobs:
       # ===== Authenticode signing via Azure Trusted Signing =====
       # Shared Funcular Labs account (same one Markdown Midget uses). The service principal in the
       # AZURE_* secrets already holds the Certificate Profile Signer role; only --description differs.
+
+      # Fail fast if the secrets aren't reaching this repo — otherwise azuretrustedsigntool silently
+      # falls back to (absent) Azure CLI creds and hangs on "Submitting digest for signing…".
+      - name: Check signing secrets are present
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          $missing = @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_CLIENT_SECRET') |
+            Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) {
+            throw "Azure Trusted Signing secrets not available to this repo: $($missing -join ', '). " +
+                  "They're org-level with 'Selected repositories' scope — add this repo (see docs/GITHUB-SETUP.md)."
+          }
+          Write-Host "All three signing secrets are present."
+
       - name: Install azuretrustedsigntool
         run: dotnet tool install --global azuretrustedsigntool
 

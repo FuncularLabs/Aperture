@@ -30,8 +30,11 @@ and signs any number of that publisher's products. Nothing new needs to be provi
   `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`. That SP already holds the
   *Trusted Signing Certificate Profile Signer* role, so **no RBAC change** is required — the only per-app
   change is `--description "Aperture Image Viewer"` (and `--file`).
-- **Add the three SP secrets to the Aperture repo** (or, better, promote them to **FuncularLabs org-level
-  secrets** so every Funcular app shares one set).
+- The `AZURE_*` secrets live at the **FuncularLabs org level** (Markdown Midget uses the same set). They're
+  scoped to **Selected repositories**, so a *new* repo doesn't get them automatically — **add Aperture** to
+  each secret's repository access (Org → Settings → Secrets and variables → Actions), or the release job's
+  fail-fast check stops it. If the secrets aren't scoped in, `azuretrustedsigntool` hangs on
+  "Submitting digest for signing…" (it silently falls back to absent Azure CLI creds).
 - **Resource tag:** the account currently carries `Product: MarkdownMidget`, which is now misleading since
   it's a shared publisher signing resource. Retag to reflect that — e.g. drop `Product` and add
   `Purpose: code-signing`, `Scope: funcular-labs-shared`. Tags are inventory-only; they do **not** gate
