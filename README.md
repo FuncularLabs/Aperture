@@ -1,6 +1,12 @@
-<p align="center"><img src="docs/logo.png" width="120" alt="Aperture Image Viewer logo"></p>
-
 # Aperture Image Viewer
+
+<img src="https://raw.githubusercontent.com/FuncularLabs/Aperture/main/docs/logo.png" alt="Aperture Image Viewer logo" width="120" align="right" />
+
+[![Latest release](https://img.shields.io/github/v/release/FuncularLabs/Aperture?include_prereleases&sort=semver&color=blue&label=latest)](https://github.com/FuncularLabs/Aperture/releases)
+[![Release date](https://img.shields.io/github/release-date-pre/FuncularLabs/Aperture?color=informational)](https://github.com/FuncularLabs/Aperture/releases)
+[![Downloads](https://img.shields.io/github/downloads/FuncularLabs/Aperture/total?color=success)](https://github.com/FuncularLabs/Aperture/releases)
+[![CI](https://github.com/FuncularLabs/Aperture/actions/workflows/ci.yml/badge.svg)](https://github.com/FuncularLabs/Aperture/actions/workflows/ci.yml)
+[![Release](https://github.com/FuncularLabs/Aperture/actions/workflows/release.yml/badge.svg)](https://github.com/FuncularLabs/Aperture/actions/workflows/release.yml)
 
 A fast, local image & video browser for Windows. It replaces File Explorer for the
 "just let me look at my photos" case — no multi-second waits on big, image-heavy
