@@ -28,6 +28,47 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
+        <!-- Open-folder glyph (VS "Open in File Explorer" style): a folder with a raised front panel. -->
+        <DrawingImage x:Key="OpenFolderIcon">
+            <DrawingImage.Drawing>
+                <GeometryDrawing Brush="#1F2430">
+                    <GeometryDrawing.Geometry>
+                        <GeometryGroup>
+                            <PathGeometry Figures="M1.5,4.3 L5.4,4.3 L6.8,5.7 L13.2,5.7 L13.2,7.7 L1.5,7.7 Z" />
+                            <PathGeometry Figures="M0.8,7 L14.7,7 L13.1,12.8 L2.4,12.8 Z" />
+                        </GeometryGroup>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingImage.Drawing>
+        </DrawingImage>
+
+        <!-- Double-stacked photo (like "Save as" = double-stacked floppy): a photo tile in front of a second frame. -->
+        <DrawingImage x:Key="PhotoStackIcon">
+            <DrawingImage.Drawing>
+                <DrawingGroup>
+                    <GeometryDrawing Brush="#1F2430">
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="5,1.8,8.7,8" RadiusX="1" RadiusY="1" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#1F2430">
+                        <GeometryDrawing.Pen><Pen Brush="White" Thickness="1.1" /></GeometryDrawing.Pen>
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="1.6,5.6,8.7,8" RadiusX="1" RadiusY="1" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="White">
+                        <GeometryDrawing.Geometry>
+                            <GeometryGroup>
+                                <EllipseGeometry Center="4,8.2" RadiusX="0.95" RadiusY="0.95" />
+                                <PathGeometry Figures="M2.4,13 L4.8,10 L6.1,11.6 L7.4,10.2 L9.4,13 Z" />
+                            </GeometryGroup>
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingGroup>
+            </DrawingImage.Drawing>
+        </DrawingImage>
+
         <!-- The tile right-click menu, reused by the preview pane and the quick-look overlay.
              x:Shared="False" so the same menu can attach to more than one element. Targets the
              previewed/quick-looked item (PreviewTile == the selected tile). -->
@@ -41,7 +82,7 @@
             <MenuItem Header="Open containing folder"
                       Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
-                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8B7;" /></MenuItem.Icon>
+                <MenuItem.Icon><Image Source="{StaticResource OpenFolderIcon}" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
             <Separator />
             <MenuItem Header="Tags &amp; notes…"
@@ -54,13 +95,13 @@
                       Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource InverseBoolToVis}}"
                       Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
-                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="Copy thumbnail"
                       Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource BoolToVis}}"
                       Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
-                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="Copy file name"
                       Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
@@ -697,7 +738,7 @@
                                     <MenuItem Header="Open containing folder"
                                               Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8B7;" /></MenuItem.Icon>
+                                        <MenuItem.Icon><Image Source="{StaticResource OpenFolderIcon}" Width="16" Height="16" /></MenuItem.Icon>
                                     </MenuItem>
                                     <Separator />
                                     <MenuItem Header="Tags &amp; notes…"
@@ -709,12 +750,12 @@
                                     <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
                                               Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                                        <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
                                     </MenuItem>
                                     <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
                                               Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                                        <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
                                     </MenuItem>
                                     <MenuItem Header="Copy file name"
                                               Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
