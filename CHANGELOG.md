@@ -5,6 +5,22 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.0-beta1] - 2026-07-14
+
+### Added
+- **Live indexing feedback** — adding a folder now jumps straight to it and streams its thumbnails in as they're
+  indexed, with a determinate progress bar in the status bar (*indexing X / Y*), so a large import never looks frozen.
+- **Preview** on the tile right-click menu (top entry, `Space` shortcut) — opens the full-screen quick-look.
+
+### Changed
+- **Smoother, steadier grid** — switching views and live re-indexing now reuse existing tiles instead of rebuilding
+  every cell, so thumbnails no longer blank-and-reload on each refresh. A background reconcile that finds no changes
+  no longer rebuilds the grid at all, removing the re-render flicker that appeared a couple of seconds after launch.
+
+### Fixed
+- **`Space` / `Enter`** open the quick-look preview for the selected tile instead of collapsing its date section.
+  Collapsing a section stays on the arrow keys, the chevron, and clicking the header.
+
 ## [0.7.1-beta1] - 2026-07-11
 
 ### Added
