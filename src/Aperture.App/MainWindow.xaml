@@ -74,6 +74,11 @@
              previewed/quick-looked item (PreviewTile == the selected tile). -->
         <ContextMenu x:Key="PreviewContextMenu" x:Shared="False"
                      Visibility="{Binding Data.PreviewTile, Source={StaticResource Vm}, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
+            <MenuItem Header="Preview" InputGestureText="Space"
+                      Command="{Binding Data.OpenQuickLookCommand, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE7B3;" /></MenuItem.Icon>
+            </MenuItem>
+            <Separator />
             <MenuItem Header="Open"
                       Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
             <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
@@ -730,6 +735,11 @@
                                     ToolTip="{Binding Tooltip}">
                             <StackPanel.ContextMenu>
                                 <ContextMenu>
+                                    <MenuItem Header="Preview" InputGestureText="Space"
+                                              Command="{Binding Data.OpenQuickLookCommand, Source={StaticResource Vm}}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE7B3;" /></MenuItem.Icon>
+                                    </MenuItem>
+                                    <Separator />
                                     <MenuItem Header="Open"
                                               Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
                                     <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">

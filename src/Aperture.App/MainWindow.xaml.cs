@@ -273,18 +273,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Space: toggle the section when the cursor is on a header, else quick-look.
-        // (Skip when a TextBox/ToggleButton has focus, or the folder tree — it toggles
-        // the focused tree node itself in OnTreeKeyDown.)
+        // Space: open the quick-look preview (on the selected tile, or the cursor section's first tile).
+        // It never collapses a section — that's Left/Right on a header, the chevron, or a header click.
+        // (Skip when a TextBox/ToggleButton has focus, or the folder tree — it toggles the tree node.)
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox
             && focused is not System.Windows.Controls.Primitives.ToggleButton
             && !IsInTree(focused as DependencyObject))
         {
-            if (ViewModel.CursorIsHeader)
-                ViewModel.ToggleCursorSection();
-            else
-                ViewModel.OpenQuickLookCommand.Execute(null);
+            ViewModel.OpenQuickLookCommand.Execute(null);
             e.Handled = true;
         }
     }
@@ -855,9 +852,8 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Enter)
         {
-            var target = ViewModel.ActivateCursor();
-            if (target is not null)
-                try { ItemsList.ScrollIntoView(target); } catch { }
+            // Enter opens the quick-look preview (like Space) rather than collapsing the cursor's section.
+            ViewModel.OpenQuickLookCommand.Execute(null);
             e.Handled = true;
         }
     }

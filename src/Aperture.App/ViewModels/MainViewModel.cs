@@ -257,6 +257,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedItem, value))
             {
+                // Selecting a media tile (e.g. a mouse click) moves the keyboard cursor off any date-section
+                // header, so Space/Enter act on the tile (quick-look / open) instead of collapsing the section.
+                if (value is TileVm)
+                {
+                    ClearCursorHighlight();
+                    _cursorSection = null;
+                }
                 OnPropertyChanged(nameof(SelectedTile));
                 OnPropertyChanged(nameof(PreviewTile)); // keep current even when the inspector pane is closed (quick-look menu depends on it)
                 LoadPreview(); // no-op when the preview pane is closed
@@ -978,26 +985,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private IGridItem? FirstItemOfSection(SectionVm section) =>
         _tiles.FirstOrDefault(t => ReferenceEquals(t.Section, section));
 
-    /// <summary>Enter: toggle the section on a header, or open/enter the tile.</summary>
-    public object? ActivateCursor()
-    {
-        if (_cursorSection is not null)
-        {
-            _cursorSection.IsExpanded = !_cursorSection.IsExpanded;
-            return FirstItemOfSection(_cursorSection);
-        }
-        if (_selectedItem is not null)
-            ActivateItem(_selectedItem);
-        return null;
-    }
-
-    /// <summary>Space on a header toggles it (Space on a tile is handled as quick-look).</summary>
-    public void ToggleCursorSection()
-    {
-        if (_cursorSection is not null)
-            _cursorSection.IsExpanded = !_cursorSection.IsExpanded;
-    }
-
     /// <summary>Right/Left on a header expands/collapses it. Returns false when the cursor isn't on a header.</summary>
     public bool SetCursorSectionExpanded(bool expanded)
     {
@@ -1113,7 +1100,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_mediaTiles.Count == 0)
             return;
-        var start = SelectedTile is not null ? _mediaTiles.IndexOf(SelectedTile) : 0;
+        // The selected tile; or, when the cursor sits on a date-section header, that section's first tile.
+        var tile = SelectedTile
+                   ?? (_cursorSection is { } section ? FirstItemOfSection(section) as TileVm : null);
+        var start = tile is not null ? _mediaTiles.IndexOf(tile) : 0;
         QuickLookOpen = true;
         ShowQuickLookAt(start < 0 ? 0 : start);
     }
