@@ -5,6 +5,20 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.7.1-beta1] - 2026-07-11
+
+### Added
+- **View → Refresh (F5)** — reloads the library and rebuilds the grid; also the graceful recovery when the
+  tile display gets into a wonky state (stale/garbled tiles after alt-tabbing, or a file deleted from under the preview).
+- **Context-menu icons** — folder / image / tag / copy / cut glyphs on the tile and preview menus (Windows-standard, on select entries).
+
+### Changed
+- **Copy full path** now double-quotes the path only when it contains whitespace, so it pastes cleanly as a
+  single shell argument while plain paths stay unquoted.
+
+### Fixed
+- `Aperture.Core` retargeted to `net10.0-windows`, clearing the CA1416 platform-compatibility warnings honestly.
+
 ## [0.7.0-beta1] - 2026-07-10
 
 First public beta — a fast, local image & video browser for Windows, and a real-world showcase for

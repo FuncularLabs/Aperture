@@ -229,6 +229,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // F5 — reload + rebuild the grid (also the recovery from a wonky tile display).
+        if (e.Key == Key.F5)
+        {
+            ViewModel.RefreshCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         // Ctrl +/- zoom (anchored to the centre item).
         if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
@@ -610,6 +618,9 @@ public partial class MainWindow : Window
 
     private void OnGridSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
         ViewModel?.SetSelectedItems(ItemsList.SelectedItems);
+
+    /// <summary>Closes the settings/overflow popup after Refresh runs (it opens no dialog to steal focus).</summary>
+    private void OnRefreshMenuClick(object sender, RoutedEventArgs e) => SettingsToggle.IsChecked = false;
 
     /// <summary>
     /// Explorer-style right-click: clicking a tile that isn't in the current selection

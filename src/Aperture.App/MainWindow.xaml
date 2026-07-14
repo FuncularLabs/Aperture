@@ -18,6 +18,16 @@
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
 
+        <!-- Segoe MDL2 icon for select context-menu entries (like VS Solution Explorer decorates some, not all).
+             Foreground via DynamicResource: this style is declared before the Ink brush, and StaticResource
+             can't forward-reference (it would resolve to UnsetValue and crash the menu on open). -->
+        <Style x:Key="MenuIcon" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
         <!-- The tile right-click menu, reused by the preview pane and the quick-look overlay.
              x:Shared="False" so the same menu can attach to more than one element. Targets the
              previewed/quick-looked item (PreviewTile == the selected tile). -->
@@ -30,20 +40,28 @@
             </MenuItem>
             <MenuItem Header="Open containing folder"
                       Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8B7;" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
             <MenuItem Header="Tags &amp; notes…"
                       Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8EC;" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
             <MenuItem Header="Copy image"
                       Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource InverseBoolToVis}}"
                       Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="Copy thumbnail"
                       Visibility="{Binding Data.PreviewTile.IsVideo, Source={StaticResource Vm}, Converter={StaticResource BoolToVis}}"
                       Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="Copy file name"
                       Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
@@ -53,10 +71,14 @@
             <Separator />
             <MenuItem Header="Copy" InputGestureText="Ctrl+C"
                       Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="Cut" InputGestureText="Ctrl+X"
                       Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
-                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
+                      CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
+                <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
+            </MenuItem>
         </ContextMenu>
         <SolidColorBrush x:Key="Panel" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
@@ -302,6 +324,22 @@
                                                FontSize="11" />
                                 </StackPanel>
                             </StackPanel>
+
+                            <TextBlock Text="VIEW" Foreground="{StaticResource Muted}" FontSize="11"
+                                       FontWeight="SemiBold" Margin="0,0,0,8" />
+                            <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,6" Margin="0,0,0,12"
+                                    Command="{Binding RefreshCommand}" Click="OnRefreshMenuClick"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand" Foreground="{StaticResource Ink}"
+                                    ToolTip="Reload the library and rebuild the grid — recovers a stuck or garbled display.">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                               VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <TextBlock Text="Refresh" VerticalAlignment="Center" />
+                                    <TextBlock Text="F5" Foreground="{StaticResource Muted}" FontSize="11"
+                                               VerticalAlignment="Center" Margin="12,0,0,0" />
+                                </StackPanel>
+                            </Button>
+                            <Border Height="1" Background="{StaticResource Line}" Margin="0,2,0,12" />
 
                             <TextBlock Text="SETTINGS" Foreground="{StaticResource Muted}" FontSize="11"
                                        FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -658,18 +696,26 @@
                                     </MenuItem>
                                     <MenuItem Header="Open containing folder"
                                               Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8B7;" /></MenuItem.Icon>
+                                    </MenuItem>
                                     <Separator />
                                     <MenuItem Header="Tags &amp; notes…"
                                               Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8EC;" /></MenuItem.Icon>
+                                    </MenuItem>
                                     <Separator />
                                     <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
                                               Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                                    </MenuItem>
                                     <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
                                               Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE91B;" /></MenuItem.Icon>
+                                    </MenuItem>
                                     <MenuItem Header="Copy file name"
                                               Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
                                               CommandParameter="{Binding}" />
@@ -679,10 +725,14 @@
                                     <Separator />
                                     <MenuItem Header="Copy" InputGestureText="Ctrl+C"
                                               Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
+                                    </MenuItem>
                                     <MenuItem Header="Cut" InputGestureText="Ctrl+X"
                                               Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
+                                    </MenuItem>
                                 </ContextMenu>
                             </StackPanel.ContextMenu>
                             <Border Background="{StaticResource CanvasThumbBg}" CornerRadius="6"

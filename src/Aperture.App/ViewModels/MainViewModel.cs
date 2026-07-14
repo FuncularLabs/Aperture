@@ -72,7 +72,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         AddChosenFoldersCommand = new RelayCommand(AddChosenFolders);
         SkipFirstRunCommand = new RelayCommand(SkipFirstRun);
-        CopyFullPathCommand = new RelayCommand<TileVm>(t => CopyText(t?.FullPath));
+        RefreshCommand = new RelayCommand(RefreshView);
+        CopyFullPathCommand = new RelayCommand<TileVm>(t => CopyText(QuotePathIfNeeded(t?.FullPath)));
         CopyFileNameCommand = new RelayCommand<TileVm>(t => CopyText(t?.FileName));
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
@@ -479,6 +480,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CyclePreviewCommand { get; }
     public ICommand ClosePreviewCommand { get; }
     public ICommand RemovePreviewTagCommand { get; }
+    public ICommand RefreshCommand { get; }
+
+    /// <summary>
+    /// F5 / View→Refresh: re-read the library and rebuild the grid from scratch. This is also the graceful
+    /// recovery when the tile display gets wonky — stale/garbled tiles after alt-tabbing, or a file deleted
+    /// out from under the preview — since it discards the current tiles and rebuilds fresh ones.
+    /// </summary>
+    public void RefreshView()
+    {
+        LoadAnnotations(); // also picks up any external tag/note edits
+        LoadRows();
+        RequestBuildView();
+    }
 
     /// <summary>Removes a tag from the previewed item (the ✕ on a preview-pane chip).</summary>
     private void RemovePreviewTag(string? tag)
@@ -801,6 +815,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         try { System.Windows.Clipboard.SetText(text); }
         catch { /* clipboard can be transiently locked by another app */ }
     }
+
+    /// <summary>
+    /// Wraps a path in double quotes only when it contains whitespace (and isn't already quoted), so it
+    /// pastes cleanly as a single shell argument — but plain paths stay unquoted for easy reuse.
+    /// </summary>
+    private static string? QuotePathIfNeeded(string? path) =>
+        string.IsNullOrEmpty(path) || !path.Any(char.IsWhiteSpace)
+            ? path
+            : path.StartsWith('"') && path.EndsWith('"') ? path : $"\"{path}\"";
 
     private void CopyImage(TileVm? tile)
     {
