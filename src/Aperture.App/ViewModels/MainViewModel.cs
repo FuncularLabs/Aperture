@@ -41,6 +41,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _searchText = "";
     private string _statusText = "No folders yet — add one to begin.";
     private string _indexingText = "";
+    private bool _isIndexing;
+    private bool _indexIndeterminate = true;
+    private double _indexValue;
+    private double _indexMax;
 
     // Folder navigation: null root = home (all included roots).
     private (long? RootId, string RelDir) _location = (null, "");
@@ -48,6 +52,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private List<TileVm> _mediaTiles = [];
     private IReadOnlyList<TileVm> _selectedTiles = [];
     private List<LibraryRow> _allRows = [];
+
+    // The current view's tiles, keyed by item id. A rebuild that keeps the same items (streaming index,
+    // background reconcile, watcher, filter/sort) reuses these instances instead of allocating new ones —
+    // preserving each tile's already-decoded thumbnail so the grid doesn't blank-then-repaint every cell.
+    // Owned by the UI thread: ApplyView reassigns a fresh dict (scoped to the new view, so retained
+    // thumbnails stay bounded), which a compute still running off-thread never sees mutated. Invalidated on
+    // annotation/caption changes; a per-item mtime check refreshes tiles whose underlying file was re-indexed.
+    private Dictionary<long, TileVm> _tilePool = [];
     private Dictionary<string, Annotation> _annotations = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _availableTags = [];
 
@@ -182,6 +194,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Refreshes every media tile's annotation in place (used after bulk tag-manager edits).</summary>
     private void RefreshAllAnnotationsInPlace()
     {
+        _tilePool = []; // a bulk edit can touch items outside the current view; drop pooled (possibly stale) tiles
         LoadAnnotations();
         foreach (var tile in _mediaTiles)
             tile.UpdateAnnotation(AnnotationFor(tile.Row));
@@ -369,6 +382,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (value == _library.Settings.Current.CaptionFormat)
                 return;
             _library.Settings.Update(s => s.CaptionFormat = value);
+            _tilePool = []; // captions are baked into each tile at construction; rebuild them with the new format
             OnPropertyChanged();
             RequestBuildView();
         }
@@ -465,6 +479,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _indexingText, value);
     }
 
+    /// <summary>True while any folder is being indexed — drives the status-bar progress bar.</summary>
+    public bool IsIndexing
+    {
+        get => _isIndexing;
+        private set => SetProperty(ref _isIndexing, value);
+    }
+
+    /// <summary>Indexing progress bar: indeterminate while scanning/pruning, determinate while indexing files.</summary>
+    public bool IndexIndeterminate
+    {
+        get => _indexIndeterminate;
+        private set => SetProperty(ref _indexIndeterminate, value);
+    }
+
+    public double IndexValue
+    {
+        get => _indexValue;
+        private set => SetProperty(ref _indexValue, value);
+    }
+
+    public double IndexMax
+    {
+        get => _indexMax;
+        private set => SetProperty(ref _indexMax, value);
+    }
+
     public ICommand AddRootCommand { get; }
     public ICommand RemoveRootCommand { get; }
     public ICommand ZoomInCommand { get; }
@@ -496,6 +536,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void RefreshView()
     {
+        _tilePool = []; // recovery path: rebuild genuinely fresh tiles (also picks up external annotation edits)
         LoadAnnotations(); // also picks up any external tag/note edits
         LoadRows();
         RequestBuildView();
@@ -1249,7 +1290,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged);
         Roots.Add(vm);
         BuildTree();
-        _ = IndexRootAsync(root, watchAfter: true);
+        NavigateTo(root.Id, ""); // jump to the new folder so its thumbnails stream in as they're indexed
+        _ = IndexRootAsync(root, watchAfter: true, forceStream: true);
     }
 
     private void RemoveRoot(RootVm? rootVm)
@@ -1336,7 +1378,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
         Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion,
-        bool ShowImages, bool ShowVideos);
+        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool);
 
     private sealed record ViewBuild(
         List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections);
@@ -1352,7 +1394,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _annotations,
         _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded),
         _showImages,
-        _showVideos);
+        _showVideos,
+        _tilePool);
 
     /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
     private ViewBuild ComputeView(BuildInputs input)
@@ -1382,12 +1425,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<TileVm> tiles;
         if (useSections)
         {
-            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections);
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections, input.Pool);
         }
         else
         {
             LibrarySorter.Sort(media, input.Sort.Levels);
-            tiles = media.Select(r => new TileVm(r, Thumbnails, input.Format, Ann(r))).ToList();
+            tiles = media.Select(r => GetOrReuseTile(input.Pool, r, input.Format, Ann(r))).ToList();
         }
 
         return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections);
@@ -1416,8 +1459,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var (key, section) in build.Sections)
             _sections[key] = section;
 
+        // Bind each committed tile to its committed section here, on the UI thread — never off-thread,
+        // where a reused tile could be shared with a superseded concurrent build and race.
+        if (build.UseSections)
+            foreach (var section in build.Sections.Values)
+                foreach (var t in section.Members)
+                    t.Section = section;
+
         _mediaTiles = build.MediaTiles;
         _tiles = build.Tiles;
+
+        // Reuse pool = exactly this view's tiles (a fresh dict, so a compute still running off-thread keeps
+        // reading the snapshot it captured). Scoped to the current view — not accumulated across views —
+        // so retained decoded thumbnails stay bounded by the live view, never growing unbounded per session.
+        var pool = new Dictionary<long, TileVm>(build.MediaTiles.Count);
+        foreach (var t in build.MediaTiles)
+            pool[t.ItemId] = t;
+        _tilePool = pool;
+
         _view.Source = _tiles;
         _view.GroupDescriptions.Clear();
         if (build.UseSections)
@@ -1605,6 +1664,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// The pooled tile for this row when it is still current (same item, unchanged file mtime), else a
+    /// fresh one. Reuse preserves the tile's decoded thumbnail so a rebuild doesn't repaint every cell
+    /// blank; the mtime guard means a re-indexed (edited) file still gets a fresh tile. Safe off-thread:
+    /// only reads the captured pool snapshot and constructs new tiles (which decode lazily on the UI thread).
+    /// </summary>
+    private TileVm GetOrReuseTile(IReadOnlyDictionary<long, TileVm> pool, LibraryRow r, string format, Annotation ann)
+        => pool.TryGetValue(r.Item.Id, out var existing) && existing.Row.Item.MTimeUtc == r.Item.MTimeUtc
+            ? existing
+            : new TileVm(r, Thumbnails, format, ann);
+
+    /// <summary>
     /// Pure sectioned build: creates fresh <see cref="SectionVm"/>s (safe to build off
     /// the UI thread since they aren't bound yet), restoring prior expansion from
     /// <paramref name="expansion"/> and defaulting genuinely-new sections to expanded
@@ -1612,7 +1682,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private List<TileVm> BuildSectionedPure(
         List<LibraryRow> rows, string format, IReadOnlyList<Aperture.Core.Settings.SortLevel> levels,
-        Func<LibraryRow, Annotation> ann, Dictionary<long, bool> expansion, Dictionary<long, SectionVm> sections)
+        Func<LibraryRow, Annotation> ann, Dictionary<long, bool> expansion, Dictionary<long, SectionVm> sections,
+        Dictionary<long, TileVm> pool)
     {
         var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList());
 
@@ -1638,7 +1709,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 order.Add(section);
             }
 
-            tiles.Add(new TileVm(r, Thumbnails, format, ann(r)) { Section = section });
+            // Record membership; tile.Section is assigned on the UI thread in ApplyView so a
+            // tile shared with a concurrent build is never written off-thread (see _tilePool).
+            var tile = GetOrReuseTile(pool, r, format, ann(r));
+            section.Members.Add(tile);
+            tiles.Add(tile);
         }
 
         long cumulative = 0;
@@ -1682,12 +1757,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Indexing -----------------------------------------------------------
 
-    private async Task IndexRootAsync(Root root, bool watchAfter)
+    private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false)
     {
-        // Stream partial results into the grid only on the initial population, so a
-        // watcher-triggered re-index never yanks the scroll position out from under
-        // someone who is browsing.
-        var streaming = _tiles.Count == 0;
+        // Stream partial results into the grid on the initial population, or when the caller is showing
+        // the folder being indexed (a freshly added root) — so its thumbnails appear as they're found.
+        // Otherwise a watcher/reconcile re-index never yanks the scroll out from under someone browsing.
+        var streaming = _tiles.Count == 0 || forceStream;
 
         lock (_indexLock)
         {
@@ -1697,9 +1772,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         var progress = new Progress<IndexProgress>(p => RunOnUi(() => ApplyProgress(root.Id, p, streaming)));
 
+        IndexResult? result = null;
         try
         {
-            await Task.Run(() => _library.IndexRoot(root, progress)).ConfigureAwait(true);
+            result = await Task.Run(() => _library.IndexRoot(root, progress)).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -1720,10 +1796,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     rootVm.Status = "";
                 }
                 UpdateIndexingText();
-                LoadRows();
-                BuildViewImmediate();
-                BuildTree();
-                SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
+
+                // Only rebuild when the index actually changed the library (or we streamed partials
+                // and need a final complete pass). A no-op reconcile — the common case a couple of
+                // seconds after startup — must not rebuild the grid + tree and repaint everything.
+                var added = result?.Added ?? 0;
+                var removed = result?.Removed ?? 0;
+                var dataChanged = streaming || added + (result?.Updated ?? 0) + removed > 0;
+                if (dataChanged)
+                {
+                    LoadRows();
+                    RequestBuildView(); // debounced + off-thread + tile reuse, so the reconcile stays smooth
+                }
+                if (streaming || added + removed > 0) // folders only shift when items are added/removed
+                {
+                    BuildTree();
+                    SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
+                }
             });
 
             if (watchAfter)
@@ -1744,6 +1833,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IndexPhase.Pruning => "cleaning up…",
             _ => "",
         };
+
+        // Drive the status-bar progress bar: a real fraction while indexing files, otherwise indeterminate.
+        if (p.Phase == IndexPhase.Indexing && p.Total > 0)
+        {
+            IndexIndeterminate = false;
+            IndexMax = p.Total;
+            IndexValue = p.Processed;
+        }
+        else
+        {
+            IndexIndeterminate = true;
+        }
         UpdateIndexingText();
 
         // Throttled live refresh so thumbnails appear as they're indexed.
@@ -1767,9 +1868,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             active = _activeIndexers;
         }
 
+        IsIndexing = active > 0;
+
         if (active == 0)
         {
             IndexingText = "";
+            IndexIndeterminate = true; // reset for the next run
             return;
         }
 

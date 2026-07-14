@@ -12,6 +12,13 @@ public sealed class SectionVm : ObservableObject
     public required long Key { get; init; }
     public required string Label { get; init; }
 
+    /// <summary>
+    /// The tiles that belong to this section, in grid order. Populated by the (off-UI-thread)
+    /// build; the view model assigns each tile's <see cref="TileVm.Section"/> from this list on
+    /// the UI thread, so a reused tile shared with a concurrent build is never mutated off-thread.
+    /// </summary>
+    public List<TileVm> Members { get; } = [];
+
     private int _count;
     public int Count
     {

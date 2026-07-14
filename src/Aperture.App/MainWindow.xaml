@@ -480,8 +480,17 @@
             <Grid Margin="12,6">
                 <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
                            VerticalAlignment="Center" />
-                <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource Accent}" FontSize="12"
-                           HorizontalAlignment="Right" VerticalAlignment="Center" />
+                <!-- Indexing feedback: label + a determinate bar (indeterminate while scanning) -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource Accent}" FontSize="12"
+                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ProgressBar Width="130" Height="6" VerticalAlignment="Center"
+                                 IsIndeterminate="{Binding IndexIndeterminate}"
+                                 Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"
+                                 Foreground="{StaticResource Accent}" Background="{StaticResource Line}"
+                                 BorderThickness="0" />
+                </StackPanel>
             </Grid>
         </Border>
 
