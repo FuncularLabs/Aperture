@@ -28,6 +28,15 @@ dates. Items are checked off as they ship (each lands a `CHANGELOG.md` entry whe
   A **multi-select list** of proposed matches (accept/reject in bulk) would make batch review far less
   painful than a stream of per-file prompts.
 
+## Copy, cut & paste
+
+- [ ] **Fix multi-select copy/cut** *(bug)* — copying or cutting a multi-file selection currently acts on
+  only the **first** item, so a paste transfers just one file. Operate on the whole selection.
+
+- [ ] **Carry tags & notes on paste** *(enhancement, related to the above)* — when a copy/cut → paste moves
+  or duplicates files, bring their tags & notes along **by default**, so metadata follows the files instead
+  of being left behind.
+
 ## Maintenance / chores
 
 - [ ] **Bump GitHub Action majors** — on the next release push, update `actions/checkout`,
