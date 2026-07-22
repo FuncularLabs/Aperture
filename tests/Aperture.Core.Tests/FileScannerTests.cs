@@ -18,6 +18,21 @@ public class FileScannerTests
     }
 
     [Fact]
+    public void Scan_NonRecursive_ReadsOnlyTheRootFolder()
+    {
+        using var lib = new TempDir();
+        TestImages.Write(lib.Combine("top.jpg"), 100, 100);
+        TestImages.Write(lib.Combine("nested", "deep.png"), 100, 100);
+
+        var recursive = FileScanner.Scan(lib.Path);
+        var flat = FileScanner.Scan(lib.Path, recursive: false);
+
+        Assert.Equal(2, recursive.Count);
+        var only = Assert.Single(flat);
+        Assert.Equal("top.jpg", only.RelPath);
+    }
+
+    [Fact]
     public void Scan_IgnoresUnsupportedExtensions()
     {
         using var lib = new TempDir();

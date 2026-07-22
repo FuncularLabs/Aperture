@@ -18,6 +18,7 @@ public class RootRow
     public string Path { get; set; } = "";
     public string Alias { get; set; } = "";
     public bool Included { get; set; } = true;                     // INTEGER 0/1 in SQLite
+    public bool Recursive { get; set; } = true;                    // index subfolders too
     [Column("color_tag")] public string? ColorTag { get; set; }
     [Column("added_ticks")] public long AddedTicks { get; set; }   // DateTime.Ticks (UTC)
 }

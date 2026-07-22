@@ -25,7 +25,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var nowTicks = DateTime.UtcNow.Ticks;
 
         progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning });
-        var files = FileScanner.Scan(root.Path, includeVideos, ct);
+        var files = FileScanner.Scan(root.Path, includeVideos, ct, root.Recursive);
 
         var existing = new ItemStore(_db).GetExisting(root.Id);
         var thumbInfo = new ThumbnailStore(_db).GetInfo();

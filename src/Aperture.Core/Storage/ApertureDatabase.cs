@@ -88,6 +88,7 @@ public sealed class ApertureDatabase
 
             // Migrations for databases created by earlier versions.
             EnsureColumn(meta, "items", "kind", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(meta, "roots", "recursive", "INTEGER NOT NULL DEFAULT 1");
         }
 
         using (var thumbs = OpenThumbnails())
@@ -119,6 +120,7 @@ public sealed class ApertureDatabase
             path        TEXT    NOT NULL UNIQUE,
             alias       TEXT    NOT NULL,
             included    INTEGER NOT NULL DEFAULT 1,
+            recursive   INTEGER NOT NULL DEFAULT 1,
             color_tag   TEXT,
             added_ticks INTEGER NOT NULL
         );

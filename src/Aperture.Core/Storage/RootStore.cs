@@ -16,6 +16,7 @@ public sealed class RootStore(ApertureDatabase database)
         Path = r.Path,
         Alias = r.Alias,
         Included = r.Included,
+        Recursive = r.Recursive,
         ColorTag = r.ColorTag,
         AddedUtc = new DateTime(r.AddedTicks, DateTimeKind.Utc),
     };
@@ -28,6 +29,7 @@ public sealed class RootStore(ApertureDatabase database)
             Path = root.Path,
             Alias = root.Alias,
             Included = root.Included,
+            Recursive = root.Recursive,
             ColorTag = root.ColorTag,
             AddedTicks = root.AddedUtc.ToUniversalTime().Ticks,
         };
@@ -46,6 +48,20 @@ public sealed class RootStore(ApertureDatabase database)
         if (_db.Provider.Get<RootRow>(rootId) is { } row)
         {
             row.Included = included;
+            _db.Provider.Update(row);
+        }
+    }
+
+    /// <summary>
+    /// Turns subfolder indexing on/off. The caller re-indexes afterwards: switching it off leaves the
+    /// subfolder items in place until then, and the indexer's prune step removes them (they're no
+    /// longer scanned, so they fall out of the "seen" set).
+    /// </summary>
+    public void SetRecursive(long rootId, bool recursive)
+    {
+        if (_db.Provider.Get<RootRow>(rootId) is { } row)
+        {
+            row.Recursive = recursive;
             _db.Provider.Update(row);
         }
     }

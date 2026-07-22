@@ -8,17 +8,19 @@ public readonly record struct ScannedFile(
     string FullPath, string RelPath, string Ext, long SizeBytes, long MTimeTicks, MediaKind Kind);
 
 /// <summary>
-/// Recursively finds supported media files under a root. Enumeration is fault
-/// tolerant: an unreadable subtree is skipped rather than aborting the whole scan.
+/// Finds supported media files under a root — the whole tree, or just the root's own folder when
+/// <c>recursive</c> is false. Enumeration is fault tolerant: an unreadable subtree is skipped
+/// rather than aborting the whole scan.
 /// </summary>
 public static class FileScanner
 {
-    public static List<ScannedFile> Scan(string rootPath, bool includeVideos = true, CancellationToken ct = default)
+    public static List<ScannedFile> Scan(
+        string rootPath, bool includeVideos = true, CancellationToken ct = default, bool recursive = true)
     {
         var root = Path.GetFullPath(rootPath);
         var results = new List<ScannedFile>();
 
-        foreach (var file in SafeEnumerateFiles(root, ct))
+        foreach (var file in SafeEnumerateFiles(root, ct, recursive))
         {
             ct.ThrowIfCancellationRequested();
 
@@ -51,8 +53,10 @@ public static class FileScanner
     /// <summary>
     /// Manual DFS so a single inaccessible directory doesn't throw out of the
     /// whole enumeration the way <c>EnumerateFiles(AllDirectories)</c> would.
+    /// When <paramref name="recursive"/> is false only the root folder itself is read —
+    /// subdirectories are never even enumerated.
     /// </summary>
-    private static IEnumerable<string> SafeEnumerateFiles(string root, CancellationToken ct)
+    private static IEnumerable<string> SafeEnumerateFiles(string root, CancellationToken ct, bool recursive)
     {
         var stack = new Stack<string>();
         stack.Push(root);
@@ -62,16 +66,19 @@ public static class FileScanner
             ct.ThrowIfCancellationRequested();
             var dir = stack.Pop();
 
-            IEnumerable<string> subDirs = [];
-            try
+            if (recursive)
             {
-                subDirs = Directory.EnumerateDirectories(dir);
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+                IEnumerable<string> subDirs = [];
+                try
+                {
+                    subDirs = Directory.EnumerateDirectories(dir);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
 
-            foreach (var sub in subDirs)
-                stack.Push(sub);
+                foreach (var sub in subDirs)
+                    stack.Push(sub);
+            }
 
             IEnumerable<string> files = [];
             try

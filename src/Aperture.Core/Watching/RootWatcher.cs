@@ -17,14 +17,15 @@ public sealed class RootWatcher : IDisposable
     /// <summary>Raised on a background thread once file activity has been quiet for the debounce window.</summary>
     public event EventHandler? Changed;
 
-    public RootWatcher(string path, int debounceMs = 500)
+    public RootWatcher(string path, int debounceMs = 500, bool includeSubdirectories = true)
     {
         _debounceMs = debounceMs;
         _debounce = new Timer(_ => Fire(), null, Timeout.Infinite, Timeout.Infinite);
 
         _watcher = new FileSystemWatcher(path)
         {
-            IncludeSubdirectories = true,
+            // A non-recursive root ignores its subfolders, so don't wake the indexer for them.
+            IncludeSubdirectories = includeSubdirectories,
             NotifyFilter = NotifyFilters.FileName
                 | NotifyFilters.DirectoryName
                 | NotifyFilters.LastWrite

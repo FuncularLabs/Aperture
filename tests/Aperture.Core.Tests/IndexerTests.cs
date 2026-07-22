@@ -41,6 +41,47 @@ public class IndexerTests
     }
 
     [Fact]
+    public void IndexRoot_NonRecursiveRoot_IndexesOnlyTheRootFolder()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("top.jpg"), 400, 300);
+        TestImages.Write(scope.Library.Combine("sub", "deep.jpg"), 400, 300);
+
+        var root = scope.AddLibraryRoot();
+        root.Recursive = false;
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(1, result.Added);
+        var item = Assert.Single(scope.Items.GetForRoot(root.Id));
+        Assert.Equal("top.jpg", item.RelPath);
+    }
+
+    /// <summary>
+    /// Turning subfolder indexing off on an existing root drops the now-out-of-scope items: they are
+    /// no longer scanned, so the prune step removes them. This is what makes the toggle safe to expose
+    /// on a root that was already indexed recursively.
+    /// </summary>
+    [Fact]
+    public void IndexRoot_TurningOffRecursion_PrunesSubfolderItemsOnReindex()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("top.jpg"), 400, 300);
+        TestImages.Write(scope.Library.Combine("sub", "deep.jpg"), 400, 300);
+
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        Assert.Equal(2, scope.Items.CountForRoot(root.Id));
+
+        root.Recursive = false;
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(1, result.Removed);
+        var item = Assert.Single(scope.Items.GetForRoot(root.Id));
+        Assert.Equal("top.jpg", item.RelPath);
+    }
+
+    [Fact]
     public void IndexRoot_Resume_SkipsUnchanged_WithNoAddsOrThumbnailWork()
     {
         using var scope = new ApertureScope();

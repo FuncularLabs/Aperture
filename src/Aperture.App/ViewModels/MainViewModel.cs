@@ -31,6 +31,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private int _activeIndexers;
     private long _lastStreamRefreshTick;
 
+    // In-flight indexers by root id, so a folder (or all of them) can be paused/cancelled mid-run.
+    // Guarded by _indexLock, as is _pausedRoots: roots stopped by an explicit Pause rather than a
+    // Cancel, which are the ones that offer Resume.
+    private readonly Dictionary<long, CancellationTokenSource> _indexCts = [];
+    private readonly HashSet<long> _pausedRoots = [];
+
     private bool _isLoadingView;
     private CancellationTokenSource? _buildDebounce;
     private int _buildGeneration;
@@ -45,6 +51,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _indexIndeterminate = true;
     private double _indexValue;
     private double _indexMax;
+
+    // Folder-tree nodes the user left expanded ("rootId|relDir"). Null means nothing has ever been
+    // saved, which is what makes a fresh install differ from "the user collapsed everything".
+    private HashSet<string>? _expandedFolders;
+    private bool _restoringExpansion;
 
     // Folder navigation: null root = home (all included roots).
     private (long? RootId, string RelDir) _location = (null, "");
@@ -72,6 +83,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         AddRootCommand = new RelayCommand(AddRoot);
         RemoveRootCommand = new RelayCommand<RootVm>(RemoveRoot);
+        PauseRootIndexCommand = new RelayCommand<RootVm>(PauseRootIndex);
+        ResumeRootIndexCommand = new RelayCommand<RootVm>(ResumeRootIndex);
+        CancelRootIndexCommand = new RelayCommand<RootVm>(CancelRootIndex);
+        PauseAllIndexingCommand = new RelayCommand(PauseAllIndexing);
+        ResumeAllIndexingCommand = new RelayCommand(ResumeAllIndexing);
+        CancelAllIndexingCommand = new RelayCommand(CancelAllIndexing);
         ZoomInCommand = new RelayCommand(ZoomIn, () => _zoom < ZoomSizes.Length - 1);
         ZoomOutCommand = new RelayCommand(ZoomOut, () => _zoom > 0);
         OpenSelectedCommand = new RelayCommand(OpenSelected, () => SelectedTile is not null);
@@ -106,6 +123,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ActivateItemCommand = new RelayCommand<object>(ActivateItem);
 
         _library.RootChanged += OnRootChanged;
+
+        // Null (never saved) leaves RestoreExpansion to fall back to "roots expanded".
+        _expandedFolders = _library.Settings.Current.ExpandedFolders is { } saved ? [.. saved] : null;
 
         LoadRoots();
         LoadAnnotations();
@@ -507,6 +527,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ICommand AddRootCommand { get; }
     public ICommand RemoveRootCommand { get; }
+
+    // Indexing control — per folder (from its nav menu) and across the board (status bar).
+    public ICommand PauseRootIndexCommand { get; }
+    public ICommand ResumeRootIndexCommand { get; }
+    public ICommand CancelRootIndexCommand { get; }
+    public ICommand PauseAllIndexingCommand { get; }
+    public ICommand ResumeAllIndexingCommand { get; }
+    public ICommand CancelAllIndexingCommand { get; }
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
     public ICommand OpenSelectedCommand { get; }
@@ -1246,7 +1274,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Roots.Clear();
         foreach (var root in _library.GetRoots())
         {
-            var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged) { Count = _library.CountForRoot(root.Id) };
+            var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged)
+            {
+                Count = _library.CountForRoot(root.Id),
+            };
             Roots.Add(vm);
         }
     }
@@ -1268,7 +1299,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (Roots.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
             return; // already added
 
-        AddRootPath(path, DeriveAlias(path));
+        // The OS folder picker can't host extra controls, so the subfolder choice is a second step.
+        var confirm = new AddFolderDialog(path) { Owner = System.Windows.Application.Current.MainWindow };
+        if (confirm.ShowDialog() != true)
+            return;
+
+        AddRootPath(path, DeriveAlias(path), confirm.IncludeSubfolders);
     }
 
     /// <summary>Adds dropped folders as watched roots (skips duplicates). Used by drag-and-drop.</summary>
@@ -1284,10 +1320,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void AddRootPath(string path, string alias)
+    private void AddRootPath(string path, string alias, bool recursive = true)
     {
-        var root = _library.AddRoot(path, alias);
-        var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged);
+        var root = _library.AddRoot(path, alias, recursive);
+        var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged);
         Roots.Add(vm);
         BuildTree();
         NavigateTo(root.Id, ""); // jump to the new folder so its thumbnails stream in as they're indexed
@@ -1314,6 +1350,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library.SetIncluded(rootVm.Id, included);
         LoadRows();
         RequestBuildView();
+    }
+
+    /// <summary>
+    /// Subfolder indexing toggled on a root: persist it, drop the watcher (it's recreated at the new
+    /// depth by the re-index), then re-index. Turning it off prunes the now-out-of-scope items;
+    /// turning it back on picks them up again.
+    /// </summary>
+    private void OnRootRecursiveChanged(RootVm rootVm, bool recursive)
+    {
+        _library.SetRecursive(rootVm.Id, recursive);
+        _library.StopWatching(rootVm.Id);
+        _ = IndexRootAsync(rootVm.Model, watchAfter: true);
     }
 
     private static string DeriveAlias(string path)
@@ -1364,14 +1412,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsLoadingView = true;
         var inputs = CaptureBuildInputs();
 
-        ViewBuild build;
-        try { build = await Task.Run(() => ComputeView(inputs), token); }
-        catch (OperationCanceledException) { return; }
-
-        if (generation != _buildGeneration)
-            return; // a newer request superseded this one
-        ApplyView(build);
-        IsLoadingView = false;
+        try
+        {
+            var build = await Task.Run(() => ComputeView(inputs), token);
+            if (generation == _buildGeneration) // a newer request may have superseded this one
+                ApplyView(build);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded mid-compute; the newer request owns the spinner from here.
+        }
+        finally
+        {
+            // Only the newest request clears the spinner: a superseded build must not hide it while
+            // the current one is still working, and *some* path must always clear it or the grid
+            // stays stuck behind "Loading…" (which a cancelled/superseded build used to do).
+            if (generation == _buildGeneration)
+                IsLoadingView = false;
+        }
     }
 
     private sealed record BuildInputs(
@@ -1515,21 +1573,64 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             var subs = GetSubfolders(rootVm.Id, "");
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
-                rootVm, rootVm.Count, LoadChildNodes));
+                rootVm, rootVm.Count, LoadChildNodes, OnNodeExpandedChanged));
         }
-        ExpandTree(); // expand everything by default (also after background rebuilds)
+        RestoreExpansion();
     }
 
-    /// <summary>Expands the whole folder tree by default (eager-loads every node's children).</summary>
-    private void ExpandTree()
+    /// <summary>
+    /// Re-opens the folders the user left expanded — on launch and after every background rebuild —
+    /// instead of expanding the whole tree. A library that has never saved any state (fresh install)
+    /// opens with just the root folders expanded; a saved-but-empty set means the user collapsed
+    /// everything, and is honoured.
+    /// </summary>
+    private void RestoreExpansion()
     {
-        foreach (var node in FolderTree)
-            node.ExpandAll();
+        _restoringExpansion = true; // applying saved state must not write it back
+        try
+        {
+            if (_expandedFolders is null)
+            {
+                foreach (var node in FolderTree)
+                    node.IsExpanded = true;
+                return;
+            }
+            foreach (var node in FolderTree)
+                RestoreExpansion(node);
+        }
+        finally
+        {
+            _restoringExpansion = false;
+        }
+    }
+
+    private void RestoreExpansion(FolderNodeVm node)
+    {
+        if (!node.HasChildren || _expandedFolders?.Contains(node.Key) != true)
+            return;
+        node.IsExpanded = true; // lazily loads this node's children
+        foreach (var child in node.Children)
+            RestoreExpansion(child);
+    }
+
+    /// <summary>Records an expand/collapse so the tree comes back this way next launch.</summary>
+    private void OnNodeExpandedChanged(FolderNodeVm node, bool expanded)
+    {
+        if (_restoringExpansion)
+            return;
+        _expandedFolders ??= [];
+        if (expanded)
+            _expandedFolders.Add(node.Key);
+        else
+            _expandedFolders.Remove(node.Key);
+        _library.Settings.Update(s => s.ExpandedFolders = [.. _expandedFolders]);
     }
 
     private List<FolderNodeVm> LoadChildNodes(long rootId, string relDir) =>
         GetSubfolders(rootId, relDir)
-            .Select(s => new FolderNodeVm(rootId, s.RelDir, s.Name, isRoot: false, s.HasChildren, null, s.Count, LoadChildNodes))
+            .Select(s => new FolderNodeVm(
+                rootId, s.RelDir, s.Name, isRoot: false, s.HasChildren, null, s.Count,
+                LoadChildNodes, OnNodeExpandedChanged))
             .ToList();
 
     /// <summary>Immediate subfolders of (rootId, relDir): name, path, recursive count, and whether it nests further.</summary>
@@ -1764,18 +1865,36 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Otherwise a watcher/reconcile re-index never yanks the scroll out from under someone browsing.
         var streaming = _tiles.Count == 0 || forceStream;
 
+        var cts = new CancellationTokenSource();
         lock (_indexLock)
         {
             _activeIndexers++;
+            _indexCts[root.Id] = cts;
+            _pausedRoots.Remove(root.Id); // starting/resuming clears any previous pause
         }
-        RunOnUi(UpdateIndexingText);
+        RunOnUi(() =>
+        {
+            if (Roots.FirstOrDefault(r => r.Id == root.Id) is { } vm)
+            {
+                vm.IsIndexing = true;
+                vm.IsPaused = false;
+            }
+            UpdateIndexingText();
+        });
 
         var progress = new Progress<IndexProgress>(p => RunOnUi(() => ApplyProgress(root.Id, p, streaming)));
 
         IndexResult? result = null;
+        var canceled = false;
         try
         {
-            result = await Task.Run(() => _library.IndexRoot(root, progress)).ConfigureAwait(true);
+            result = await Task.Run(() => _library.IndexRoot(root, progress, cts.Token)).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // Paused or cancelled by the user. Whatever was committed before the stop stays — the
+            // indexer skips its prune step when it's cancelled, so nothing is wrongly deleted.
+            canceled = true;
         }
         catch (Exception ex)
         {
@@ -1783,9 +1902,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            bool paused;
             lock (_indexLock)
             {
                 _activeIndexers--;
+                _indexCts.Remove(root.Id);
+                paused = canceled && _pausedRoots.Contains(root.Id);
+                cts.Dispose(); // inside the lock — StopIndex cancels under it (see StopIndex)
             }
             RunOnUi(() =>
             {
@@ -1793,30 +1916,126 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 if (rootVm is not null)
                 {
                     rootVm.Count = _library.CountForRoot(root.Id);
-                    rootVm.Status = "";
+                    rootVm.Status = paused ? "paused" : "";
+                    rootVm.IsIndexing = false;
+                    rootVm.IsPaused = paused;
                 }
+                OnPropertyChanged(nameof(HasPausedRoots));
                 UpdateIndexingText();
 
                 // Only rebuild when the index actually changed the library (or we streamed partials
                 // and need a final complete pass). A no-op reconcile — the common case a couple of
                 // seconds after startup — must not rebuild the grid + tree and repaint everything.
+                // A cancelled run may have committed partial work, so show that too.
                 var added = result?.Added ?? 0;
                 var removed = result?.Removed ?? 0;
-                var dataChanged = streaming || added + (result?.Updated ?? 0) + removed > 0;
+                var dataChanged = streaming || canceled || added + (result?.Updated ?? 0) + removed > 0;
                 if (dataChanged)
                 {
                     LoadRows();
                     RequestBuildView(); // debounced + off-thread + tile reuse, so the reconcile stays smooth
                 }
-                if (streaming || added + removed > 0) // folders only shift when items are added/removed
+                if (streaming || canceled || added + removed > 0) // folders shift when items are added/removed
                 {
                     BuildTree();
                     SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
                 }
             });
 
-            if (watchAfter)
+            // Don't re-arm the watcher on a stopped run — a file event would restart the very
+            // indexing the user just paused.
+            if (watchAfter && !canceled)
                 _library.Watch(root);
+        }
+    }
+
+    /// <summary>True when at least one folder's indexing is paused and can be resumed.</summary>
+    public bool HasPausedRoots
+    {
+        get { lock (_indexLock) { return _pausedRoots.Count > 0; } }
+    }
+
+    /// <summary>
+    /// Stops an in-flight index. Cancelling the token unwinds the indexer, which keeps everything it
+    /// already committed and skips its prune step, so a stop never loses or wrongly deletes items.
+    /// A <paramref name="pause"/> is remembered so the folder offers Resume; a cancel just stops.
+    /// </summary>
+    private void StopIndex(long rootId, bool pause)
+    {
+        lock (_indexLock)
+        {
+            if (!_indexCts.TryGetValue(rootId, out var cts))
+                return; // nothing running for this root
+            if (pause)
+                _pausedRoots.Add(rootId);
+            else
+                _pausedRoots.Remove(rootId);
+            // Cancel under the same lock the runner disposes under, so we can never cancel a
+            // token source it just disposed (which would throw out of the command).
+            cts.Cancel();
+        }
+
+        // Stop watching too: otherwise a file change would immediately restart the very indexing
+        // the user just stopped. Resuming re-arms the watcher.
+        _library.StopWatching(rootId);
+    }
+
+    private void PauseRootIndex(RootVm? rootVm)
+    {
+        if (rootVm is not null)
+            StopIndex(rootVm.Id, pause: true);
+    }
+
+    private void CancelRootIndex(RootVm? rootVm)
+    {
+        if (rootVm is not null)
+            StopIndex(rootVm.Id, pause: false);
+    }
+
+    /// <summary>Re-runs the index for a paused folder. Already-indexed files are skipped, not re-read.</summary>
+    private void ResumeRootIndex(RootVm? rootVm)
+    {
+        if (rootVm is null)
+            return;
+        lock (_indexLock)
+        {
+            _pausedRoots.Remove(rootVm.Id);
+        }
+        rootVm.IsPaused = false;
+        rootVm.Status = "";
+        OnPropertyChanged(nameof(HasPausedRoots));
+        _ = IndexRootAsync(rootVm.Model, watchAfter: true);
+    }
+
+    private void PauseAllIndexing()
+    {
+        foreach (var id in RunningIndexRootIds())
+            StopIndex(id, pause: true);
+    }
+
+    private void CancelAllIndexing()
+    {
+        foreach (var id in RunningIndexRootIds())
+            StopIndex(id, pause: false);
+    }
+
+    private void ResumeAllIndexing()
+    {
+        List<long> ids;
+        lock (_indexLock)
+        {
+            ids = [.. _pausedRoots];
+        }
+        foreach (var id in ids)
+            if (Roots.FirstOrDefault(r => r.Id == id) is { } vm)
+                ResumeRootIndex(vm);
+    }
+
+    private List<long> RunningIndexRootIds()
+    {
+        lock (_indexLock)
+        {
+            return [.. _indexCts.Keys];
         }
     }
 
@@ -1874,13 +2093,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             IndexingText = "";
             IndexIndeterminate = true; // reset for the next run
+            // Refresh the pill here too: a reconcile that changed nothing skips the view rebuild that
+            // would otherwise have done it, which would leave the pill reading "indexing…" forever.
+            UpdateSyncStatus();
             return;
         }
 
         var busy = Roots.Where(r => !string.IsNullOrEmpty(r.Status)).ToList();
         IndexingText = busy.Count == 1
             ? $"{busy[0].Alias}: {busy[0].Status}"
-            : $"Indexing {active} folders…";
+            : $"Indexing {active} folder{(active == 1 ? "" : "s")}…";
         UpdateSyncStatus();
     }
 

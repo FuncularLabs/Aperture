@@ -26,13 +26,32 @@ public sealed class ThumbnailService(LibraryService library)
     // realigned cache is healed), the stale decoded bitmap is not reused.
     private readonly LruCache<(long ItemId, long SrcMtime), BitmapSource> _cache = new(MaxDecoded);
 
+    // Caps how many decodes are in flight. Without this, a view whose tiles all realize at once
+    // queues one Task.Run per tile and floods the thread pool: the pool injects threads slowly, so
+    // unrelated work — notably the off-thread view rebuild — waits behind hundreds of decodes and the
+    // grid sits behind its "Loading…" spinner. Waiters here are async, so they hold no thread.
+    private readonly SemaphoreSlim _decodeGate = new(Math.Max(2, Environment.ProcessorCount / 2));
+
     public async Task<BitmapSource?> LoadAsync(long itemId, string path, bool isVideo, ThumbSize size, long srcMtimeTicks)
     {
         var key = (itemId, srcMtimeTicks);
         if (_cache.TryGet(key, out var cached))
             return cached;
 
-        var bitmap = await Task.Run(() => Decode(itemId, path, isVideo, size, srcMtimeTicks)).ConfigureAwait(true);
+        await _decodeGate.WaitAsync().ConfigureAwait(true);
+        BitmapSource? bitmap;
+        try
+        {
+            // Re-check: the tile may have been decoded while we waited for a slot.
+            if (_cache.TryGet(key, out cached))
+                return cached;
+            bitmap = await Task.Run(() => Decode(itemId, path, isVideo, size, srcMtimeTicks)).ConfigureAwait(true);
+        }
+        finally
+        {
+            _decodeGate.Release();
+        }
+
         if (bitmap is not null)
             _cache.Set(key, bitmap);
         return bitmap;

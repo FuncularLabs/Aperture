@@ -480,16 +480,34 @@
             <Grid Margin="12,6">
                 <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
                            VerticalAlignment="Center" />
-                <!-- Indexing feedback: label + a determinate bar (indeterminate while scanning) -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource Accent}" FontSize="12"
-                               VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <ProgressBar Width="130" Height="6" VerticalAlignment="Center"
-                                 IsIndeterminate="{Binding IndexIndeterminate}"
-                                 Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"
-                                 Foreground="{StaticResource Accent}" Background="{StaticResource Line}"
-                                 BorderThickness="0" />
+                <!-- Indexing feedback: label + a determinate bar (indeterminate while scanning),
+                     with pause/stop while it runs and resume once paused. -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource Accent}" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <ProgressBar Width="130" Height="6" VerticalAlignment="Center"
+                                     IsIndeterminate="{Binding IndexIndeterminate}"
+                                     Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"
+                                     Foreground="{StaticResource Accent}" Background="{StaticResource Line}"
+                                     BorderThickness="0" />
+                        <Button Content="Pause" Margin="10,0,0,0" Padding="8,1" FontSize="11" Cursor="Hand"
+                                Command="{Binding PauseAllIndexingCommand}"
+                                ToolTip="Pause indexing everywhere — resume picks up where it left off" />
+                        <Button Content="Stop" Margin="5,0,0,0" Padding="8,1" FontSize="11" Cursor="Hand"
+                                Command="{Binding CancelAllIndexingCommand}"
+                                ToolTip="Stop indexing everywhere (keeps what's already indexed)" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                Visibility="{Binding HasPausedRoots, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="Indexing paused" Foreground="{StaticResource Muted}" FontSize="12"
+                                   VerticalAlignment="Center" Margin="10,0,8,0" />
+                        <Button Content="Resume" Padding="8,1" FontSize="11" Cursor="Hand"
+                                Command="{Binding ResumeAllIndexingCommand}"
+                                ToolTip="Resume paused folders — already-indexed files are skipped" />
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
@@ -652,6 +670,22 @@
                                                FontSize="12" VerticalAlignment="Center" Margin="5,0,0,0" />
                                     <StackPanel.ContextMenu>
                                         <ContextMenu Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}">
+                                            <MenuItem Header="Pause indexing"
+                                                      Visibility="{Binding Root.IsIndexing, Converter={StaticResource BoolToVis}}"
+                                                      Command="{Binding Data.PauseRootIndexCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Root}" />
+                                            <MenuItem Header="Stop indexing"
+                                                      Visibility="{Binding Root.IsIndexing, Converter={StaticResource BoolToVis}}"
+                                                      Command="{Binding Data.CancelRootIndexCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Root}" />
+                                            <MenuItem Header="Resume indexing"
+                                                      Visibility="{Binding Root.IsPaused, Converter={StaticResource BoolToVis}}"
+                                                      Command="{Binding Data.ResumeRootIndexCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Root}" />
+                                            <MenuItem Header="Include subfolders" IsCheckable="True"
+                                                      IsChecked="{Binding Root.IsRecursive, Mode=TwoWay}"
+                                                      ToolTip="Index this folder's subfolders too. Turning it off removes their items and leaves cloud files alone." />
+                                            <Separator />
                                             <MenuItem Header="Rename" Command="{Binding Root.BeginRenameCommand}" />
                                             <MenuItem Header="Remove folder"
                                                       Command="{Binding Data.RemoveRootCommand, Source={StaticResource Vm}}"

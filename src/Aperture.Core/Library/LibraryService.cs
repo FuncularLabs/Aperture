@@ -52,10 +52,19 @@ public sealed class LibraryService : IDisposable
 
     public List<Root> GetRoots() => _roots.GetAll();
 
-    public Root AddRoot(string path, string alias) =>
-        _roots.Add(new Root { Path = Path.GetFullPath(path), Alias = alias, AddedUtc = DateTime.UtcNow });
+    public Root AddRoot(string path, string alias, bool recursive = true) =>
+        _roots.Add(new Root
+        {
+            Path = Path.GetFullPath(path),
+            Alias = alias,
+            Recursive = recursive,
+            AddedUtc = DateTime.UtcNow,
+        });
 
     public void SetIncluded(long rootId, bool included) => _roots.SetIncluded(rootId, included);
+
+    /// <summary>Turns subfolder indexing on/off for a root. Re-index afterwards to apply it.</summary>
+    public void SetRecursive(long rootId, bool recursive) => _roots.SetRecursive(rootId, recursive);
 
     public void SetAlias(long rootId, string alias) => _roots.SetAlias(rootId, alias);
 
@@ -150,7 +159,7 @@ public sealed class LibraryService : IDisposable
             if (_watchers.ContainsKey(root.Id))
                 return;
 
-            var watcher = new RootWatcher(root.Path);
+            var watcher = new RootWatcher(root.Path, includeSubdirectories: root.Recursive);
             watcher.Changed += (_, _) => RootChanged?.Invoke(this, root.Id);
             watcher.Start();
             _watchers[root.Id] = watcher;

@@ -18,6 +18,14 @@ public sealed class Root
     /// <summary>Whether this root participates in the unioned view.</summary>
     public bool Included { get; set; } = true;
 
+    /// <summary>
+    /// Index this folder's subfolders too. All-or-nothing by design — a user who wants only some
+    /// subtrees adds those folders as their own roots. Turning it off keeps Aperture off a large or
+    /// expensive hierarchy (e.g. a cloud folder whose files are online-only and would be hydrated
+    /// one by one). Turning it off on an existing root prunes the now-out-of-scope items on re-index.
+    /// </summary>
+    public bool Recursive { get; set; } = true;
+
     /// <summary>Optional color tag (hex or named) for a visual cue. Null = none.</summary>
     public string? ColorTag { get; set; }
 

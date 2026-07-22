@@ -53,4 +53,11 @@ public sealed class ApertureSettings
 
     /// <summary>Set once the first-run folder detection has been offered.</summary>
     public bool FirstRunDone { get; set; }
+
+    /// <summary>
+    /// Folder-tree nodes the user left expanded, as "rootId|relDir" keys, so the tree comes back the
+    /// way they left it. <c>null</c> means "never saved" (a fresh install expands the root folders);
+    /// an empty array is a real state — the user collapsed everything — and is respected.
+    /// </summary>
+    public string[]? ExpandedFolders { get; set; }
 }

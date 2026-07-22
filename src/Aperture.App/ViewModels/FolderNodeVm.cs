@@ -13,6 +13,7 @@ public sealed class FolderNodeVm : ObservableObject
     private static readonly FolderNodeVm Placeholder = new();
 
     private readonly Func<long, string, List<FolderNodeVm>>? _loadChildren;
+    private readonly Action<FolderNodeVm, bool>? _onExpandedChanged;
     private bool _loaded;
     private bool _isExpanded;
     private bool _isSelected;
@@ -21,8 +22,10 @@ public sealed class FolderNodeVm : ObservableObject
 
     public FolderNodeVm(
         long rootId, string relDir, string name, bool isRoot, bool hasChildren,
-        RootVm? root, int count, Func<long, string, List<FolderNodeVm>> loadChildren)
+        RootVm? root, int count, Func<long, string, List<FolderNodeVm>> loadChildren,
+        Action<FolderNodeVm, bool>? onExpandedChanged = null)
     {
+        _onExpandedChanged = onExpandedChanged;
         RootId = rootId;
         RelDir = relDir;
         Name = name;
@@ -38,6 +41,9 @@ public sealed class FolderNodeVm : ObservableObject
 
     public long RootId { get; }
     public string RelDir { get; } = "";
+
+    /// <summary>Stable identity for this node across rebuilds — used to persist expansion state.</summary>
+    public string Key => $"{RootId}|{RelDir}";
     public string Name { get; } = "";
     public bool IsRoot { get; }
     public bool HasChildren { get; }
@@ -53,8 +59,11 @@ public sealed class FolderNodeVm : ObservableObject
         get => _isExpanded;
         set
         {
-            if (SetProperty(ref _isExpanded, value) && value)
+            if (!SetProperty(ref _isExpanded, value))
+                return;
+            if (value)
                 EnsureChildren();
+            _onExpandedChanged?.Invoke(this, value);
         }
     }
 
@@ -62,16 +71,6 @@ public sealed class FolderNodeVm : ObservableObject
     {
         get => _isSelected;
         set => SetProperty(ref _isSelected, value);
-    }
-
-    /// <summary>Recursively expands this node and all descendants (loading children as it goes).</summary>
-    public void ExpandAll()
-    {
-        if (!HasChildren)
-            return;
-        IsExpanded = true; // triggers EnsureChildren
-        foreach (var child in Children)
-            child.ExpandAll();
     }
 
     private void EnsureChildren()

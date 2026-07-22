@@ -1,0 +1,37 @@
+<Window x:Class="Aperture.App.AddFolderDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add folder" Width="470" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="#F7F8FA" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
+        Icon="Assets/aperture.ico">
+    <Window.Resources>
+        <SolidColorBrush x:Key="Ink" Color="#1F2430" />
+        <SolidColorBrush x:Key="Muted" Color="#8A90A0" />
+        <SolidColorBrush x:Key="Accent" Color="#3A72F0" />
+        <SolidColorBrush x:Key="Line" Color="#E2E5EA" />
+    </Window.Resources>
+
+    <StackPanel Margin="20">
+        <TextBlock x:Name="FolderNameText" Foreground="{StaticResource Ink}" FontWeight="Bold" FontSize="15"
+                   TextTrimming="CharacterEllipsis" />
+        <TextBlock x:Name="FolderPathText" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,14"
+                   TextTrimming="CharacterEllipsis" />
+
+        <CheckBox x:Name="SubfoldersCheck" IsChecked="True" Foreground="{StaticResource Ink}" FontSize="13">
+            <TextBlock Text="Include subfolders" />
+        </CheckBox>
+
+        <Border Background="#EEF1F6" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="4"
+                Padding="10,7" Margin="0,10,0,0">
+            <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
+                       Text="All subfolders, or none — you can always add individual subfolders as their own folders. Leave this off for cloud folders whose files are online-only (OneDrive, Dropbox), so indexing doesn't pull every file down." />
+        </Border>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0" />
+            <Button Content="Add folder" IsDefault="True" Padding="16,6" Click="OnAdd"
+                    Background="#E6EEFF" BorderBrush="{StaticResource Accent}" />
+        </StackPanel>
+    </StackPanel>
+</Window>
