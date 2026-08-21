@@ -38,6 +38,15 @@ internal static class LibraryPaneFocus
     public static bool ShouldFocusContentsPane(DependencyObject? originalSource, IInputElement? currentFocus) =>
         ShouldFocusContentsPane(Classify(originalSource, currentFocus));
 
+    /// <summary>
+    /// True when keyboard focus is arriving from outside a pane onto an item
+    /// that is not the current selection. WPF <see cref="ListBox"/> /
+    /// <see cref="TreeView"/> often focus (and therefore select) the first
+    /// item on entry — redirect so Tab does not change the pane's selection.
+    /// </summary>
+    public static bool ShouldKeepExistingSelection(bool fromOutside, bool newFocusIsItem, bool newFocusIsSelected) =>
+        fromOutside && newFocusIsItem && !newFocusIsSelected;
+
     public static Hit Classify(DependencyObject? originalSource, IInputElement? currentFocus)
     {
         // A dialog keeps focus even if the click somehow reached the pane
