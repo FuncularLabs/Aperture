@@ -23,7 +23,14 @@
     <Company>Funcular Labs</Company>
     <Authors>Funcular Labs</Authors>
     <Copyright>© 2026 Funcular Labs</Copyright>
+    <!-- Don't append the +git-sha suffix to InformationalVersion — it clutters
+         the About line and the update check parses it as the running version. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aperture.Core.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\aperture.ico" />

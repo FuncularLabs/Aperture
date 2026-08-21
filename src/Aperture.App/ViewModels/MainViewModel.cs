@@ -8,12 +8,12 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using Aperture.App.Mvvm;
 using Aperture.App.Services;
+using Aperture.App.Updates;
 using Aperture.Core.Annotations;
 using Aperture.Core.Formatting;
 using Aperture.Core.Library;
 using Aperture.Core.Models;
 using Aperture.Core.Startup;
-using Aperture.Core.Updates;
 
 namespace Aperture.App.ViewModels;
 
@@ -29,6 +29,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext _ui;
     private readonly IRunKeyStore _runKeys = new CurrentUserRunKeyStore();
     private readonly string? _exePath = Environment.ProcessPath;
+    // Set when this process copies itself to AppData; until restart, ProcessPath
+    // is still the download, but Start-with-Windows must write the installed path.
+    private bool _installedThisSession;
     private readonly UpdateVersion? _currentVersion;
     private readonly Lock _indexLock = new();
     private readonly CollectionViewSource _view = new();
@@ -126,6 +129,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OpenReadmeCommand = new RelayCommand(OpenReadme);
         UpdateStableCommand = new RelayCommand(() => _ = UpdateToAsync(_stable, prerelease: false));
         UpdatePrereleaseCommand = new RelayCommand(() => _ = UpdateToAsync(_prerelease, prerelease: true));
+        InstallCommand = new RelayCommand(InstallToThisPc);
+        UninstallCommand = new RelayCommand(UninstallFromThisPc);
         NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
         NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
         NavigateBackCommand = new RelayCommand(NavigateBack, () => _back.Count > 0);
@@ -247,7 +252,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ThumbnailService Thumbnails { get; }
 
     /// <summary>"Aperture Image Viewer vX.Y.Z[-suffix]" — from InformationalVersion so a prerelease tag shows.</summary>
-    public string AppVersion
+    private static string ProductTitle
     {
         get
         {
@@ -258,6 +263,42 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return "Aperture Image Viewer v" + version;
         }
     }
+
+    public string AppVersion
+    {
+        get
+        {
+            var kind = UpdateService.IsInstalled() ? "installed" : "portable";
+            return ProductTitle + "  (" + kind + ")";
+        }
+    }
+
+    private string _onDiskVersionText = "";
+    public string OnDiskVersionText
+    {
+        get => _onDiskVersionText;
+        private set => SetProperty(ref _onDiskVersionText, value);
+    }
+
+    public bool ShowOnDiskVersion => OnDiskVersionText.Length > 0;
+
+    public bool ShowInstall => !RegistrationService.IsRunningFromAppDataInstall();
+    public bool ShowUninstall =>
+        RegistrationService.IsInstalledToAppData()
+        || RegistrationService.HasStartMenuShortcut()
+        || RegistrationService.HasDesktopShortcut();
+
+    public ICommand InstallCommand { get; }
+    public ICommand UninstallCommand { get; }
+
+    /// <summary>
+    /// Path the Run key should name: the AppData copy after an in-session install,
+    /// otherwise this process's exe.
+    /// </summary>
+    private string? AutostartExePath =>
+        _installedThisSession || RegistrationService.IsRunningFromAppDataInstall()
+            ? RegistrationService.AppDataInstallExe
+            : _exePath;
 
     // --- About / updater (hamburger header) --------------------------------
 
@@ -336,8 +377,42 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Called when the hamburger popup opens: refresh the Run-key checkbox and check GitHub.</summary>
     public void OnSettingsOpened()
     {
+        RefreshInstallUi();
         OnPropertyChanged(nameof(StartWithWindows));
+        RefreshOnDiskVersion();
         _ = CheckForUpdatesAsync();
+    }
+
+    private void RefreshInstallUi()
+    {
+        OnPropertyChanged(nameof(AppVersion));
+        OnPropertyChanged(nameof(ShowInstall));
+        OnPropertyChanged(nameof(ShowUninstall));
+    }
+
+    private void RefreshOnDiskVersion()
+    {
+        OnDiskVersionText = "";
+        if (!UpdateService.IsInstalled() || _currentVersion is null)
+        {
+            OnPropertyChanged(nameof(ShowOnDiskVersion));
+            return;
+        }
+        try
+        {
+            var onDisk = UpdateService.VersionOnDisk();
+            if (onDisk is not null && onDisk.CompareTo(_currentVersion) != 0)
+            {
+                var newer = onDisk.CompareTo(_currentVersion) > 0;
+                var action = newer
+                    ? "Close and reopen Aperture to switch."
+                    : "(older than this window — the installed copy was rolled back)";
+                OnDiskVersionText =
+                    $"Installed on disk: {onDisk} — this window is running {_currentVersion}. {action}";
+            }
+        }
+        catch { /* unreadable file version — the line stays hidden */ }
+        OnPropertyChanged(nameof(ShowOnDiskVersion));
     }
 
     private async Task CheckForUpdatesAsync()
@@ -418,18 +493,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (release is null || _updating) return;
 
-        if (UpdateService.AlreadyUpdatedOnDisk(release.Version, _currentVersion, out var onDisk))
+        var installed = UpdateService.IsInstalled();
+        if (installed && UpdateService.AlreadyUpdatedOnDisk(release.Version, _currentVersion, out var onDisk))
         {
-            UpdateMessage = $"Already at {onDisk} on disk — close and reopen Aperture to pick it up.";
+            var msg = $"Already at {onDisk} on disk — close and reopen Aperture to pick it up.";
+            UpdateMessage = msg;
             ShowUpdateMessage = true;
             ShowStableUpdate = ShowPrereleaseUpdate = false;
+            Notify(msg);
             return;
         }
 
         var what = prerelease
             ? $"{release.Tag} is a PRERELEASE — early access, may contain rough edges."
             : $"{release.Tag} is the newest stable release.";
-        var how = "The new version will be downloaded next to the current one and started; the current exe stays behind.";
+        var how = installed
+            ? "The installed copy will be replaced, shortcuts refreshed, and the app restarted."
+            : "The new version will be downloaded next to the current one and started; the current exe stays behind.";
         var owner = System.Windows.Application.Current?.MainWindow;
         var result = owner is not null
             ? System.Windows.MessageBox.Show(owner, $"{what}\n\n{how}\n\nUpdate now?",
@@ -464,7 +544,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
 
             UpdateMessage = "Installing…";
-            UpdateService.ApplyPortableAndRestart(file, release.AssetName ?? "Aperture.exe");
+            if (installed)
+                UpdateService.ApplyInstalledAndRestart(file);
+            else
+                UpdateService.ApplyPortableAndRestart(file, release.AssetName ?? "Aperture.exe");
             System.Windows.Application.Current?.Shutdown();
         }
         catch (InvalidOperationException ex)
@@ -488,6 +571,124 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Notify(message, warn: true);
     }
 
+    private void InstallToThisPc()
+    {
+        var alreadyInstalled = RegistrationService.IsRunningFromAppDataInstall();
+        var dest = RegistrationService.AppDataInstallExe;
+
+        if (Ask("Install Aperture on this PC?\n\n" +
+                "A copy will be placed at:\n" + dest + "\n\n" +
+                "A Start menu shortcut will be added so you can launch it anytime.") != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        var addDesktop = Ask("Also add a Desktop shortcut?") == System.Windows.MessageBoxResult.Yes;
+
+        var willMove = false;
+        if (!alreadyInstalled)
+        {
+            willMove = Ask("Remove the original download after installing?\n\n" +
+                           "Yes = move (the Downloads copy is deleted once the installed copy starts).\n" +
+                           "No = leave the downloaded file where it is.") == System.Windows.MessageBoxResult.Yes;
+        }
+
+        try
+        {
+            var download = RegistrationService.CurrentExePath;
+            var exe = alreadyInstalled
+                ? download
+                : RegistrationService.InstallToAppData();
+
+            if (!alreadyInstalled)
+            {
+                RegistrationService.SaveInstallInfo(download, moved: willMove);
+                _installedThisSession = true;
+            }
+
+            RegistrationService.CreateStartMenuShortcut(exe);
+            if (addDesktop)
+                RegistrationService.CreateDesktopShortcut(exe);
+
+            // Autostart must not keep a Downloads path after the AppData copy exists.
+            RegistrationService.RetargetStartWithWindows(download, exe);
+            RefreshInstallUi();
+            OnPropertyChanged(nameof(StartWithWindows));
+
+            if (willMove && !alreadyInstalled)
+            {
+                var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+                psi.ArgumentList.Add("--finish-move");
+                psi.ArgumentList.Add(download);
+                Process.Start(psi);
+                System.Windows.Application.Current?.Shutdown();
+                return;
+            }
+
+            var lines = new List<string>
+            {
+                "Aperture is installed.",
+                "",
+                "Exe: " + exe,
+                "Start menu: added",
+            };
+            if (addDesktop) lines.Add("Desktop shortcut: added");
+            Notify(string.Join("\n", lines));
+        }
+        catch (Exception ex)
+        {
+            Notify("Couldn't complete install:\n\n" + ex.Message, warn: true);
+        }
+    }
+
+    private void UninstallFromThisPc()
+    {
+        var runningFromInstall = RegistrationService.IsRunningFromAppDataInstall();
+        var info = RegistrationService.ReadInstallInfo();
+
+        var body = "Uninstall Aperture from this PC?\n\n" +
+                   "Removes the Start menu shortcut and Desktop shortcut." +
+                   (runningFromInstall
+                       ? "\n\nThe AppData copy can't be deleted while Aperture is running from it — close Aperture and uninstall again to remove that folder."
+                       : "\n\nAlso removes the copy in %LocalAppData%\\Programs\\Aperture.");
+        if (Ask(body) != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            var done = new List<string>();
+            if (!string.IsNullOrEmpty(info?.OriginalPath)
+                && Ask("Restore a copy to the original location?\n\n" + info.OriginalPath) == System.Windows.MessageBoxResult.Yes)
+            {
+                var ok = RegistrationService.RestoreToOriginal(info.OriginalPath);
+                done.Add(ok ? "• Restored a copy to " + info.OriginalPath : "• Couldn't restore to " + info.OriginalPath);
+            }
+
+            RegistrationService.RemoveStartMenuShortcut();
+            done.Add("• Removed the Start-menu entry");
+            RegistrationService.RemoveDesktopShortcut();
+            done.Add("• Removed the Desktop shortcut");
+
+            if (!runningFromInstall)
+            {
+                RegistrationService.ClearStartWithWindowsIfPointsAtInstall();
+                RegistrationService.UninstallFromAppData();
+                done.Add("• Removed the installed copy from the app folder");
+                _installedThisSession = false;
+            }
+
+            RefreshInstallUi();
+            OnPropertyChanged(nameof(StartWithWindows));
+            Notify(string.Join("\n", done));
+        }
+        catch (Exception ex)
+        {
+            Notify("Couldn't complete uninstall:\n\n" + ex.Message, warn: true);
+        }
+    }
+
+    private static System.Windows.MessageBoxResult Ask(string text) =>
+        System.Windows.MessageBox.Show(text, "Aperture",
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
+
     private string _windowTitle = "Aperture Image Viewer";
 
     /// <summary>Window title — shows the current folder's full path.</summary>
@@ -502,11 +703,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root)
         {
             var full = _location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir);
-            WindowTitle = $"{AppVersion}  —  {full}";
+            WindowTitle = $"{ProductTitle}  —  {full}";
         }
         else
         {
-            WindowTitle = AppVersion;
+            WindowTitle = ProductTitle;
         }
     }
 
@@ -733,12 +934,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public bool StartWithWindows
     {
-        get => WindowsStartup.IsEnabled(_runKeys, _exePath);
+        get => WindowsStartup.IsEnabled(_runKeys, AutostartExePath);
         set
         {
-            if (value == WindowsStartup.IsEnabled(_runKeys, _exePath))
+            if (value == WindowsStartup.IsEnabled(_runKeys, AutostartExePath))
                 return;
-            WindowsStartup.TrySetEnabled(_runKeys, _exePath, value);
+            WindowsStartup.TrySetEnabled(_runKeys, AutostartExePath, value);
             OnPropertyChanged();
         }
     }

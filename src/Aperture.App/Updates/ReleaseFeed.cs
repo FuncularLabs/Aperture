@@ -1,9 +1,12 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
-namespace Aperture.Core.Updates;
+namespace Aperture.App.Updates;
 
 /// <summary>One published GitHub release relevant to updating.</summary>
-public sealed record ReleaseInfo(
+internal sealed record ReleaseInfo(
     string Tag,
     UpdateVersion Version,
     bool Prerelease,
@@ -14,21 +17,18 @@ public sealed record ReleaseInfo(
 
 /// <summary>What an update check found: the newest stable and the newest
 /// prerelease (either may be null when none exists or parsing failed).</summary>
-public sealed record UpdateCheck(ReleaseInfo? Stable, ReleaseInfo? PrereleaseRelease);
+internal sealed record UpdateCheck(ReleaseInfo? Stable, ReleaseInfo? PrereleaseRelease);
 
 /// <summary>
-/// Pure parsing/selection over the GitHub releases JSON — separated from HTTP
+/// Pure parsing/selection over the GitHub releases JSON — separated from the HTTP
 /// so it's unit-testable. Drafts are ignored; the newest stable and newest
 /// prerelease are chosen by VERSION order (not list order), and only releases
 /// carrying the single-file win-x64 asset the release workflow publishes count.
 /// </summary>
-public static class ReleaseFeed
+internal static class ReleaseFeed
 {
-    /// <summary>
-    /// Aperture publish asset names look like <c>Aperture-v0.8.0-beta1-win-x64.exe</c>.
-    /// Not the Markdown Midget <c>-win-x64-net10.exe</c> suffix.
-    /// </summary>
-    public const string AssetSuffix = "-win-x64.exe";
+    // Aperture publishes Aperture-<tag>-win-x64.exe (Midget's suffix is -win-x64-net10.exe).
+    private const string AssetSuffix = "-win-x64.exe";
 
     public static UpdateCheck Select(string releasesJson)
     {
@@ -40,10 +40,10 @@ public static class ReleaseFeed
             var tag = el.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
             var version = UpdateVersion.Parse(tag);
             if (tag is null || version is null) continue;
-            // Either signal is enough. The GitHub flag is set by hand at publish
-            // time and has been wrong (Aperture's beta tags have shipped with
-            // prerelease:false). Mistaking a beta for a stable release is the one
-            // direction that actually hurts — it would be offered to everyone.
+            // Either signal is enough. The flag is set by hand at publish time and
+            // has been wrong before (v0.2.0-beta2 is flagged stable on GitHub), and
+            // mistaking a beta for a stable release is the one direction that
+            // actually hurts — it would be offered to everyone.
             var pre = (el.TryGetProperty("prerelease", out var p) && p.GetBoolean())
                       || version.IsPrerelease;
             var html = el.TryGetProperty("html_url", out var h) ? h.GetString() ?? "" : "";
@@ -62,7 +62,7 @@ public static class ReleaseFeed
                     break;
                 }
             }
-            if (assetUrl is null) continue;
+            if (assetUrl is null) continue;   // nothing to install from this release
             releases.Add(new ReleaseInfo(tag, version, pre, html, assetName, assetUrl, assetSize));
         }
 

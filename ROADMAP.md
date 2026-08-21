@@ -5,12 +5,14 @@ dates. Items are checked off as they ship (each lands a `CHANGELOG.md` entry whe
 
 ## Distribution & lifecycle
 
-- [ ] **Real installer** — a proper Windows installer (Start-menu entry, clean uninstall,
-  file associations where they make sense) to replace the bare framework-dependent single-file `.exe`.
-  In-app update check/apply now lives on the hamburger About surface (portable apply).
+- [x] **AppData install + Start menu** — hamburger Install copies to
+  `%LocalAppData%\Programs\Aperture\Aperture.exe`, adds Start-menu (optional Desktop)
+  shortcuts, and Uninstall reverses it. In-app update check/apply lives on the hamburger
+  About surface: in-place swap when running from that copy, portable apply otherwise.
 
 - [x] **Start with Windows** — opt-in "launch at login" checkbox on the hamburger Settings
-  surface (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Off by default.
+  surface (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Off by default. Survives
+  install/update by rewriting the Run value to the AppData exe.
 
 - [ ] **Tray behavior** — option to close/minimize to the background / system tray instead of
   exiting, so Aperture can stay warm for instant opens. Off by default.

@@ -6,11 +6,17 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 ## [Unreleased]
 
 ### Added
-- **About + updater** on the hamburger menu — current version, GitHub release check, Update /
-  Update (prerelease) when a newer build is available, progress and errors. Apply is portable
-  (new exe next to the current one) because there is no installer yet.
+- **About + updater** on the hamburger menu — current version (installed/portable), GitHub
+  release check, Update / Update (prerelease) when a newer build is available, progress and
+  errors. Running from AppData swaps in place (Midget-style rename dance); a portable copy
+  downloads the new exe next to the current one.
+- **AppData install** — hamburger **Install Aperture on this PC…** copies to
+  `%LocalAppData%\Programs\Aperture\`, adds a Start menu shortcut (optional Desktop), and
+  **Uninstall…** reverses it. No `.md` file association — Aperture is not an editor.
 - **Start with Windows** — opt-in checkbox on the same Settings surface. Writes or deletes
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Aperture`; off by default.
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Aperture`; off by default. After
+  install or update the Run value is rewritten to the AppData exe so logon does not keep a
+  Downloads path.
 
 ## [0.8.0-beta1] - 2026-07-14
 

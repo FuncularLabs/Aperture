@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using Aperture.App.Services;
+using Aperture.App.Updates;
 using Aperture.App.ViewModels;
 using Aperture.Core.Library;
 using Aperture.Core.Storage;
@@ -30,9 +31,19 @@ public partial class App : Application
         if (string.IsNullOrWhiteSpace(overrideDir))
             LegacyDataMigration.Run(AperturePaths.DefaultDataDir, AperturePaths.LegacyReelDataDir);
 
+        // A "move" install launches the AppData copy with --finish-move <download>
+        // so it can delete the original once that process has exited.
+        var args = e.Args;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--finish-move" && i + 1 < args.Length)
+                RegistrationService.FinishMove(args[++i]);
+        }
+
         _library = new LibraryService(dataDir);
         var thumbnails = new ThumbnailService(_library);
         UpdateService.CleanupOldBinaries();
+        RegistrationService.RefreshAutostartToInstalledCopy();
         _viewModel = new MainViewModel(_library, thumbnails);
 
         var window = new MainWindow { DataContext = _viewModel };

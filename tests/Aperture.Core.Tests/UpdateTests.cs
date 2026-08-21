@@ -1,4 +1,4 @@
-using Aperture.Core.Updates;
+using Aperture.App.Updates;
 
 namespace Aperture.Core.Tests;
 
@@ -130,6 +130,24 @@ public class UpdateOfferTests
         Assert.False(UpdateOffer.NeedsRestartNotUpdate(null, Cur("0.8.0-beta1"), Cur("0.7.1-beta1")));
         Assert.False(UpdateOffer.NeedsRestartNotUpdate(null, null, null));
     }
+
+    [Fact]
+    public void AnUnknownRunningVersion_StillCatchesTheAlreadyOfferedCase()
+    {
+        Assert.True(UpdateOffer.NeedsRestartNotUpdate(Cur("0.8.0-beta1"), Cur("0.8.0-beta1"), null));
+        Assert.False(UpdateOffer.NeedsRestartNotUpdate(Cur("0.7.1-beta1"), Cur("0.8.0-beta1"), null));
+    }
+
+    [Theory]
+    [InlineData("0.8.0", "0.7.0", true)]
+    [InlineData("0.8.0-beta1", "0.7.0", true)]
+    [InlineData("0.7.0", "0.7.0", false)]
+    [InlineData("0.7.0", "0.8.0", false)]
+    [InlineData("0.7.0", "0.7.0-beta1", true)]
+    public void RestartIsNeededWhenTheDiskLeadsTheProcessEvenWithoutAnOffer(
+        string onDisk, string running, bool offer)
+        => Assert.Equal(offer,
+            UpdateOffer.NeedsRestartNotUpdate(Cur(onDisk), wanted: null, Cur(running)));
 }
 
 public class ReleaseFeedTests

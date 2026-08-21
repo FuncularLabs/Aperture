@@ -120,4 +120,34 @@ public static class WindowsStartup
             return false;
         }
     }
+
+    /// <summary>
+    /// True when the named Run value is present (any path). Used to decide whether
+    /// an install/update should rewrite the value rather than create one.
+    /// </summary>
+    public static bool HasValue(IRunKeyStore store)
+    {
+        try { return !string.IsNullOrWhiteSpace(store.GetValue(ValueName)); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// If the Run value already points at <paramref name="currentPath"/> (or already
+    /// at <paramref name="newPath"/>), rewrite it to <paramref name="newPath"/>.
+    /// Does not create a Run value the user never opted into. Never throws.
+    /// </summary>
+    public static bool TryRetargetIfPointsAt(IRunKeyStore store, string? currentPath, string? newPath)
+    {
+        if (string.IsNullOrWhiteSpace(newPath)) return false;
+        try
+        {
+            if (!IsEnabled(store, currentPath) && !IsEnabled(store, newPath))
+                return false;
+            return TrySetEnabled(store, newPath, enabled: true);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
