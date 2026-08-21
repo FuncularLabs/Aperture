@@ -5,6 +5,14 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.2-beta1] - 2026-08-21
+
+### Added
+- **Installed / portable badge** on the hamburger About — the same AppData-path check the updater already uses (`this process is %LocalAppData%\Programs\Aperture\Aperture.exe`), shown as a quiet caption next to the version.
+
+### Changed
+- **Start with Windows from a portable copy** now asks to install first instead of writing `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` to a Downloads (or any portable) path. Declining or cancelling leaves autostart off. After install, the Run value names the AppData exe. Installed copies keep writing and deleting the Run key as before.
+
 ## [0.8.1-beta1] - 2026-08-21
 
 ### Added

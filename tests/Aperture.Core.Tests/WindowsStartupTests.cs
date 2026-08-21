@@ -161,6 +161,96 @@ public class WindowsStartupTests
     }
 
     [Fact]
+    public void MustInstallFirst_OnlyWhenEnablingAPortableCopy()
+    {
+        Assert.True(AutostartPolicy.MustInstallFirst(
+            enable: true, runningFromInstall: false, installedThisSession: false));
+        Assert.False(AutostartPolicy.MustInstallFirst(
+            enable: true, runningFromInstall: true, installedThisSession: false));
+        Assert.False(AutostartPolicy.MustInstallFirst(
+            enable: true, runningFromInstall: false, installedThisSession: true));
+        Assert.False(AutostartPolicy.MustInstallFirst(
+            enable: false, runningFromInstall: false, installedThisSession: false));
+    }
+
+    [Fact]
+    public void TargetExe_PrefersAppDataAfterInstall()
+    {
+        var download = @"C:\Users\me\Downloads\Aperture.exe";
+        var installed = @"C:\Users\me\AppData\Local\Programs\Aperture\Aperture.exe";
+        Assert.Equal(download, AutostartPolicy.TargetExe(download, installed, runningFromInstall: false, installedThisSession: false));
+        Assert.Equal(installed, AutostartPolicy.TargetExe(download, installed, runningFromInstall: true, installedThisSession: false));
+        Assert.Equal(installed, AutostartPolicy.TargetExe(download, installed, runningFromInstall: false, installedThisSession: true));
+    }
+
+    [Fact]
+    public void TryApply_PortableEnableDeclined_DoesNotWriteRun()
+    {
+        // The checkbox path: portable + Start-with-Windows, user declined install.
+        // MustInstallFirst is true, so TryApply must leave the store empty.
+        var store = new DictRunKeyStore();
+        var download = @"C:\Users\me\Downloads\Aperture-v0.8.1-beta1-win-x64.exe";
+        var installed = @"C:\Users\me\AppData\Local\Programs\Aperture\Aperture.exe";
+
+        Assert.True(AutostartPolicy.MustInstallFirst(
+            enable: true, runningFromInstall: false, installedThisSession: false));
+        Assert.False(AutostartPolicy.TryApply(
+            store, download, installed, enable: true,
+            runningFromInstall: false, installedThisSession: false));
+        Assert.False(WindowsStartup.HasValue(store));
+        Assert.Empty(store.Values);
+        Assert.False(WindowsStartup.IsEnabled(store, download));
+        Assert.False(WindowsStartup.IsEnabled(store, installed));
+    }
+
+    [Fact]
+    public void TryApply_AcceptedInstallThenRunPointsAtAppData()
+    {
+        // After the user accepts install, _installedThisSession is true (this
+        // process is still the download) and Run must name the AppData exe.
+        var store = new DictRunKeyStore();
+        var download = @"C:\Users\me\Downloads\Aperture-v0.8.1-beta1-win-x64.exe";
+        var installed = @"C:\Users\me\AppData\Local\Programs\Aperture\Aperture.exe";
+
+        Assert.True(AutostartPolicy.TryApply(
+            store, download, installed, enable: true,
+            runningFromInstall: false, installedThisSession: true));
+        Assert.True(WindowsStartup.IsEnabled(store, installed));
+        Assert.False(WindowsStartup.IsEnabled(store, download));
+        Assert.Equal(WindowsStartup.FormatCommand(installed), store.GetValue(WindowsStartup.ValueName));
+    }
+
+    [Fact]
+    public void TryApply_InstalledCopy_WritesAndDeletesRun()
+    {
+        var store = new DictRunKeyStore();
+        var installed = @"C:\Users\me\AppData\Local\Programs\Aperture\Aperture.exe";
+        Assert.True(AutostartPolicy.TryApply(
+            store, installed, installed, enable: true,
+            runningFromInstall: true, installedThisSession: false));
+        Assert.True(WindowsStartup.IsEnabled(store, installed));
+
+        Assert.True(AutostartPolicy.TryApply(
+            store, installed, installed, enable: false,
+            runningFromInstall: true, installedThisSession: false));
+        Assert.False(WindowsStartup.HasValue(store));
+    }
+
+    [Fact]
+    public void TryApply_PortableDisable_DeletesAStaleDownloadRunValue()
+    {
+        var store = new DictRunKeyStore();
+        var download = @"C:\Users\me\Downloads\Aperture.exe";
+        var installed = @"C:\Users\me\AppData\Local\Programs\Aperture\Aperture.exe";
+        WindowsStartup.TrySetEnabled(store, download, enabled: true);
+
+        Assert.True(AutostartPolicy.TryApply(
+            store, download, installed, enable: false,
+            runningFromInstall: false, installedThisSession: false));
+        Assert.False(WindowsStartup.HasValue(store));
+    }
+
+    [Fact]
     public void CurrentUserRunKeyStore_RoundTripsAThrowawayValue()
     {
         var store = new CurrentUserRunKeyStore();

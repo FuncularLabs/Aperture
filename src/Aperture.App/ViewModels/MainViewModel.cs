@@ -264,14 +264,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string AppVersion
-    {
-        get
-        {
-            var kind = UpdateService.IsInstalled() ? "installed" : "portable";
-            return ProductTitle + "  (" + kind + ")";
-        }
-    }
+    public string AppVersion => ProductTitle;
+
+    /// <summary>
+    /// Quiet About caption: "installed" or "portable". Same source as the
+    /// updater — <see cref="RegistrationService.IsRunningFromAppDataInstall"/>.
+    /// </summary>
+    public string InstallKindCaption => RegistrationService.RunningKind;
 
     private string _onDiskVersionText = "";
     public string OnDiskVersionText
@@ -293,12 +292,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Path the Run key should name: the AppData copy after an in-session install,
-    /// otherwise this process's exe.
+    /// otherwise this process's exe. Same rule as <see cref="AutostartPolicy.TargetExe"/>.
     /// </summary>
     private string? AutostartExePath =>
-        _installedThisSession || RegistrationService.IsRunningFromAppDataInstall()
-            ? RegistrationService.AppDataInstallExe
-            : _exePath;
+        AutostartPolicy.TargetExe(
+            _exePath, RegistrationService.AppDataInstallExe,
+            RegistrationService.IsRunningFromAppDataInstall(), _installedThisSession);
 
     // --- About / updater (hamburger header) --------------------------------
 
@@ -386,6 +385,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void RefreshInstallUi()
     {
         OnPropertyChanged(nameof(AppVersion));
+        OnPropertyChanged(nameof(InstallKindCaption));
         OnPropertyChanged(nameof(ShowInstall));
         OnPropertyChanged(nameof(ShowUninstall));
     }
@@ -571,15 +571,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Notify(message, warn: true);
     }
 
-    private void InstallToThisPc()
+    private void InstallToThisPc() => TryInstallToThisPc(alreadyConfirmed: false);
+
+    /// <summary>
+    /// Existing AppData install flow. Returns true when the copy (and shortcuts)
+    /// landed; false if the user cancelled or install failed. A "move" install
+    /// still returns true after scheduling shutdown so Start-with-Windows can
+    /// write the AppData path before this process exits.
+    /// </summary>
+    private bool TryInstallToThisPc(bool alreadyConfirmed)
     {
         var alreadyInstalled = RegistrationService.IsRunningFromAppDataInstall();
         var dest = RegistrationService.AppDataInstallExe;
 
-        if (Ask("Install Aperture on this PC?\n\n" +
-                "A copy will be placed at:\n" + dest + "\n\n" +
-                "A Start menu shortcut will be added so you can launch it anytime.") != System.Windows.MessageBoxResult.Yes)
-            return;
+        if (!alreadyConfirmed
+            && Ask("Install Aperture on this PC?\n\n" +
+                   "A copy will be placed at:\n" + dest + "\n\n" +
+                   "A Start menu shortcut will be added so you can launch it anytime.") != System.Windows.MessageBoxResult.Yes)
+            return false;
 
         var addDesktop = Ask("Also add a Desktop shortcut?") == System.Windows.MessageBoxResult.Yes;
 
@@ -620,7 +629,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 psi.ArgumentList.Add(download);
                 Process.Start(psi);
                 System.Windows.Application.Current?.Shutdown();
-                return;
+                return true;
             }
 
             var lines = new List<string>
@@ -632,10 +641,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             };
             if (addDesktop) lines.Add("Desktop shortcut: added");
             Notify(string.Join("\n", lines));
+            return true;
         }
         catch (Exception ex)
         {
             Notify("Couldn't complete install:\n\n" + ex.Message, warn: true);
+            return false;
         }
     }
 
@@ -929,20 +940,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Launch Aperture at Windows logon. Source of truth is the HKCU Run key
-    /// (checked iff a value named Aperture points at this exe). Registry failures
-    /// never throw; the checkbox re-reads the actual key.
+    /// (checked iff a value named Aperture points at the autostart exe). A
+    /// portable copy must not write a Downloads path — turning the checkbox on
+    /// asks to install first. Registry failures never throw; the checkbox
+    /// re-reads the actual key.
     /// </summary>
     public bool StartWithWindows
     {
         get => WindowsStartup.IsEnabled(_runKeys, AutostartExePath);
         set
         {
+            var runningFromInstall = RegistrationService.IsRunningFromAppDataInstall();
             if (value == WindowsStartup.IsEnabled(_runKeys, AutostartExePath))
                 return;
-            WindowsStartup.TrySetEnabled(_runKeys, AutostartExePath, value);
+
+            if (AutostartPolicy.MustInstallFirst(value, runningFromInstall, _installedThisSession))
+            {
+                if (Ask(PortableAutostartPrompt()) != System.Windows.MessageBoxResult.Yes
+                    || !TryInstallToThisPc(alreadyConfirmed: true))
+                {
+                    OnPropertyChanged();
+                    return;
+                }
+            }
+
+            AutostartPolicy.TryApply(
+                _runKeys, _exePath, RegistrationService.AppDataInstallExe,
+                value, RegistrationService.IsRunningFromAppDataInstall(), _installedThisSession);
             OnPropertyChanged();
         }
     }
+
+    private string PortableAutostartPrompt() =>
+        "Start with Windows from a portable copy would write this path into the sign-in Run key:\n\n" +
+        (_exePath ?? "(unknown)") + "\n\n" +
+        "Install Aperture on this PC first? Windows will then launch the AppData copy.";
 
     public string StatusText
     {
