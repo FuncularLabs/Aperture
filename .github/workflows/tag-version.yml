@@ -43,7 +43,7 @@ jobs:
         run: |
           $tagsFile = Join-Path $env:RUNNER_TEMP 'v-tags.txt'
           git tag -l 'v*' | Set-Content -Path $tagsFile -Encoding utf8NoBOM
-          dotnet run --project scripts/DecideReleaseTag --nologo -- `
+          dotnet run --project scripts/DecideReleaseTag -- `
             --repo . --tags-file $tagsFile --github-output
 
       - name: Create and push tag
