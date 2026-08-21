@@ -54,7 +54,8 @@ internal static class TileSpatialNavigation
 
         slop = Math.Max(1, slop);
         var sorted = xs.OrderBy(x => x).ToList();
-        var groups = new List<List<double>> { [sorted[0]] };
+        var groups = new List<List<double>>();
+        groups.Add([sorted[0]]);
         for (var i = 1; i < sorted.Count; i++)
         {
             if (Math.Abs(sorted[i] - groups[^1][0]) > slop)
