@@ -162,4 +162,114 @@ public class TileSpatialNavigationTests
         // Down from last tile of section 0 (index 1, col 1) crosses the collapsed bucket to col 1 of section 2.
         Assert.Equal(5, TileSpatialNavigation.PickVertical(cells, 1, +1));
     }
+
+    // --- 0.8.5: visual X, not a stale column count (Paul's recording) ---
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    public void Down_FromColumn0_StaysInColumn0_NotColumn1(int columns)
+    {
+        var cells = TileSpatialNavigation.LayoutWrap([columns * 3], columns, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        var pick = TileSpatialNavigation.PickVertical(cells, 0, +1);
+        Assert.Equal(columns, pick);                 // next row, same visual column
+        Assert.NotEqual(columns + 1, pick);          // must not slide into column 1
+        Assert.Equal(cells[0].X, cells[pick!.Value].X);
+    }
+
+    [Fact]
+    public void Up_FourColumnWrap_DoesNotUseStaleThree()
+    {
+        // Paul's 4-column zoom: Need a Hint at visual row 3, col 3 (1-based)
+        // is index 10. Up must stay in that column (index 6), not land on
+        // index 7 — Bar Chart, one tile right. 0.8.4 subtracted 3 because
+        // (ActualWidth-12)/slot ignored that the viewport already excluded
+        // the scrollbar, so calculatedColumns = 3.
+        const int visualColumns = 4;
+        const int wrongColumns = 3;
+        var visual = TileSpatialNavigation.LayoutWrap(
+            [visualColumns * 5], visualColumns, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        var staleLabels = TileSpatialNavigation.WithIndexColumns(visual, wrongColumns);
+
+        const int needAHint = 10; // row 2, col 2 (0-based) on a 4-col wrap
+        const int barChartDiagonal = needAHint - wrongColumns; // 7 — today's math
+        const int sameColumnUp = needAHint - visualColumns;    // 6
+
+        Assert.Equal(200, visual[needAHint].X);
+        Assert.Equal(visual[needAHint].X, visual[sameColumnUp].X);
+        Assert.NotEqual(visual[needAHint].X, visual[barChartDiagonal].X);
+
+        // Col/Row look like a 3-column wrap (the 0.8.4 picker). X is still 4-col.
+        Assert.Equal(1, staleLabels[needAHint].Col);
+        Assert.Equal(7, StepByColumnCount(needAHint, -wrongColumns));
+
+        var pick = TileSpatialNavigation.PickVertical(staleLabels, needAHint, -1);
+        Assert.Equal(sameColumnUp, pick);
+        Assert.NotEqual(barChartDiagonal, pick);
+        Assert.Equal(visual[needAHint].CenterX, visual[pick!.Value].CenterX);
+    }
+
+    [Fact]
+    public void Up_SixColumnWrap_DoesNotSkipARow()
+    {
+        // 6-column zoom: green Wordle at row 6, col 3 (1-based) is index 32.
+        // One Up must be the tile immediately above (index 26), not a 12-item
+        // jump that skips the in-between row.
+        var cells = TileSpatialNavigation.LayoutWrap([42], columns: 6, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        const int green = 5 * 6 + 2; // row 5, col 2
+        Assert.Equal(26, TileSpatialNavigation.PickVertical(cells, green, -1));
+        Assert.Equal(20, TileSpatialNavigation.PickVertical(cells, 26, -1));
+        Assert.NotEqual(20, TileSpatialNavigation.PickVertical(cells, green, -1));
+        Assert.Equal(cells[green].X, cells[26].X);
+    }
+
+    [Fact]
+    public void Up_SixColumnWrap_StaleFiveStillUsesVisualX()
+    {
+        var visual = TileSpatialNavigation.LayoutWrap([42], columns: 6, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        var stale = TileSpatialNavigation.WithIndexColumns(visual, staleColumns: 5);
+        const int green = 32;
+        var pick = TileSpatialNavigation.PickVertical(stale, green, -1);
+        Assert.Equal(26, pick);
+        Assert.NotEqual(green - 5, pick);
+        Assert.Equal(visual[green].X, visual[pick!.Value].X);
+    }
+
+    [Fact]
+    public void ResolveColumnCount_PrefersVisualFour_OverStaleFittedThree()
+    {
+        // Viewport already excludes the scrollbar; subtracting padding again
+        // (or using TileSize+20) yields 3. The wrap fitted 4.
+        Assert.Equal(4, TileSpatialNavigation.FitColumns(availableWidth: 860, slotWidth: 215));
+        Assert.Equal(3, TileSpatialNavigation.FitColumns(availableWidth: 860 - 12, slotWidth: 215 + 20));
+        Assert.Equal(4, TileSpatialNavigation.ResolveColumnCount(columnsFromLayoutX: 4, fittedFromWidth: 3));
+        Assert.Equal(6, TileSpatialNavigation.ResolveColumnCount(columnsFromLayoutX: 5, fittedFromWidth: 6));
+    }
+
+    [Fact]
+    public void DistinctColumnXs_CountsVisualColumns_NotFlatIndex()
+    {
+        var visual = TileSpatialNavigation.LayoutWrap([12], columns: 4, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        var xs = TileSpatialNavigation.DistinctColumnXs(visual.Select(c => c.X).ToList(), slop: 50);
+        Assert.Equal(4, xs.Count);
+        Assert.Equal(4, TileSpatialNavigation.ResolveColumnCount(xs.Count, fittedFromWidth: 3));
+    }
+
+    [Fact]
+    public void Down_DateSectioned_SameVisualX_AtTwoColumnCounts()
+    {
+        foreach (var columns in new[] { 4, 6 })
+        {
+            var cells = TileSpatialNavigation.LayoutWrap(
+                [columns + 2, columns * 2], columns, tileWidth: 100, tileHeight: 100, headerHeight: 50);
+            var pick = TileSpatialNavigation.PickVertical(cells, 0, +1);
+            Assert.Equal(columns, pick);
+            Assert.Equal(cells[0].X, cells[pick!.Value].X);
+            Assert.NotEqual(columns + 1, pick);
+        }
+    }
+
+    private static int StepByColumnCount(int index, int delta) => index + delta;
 }

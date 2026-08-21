@@ -1089,11 +1089,48 @@ public partial class MainWindow : Window
         if (items.Count == 0)
             return false;
 
-        var columns = VisualColumnCount();
-        var (tileW, tileH) = MeasureTileSize();
+        var realized = CollectRealizedByItem();
+        var (tileW, tileH, slotW, _) = MeasureTileSlot(realized.Values);
+        var viewportW = WrapViewportWidth();
+        var observedXs = TileSpatialNavigation.DistinctColumnXs(
+            realized.Values.Select(c => c.X).ToList(), slop: Math.Max(tileW * 0.5, 1));
+        var fitted = TileSpatialNavigation.FitColumns(viewportW, slotW);
+        var columns = TileSpatialNavigation.ResolveColumnCount(observedXs.Count, fitted);
+
+        IReadOnlyList<double>? columnXs = observedXs.Count == columns
+            ? observedXs
+            : TileSpatialNavigation.UniformColumnXs(viewportW, slotW, tileW);
+
         var headerH = layout.HasHeaders ? MeasureSectionHeaderHeight() : 0;
-        cells = TileSpatialNavigation.LayoutWrap(layout.SectionCounts, columns, tileW, tileH, headerH);
+        cells = TileSpatialNavigation.LayoutWrap(
+            layout.SectionCounts, columns, tileW, tileH, headerH, columnXs);
+
+        if (realized.Count > 0)
+        {
+            var byIndex = new Dictionary<int, TileSpatialNavigation.Cell>();
+            foreach (var (item, measured) in realized)
+            {
+                var idx = IndexOfItem(items, item);
+                if (idx < 0)
+                    continue;
+                // Overlay X/size only. Realized Y is viewport-relative; mixing it
+                // with the document-space wrap model skips rows. Column is X.
+                byIndex[idx] = cells[idx] with { X = measured.X, Width = measured.Width, Height = measured.Height };
+            }
+            cells = TileSpatialNavigation.OverlayMeasured(cells, byIndex);
+        }
+
         return cells.Count > 0;
+    }
+
+    private static int IndexOfItem(IReadOnlyList<IGridItem> items, IGridItem item)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], item))
+                return i;
+        }
+        return -1;
     }
 
     private int? CurrentCellIndex(IReadOnlyList<IGridItem> items)
@@ -1125,9 +1162,13 @@ public partial class MainWindow : Window
         if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem item } li)
         {
             // Origin is the ListBox: coordinates are viewport-relative (scroll already applied).
+            // Use the wrap slot (margin included) so X matches TryBuildCells / Uniform columns.
             var tl = li.TranslatePoint(new Point(0, 0), origin);
+            var slotW = li.ActualWidth + li.Margin.Left + li.Margin.Right;
+            var slotH = li.ActualHeight + li.Margin.Top + li.Margin.Bottom;
             cells.Add(new TileSpatialNavigation.Cell(
-                cells.Count, Row: 0, Col: 0, tl.X, tl.Y, li.ActualWidth, li.ActualHeight));
+                cells.Count, Row: 0, Col: 0,
+                tl.X - li.Margin.Left, tl.Y - li.Margin.Top, slotW, slotH));
             items.Add(item);
             return;
         }
@@ -1137,32 +1178,87 @@ public partial class MainWindow : Window
             CollectRealizedTileRects(VisualTreeHelper.GetChild(node, i), origin, cells, items);
     }
 
-    private int VisualColumnCount()
+    /// <summary>
+    /// Width the wrap panel actually laid out against. ScrollViewer.ViewportWidth
+    /// already excludes the vertical scrollbar — do not subtract padding/12 again
+    /// (that was the 0.8.4 off-by-one: 4 visual columns, nav used 3).
+    /// </summary>
+    private double WrapViewportWidth()
     {
-        var realized = new List<Rect>();
-        CollectRealizedItemRects(ItemsList, ItemsList, realized);
-        if (realized.Count > 0)
-        {
-            var itemW = realized.Max(r => r.Width);
-            var fitted = (int)((ItemsList.ActualWidth - 12) / Math.Max(1, itemW));
-            var fullestRow = realized
-                .GroupBy(r => Math.Round(r.Y / 8.0) * 8.0)
-                .Select(g => g.Count())
-                .DefaultIfEmpty(1)
-                .Max();
-            return Math.Max(1, Math.Max(fullestRow, fitted));
-        }
-        return ColumnsPerRow();
+        if (FindDescendant<WpfToolkit.Controls.VirtualizingWrapPanel>(ItemsList)
+            is { ActualWidth: > 1 } panel)
+            return panel.ActualWidth;
+
+        var sv = GridScroll();
+        if (sv is { ViewportWidth: > 1 })
+            return sv.ViewportWidth;
+
+        var w = ItemsList.ActualWidth - ItemsList.Padding.Left - ItemsList.Padding.Right;
+        if (sv?.ComputedVerticalScrollBarVisibility == System.Windows.Visibility.Visible)
+            w -= SystemParameters.VerticalScrollBarWidth;
+        return Math.Max(1, w);
     }
 
-    private (double Width, double Height) MeasureTileSize()
+    private (double Width, double Height, double SlotWidth, double SlotHeight) MeasureTileSlot(
+        IEnumerable<TileSpatialNavigation.Cell>? realized = null)
     {
-        var realized = new List<Rect>();
-        CollectRealizedItemRects(ItemsList, ItemsList, realized);
-        if (realized.Count > 0)
-            return (realized[0].Width, realized[0].Height);
+        if (realized is not null)
+        {
+            foreach (var c in realized)
+                return (c.Width, c.Height, c.Width, c.Height);
+        }
+
+        if (FindFirstTileItem(ItemsList) is { } li && li.ActualWidth > 0)
+        {
+            var w = li.ActualWidth;
+            var h = li.ActualHeight;
+            return (w, h, w + li.Margin.Left + li.Margin.Right, h + li.Margin.Top + li.Margin.Bottom);
+        }
+
         var outer = (ViewModel?.TileSize ?? 200) + 20;
-        return (outer, outer + 18);
+        return (outer, outer + 18, outer, outer + 18);
+    }
+
+    private static System.Windows.Controls.ListBoxItem? FindFirstTileItem(DependencyObject node)
+    {
+        if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem } li)
+            return li;
+
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+        {
+            if (FindFirstTileItem(VisualTreeHelper.GetChild(node, i)) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    private Dictionary<IGridItem, TileSpatialNavigation.Cell> CollectRealizedByItem()
+    {
+        var map = new Dictionary<IGridItem, TileSpatialNavigation.Cell>();
+        CollectRealizedByItem(ItemsList, ItemsList, map);
+        return map;
+    }
+
+    private static void CollectRealizedByItem(
+        DependencyObject node,
+        UIElement origin,
+        Dictionary<IGridItem, TileSpatialNavigation.Cell> map)
+    {
+        if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem item } li)
+        {
+            var tl = li.TranslatePoint(new Point(0, 0), origin);
+            // Slot the wrap used: arranged width includes margin.
+            var slotW = li.ActualWidth + li.Margin.Left + li.Margin.Right;
+            var slotH = li.ActualHeight + li.Margin.Top + li.Margin.Bottom;
+            map[item] = new TileSpatialNavigation.Cell(
+                map.Count, Row: 0, Col: 0, tl.X - li.Margin.Left, tl.Y - li.Margin.Top, slotW, slotH);
+            return;
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+            CollectRealizedByItem(VisualTreeHelper.GetChild(node, i), origin, map);
     }
 
     private double MeasureSectionHeaderHeight()
@@ -1186,19 +1282,6 @@ public partial class MainWindow : Window
                 return found;
         }
         return null;
-    }
-
-    private static void CollectRealizedItemRects(DependencyObject node, UIElement origin, List<Rect> rects)
-    {
-        if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem } li)
-        {
-            rects.Add(new Rect(li.TranslatePoint(new Point(0, 0), origin), li.RenderSize));
-            return;
-        }
-
-        var count = VisualTreeHelper.GetChildrenCount(node);
-        for (var i = 0; i < count; i++)
-            CollectRealizedItemRects(VisualTreeHelper.GetChild(node, i), origin, rects);
     }
 
     /// <summary>Home/End: move the cursor to the first/last stop and scroll the grid to that extreme.</summary>
@@ -1278,8 +1361,7 @@ public partial class MainWindow : Window
 
     private int ColumnsPerRow()
     {
-        var tileOuter = (ViewModel?.TileSize ?? 200) + 20; // tile + margin/padding/spacing
-        var columns = (int)((ItemsList.ActualWidth - 12) / Math.Max(1, tileOuter));
-        return Math.Max(1, columns);
+        var (_, _, slotW, _) = MeasureTileSlot();
+        return TileSpatialNavigation.FitColumns(WrapViewportWidth(), slotW);
     }
 }

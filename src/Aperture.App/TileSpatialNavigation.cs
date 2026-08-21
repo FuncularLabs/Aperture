@@ -3,7 +3,8 @@ namespace Aperture.App;
 /// <summary>
 /// Explorer-style 2D pick over a wrapping, date-sectioned tile grid.
 /// Operates on layout rectangles so Up/Down / PageUp/PageDown follow
-/// visual columns rather than ListBox item index.
+/// visual X (the column on screen) rather than ListBox item index or a
+/// stale <c>index % columns</c> guess.
 /// </summary>
 internal static class TileSpatialNavigation
 {
@@ -21,19 +22,130 @@ internal static class TileSpatialNavigation
     }
 
     /// <summary>
+    /// How many tiles a wrap panel actually fits:
+    /// <c>floor(availableWidth / slotWidth)</c>.
+    /// <paramref name="availableWidth"/> is the panel/viewport width the wrap
+    /// used (scrollbar already excluded). Do not subtract padding again.
+    /// <paramref name="slotWidth"/> is the arranged child size including margin.
+    /// </summary>
+    public static int FitColumns(double availableWidth, double slotWidth)
+    {
+        slotWidth = Math.Max(1, slotWidth);
+        availableWidth = Math.Max(slotWidth, availableWidth);
+        return Math.Max(1, (int)Math.Floor(availableWidth / slotWidth));
+    }
+
+    /// <summary>
+    /// Visual column count. A stale width-based estimate (scrollbar subtracted
+    /// twice, padding fudge, leftover tile-size guess) can come in one low;
+    /// never prefer that over columns already seen on screen.
+    /// </summary>
+    public static int ResolveColumnCount(int columnsFromLayoutX, int fittedFromWidth) =>
+        Math.Max(1, Math.Max(columnsFromLayoutX, fittedFromWidth));
+
+    /// <summary>
+    /// Cluster left edges into visual columns. Tiles in the same wrap column
+    /// share an X; a short last row just contributes fewer clusters.
+    /// </summary>
+    public static IReadOnlyList<double> DistinctColumnXs(IReadOnlyList<double> xs, double slop)
+    {
+        if (xs is null || xs.Count == 0)
+            return [];
+
+        slop = Math.Max(1, slop);
+        var sorted = xs.OrderBy(x => x).ToList();
+        var groups = new List<List<double>> { [sorted[0]] };
+        for (var i = 1; i < sorted.Count; i++)
+        {
+            if (Math.Abs(sorted[i] - groups[^1][0]) > slop)
+                groups.Add([sorted[i]]);
+            else
+                groups[^1].Add(sorted[i]);
+        }
+
+        return groups.Select(g => g.Average()).ToList();
+    }
+
+    /// <summary>
+    /// Uniform wrap origins (start + between + end leftover), matching
+    /// VirtualizingWrapPanel <c>SpacingMode.Uniform</c>.
+    /// </summary>
+    public static IReadOnlyList<double> UniformColumnXs(
+        double availableWidth, double slotWidth, double tileWidth)
+    {
+        var columns = FitColumns(availableWidth, slotWidth);
+        slotWidth = Math.Max(1, slotWidth);
+        tileWidth = Math.Max(1, tileWidth);
+        var unused = Math.Max(0, availableWidth - columns * slotWidth);
+        var outer = unused / (columns + 1);
+        var xs = new double[columns];
+        for (var i = 0; i < columns; i++)
+            xs[i] = outer + i * (slotWidth + outer);
+        return xs;
+    }
+
+    /// <summary>
+    /// Relabel Row/Col as <c>index % staleColumns</c> while keeping visual X/Y.
+    /// That is the 0.8.4 path when the window under-counted columns (scrollbar /
+    /// padding). Pickers that still use Col/Row walk diagonally; X-based pick
+    /// must not.
+    /// </summary>
+    public static IReadOnlyList<Cell> WithIndexColumns(IReadOnlyList<Cell> cells, int staleColumns)
+    {
+        ArgumentNullException.ThrowIfNull(cells);
+        staleColumns = Math.Max(1, staleColumns);
+        var relabeled = new Cell[cells.Count];
+        for (var i = 0; i < cells.Count; i++)
+        {
+            var c = cells[i];
+            relabeled[i] = c with { Col = c.Index % staleColumns, Row = c.Index / staleColumns };
+        }
+        return relabeled;
+    }
+
+    /// <summary>
+    /// Copy measured X/Y/size onto the matching model cells. Unrealized tiles
+    /// keep the wrap model so virtualization cannot invent a wrong column.
+    /// </summary>
+    public static IReadOnlyList<Cell> OverlayMeasured(
+        IReadOnlyList<Cell> model, IReadOnlyDictionary<int, Cell> measured)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        if (measured is null || measured.Count == 0)
+            return model;
+
+        var next = new Cell[model.Count];
+        for (var i = 0; i < model.Count; i++)
+        {
+            var c = model[i];
+            next[i] = measured.TryGetValue(c.Index, out var m)
+                ? c with { X = m.X, Y = m.Y, Width = m.Width, Height = m.Height }
+                : c;
+        }
+        return next;
+    }
+
+    /// <summary>
     /// Wrap tiles into a column grid. Each section starts on a new row after an
     /// optional header gap (headers are not cells — crossing them is fine).
     /// A zero-count section still consumes <paramref name="headerHeight"/> so
     /// Page distance matches a collapsed date bucket.
+    /// <para>
+    /// When <paramref name="columnXs"/> is set, X comes from those origins
+    /// (actual wrap / Uniform spacing) instead of <c>col * tileWidth</c>.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<Cell> LayoutWrap(
         IReadOnlyList<int> sectionCounts,
         int columns,
         double tileWidth,
         double tileHeight,
-        double headerHeight)
+        double headerHeight,
+        IReadOnlyList<double>? columnXs = null)
     {
         ArgumentNullException.ThrowIfNull(sectionCounts);
+        if (columnXs is { Count: > 0 })
+            columns = columnXs.Count;
         columns = Math.Max(1, columns);
         tileWidth = Math.Max(1, tileWidth);
         tileHeight = Math.Max(1, tileHeight);
@@ -59,7 +171,8 @@ internal static class TileSpatialNavigation
                     y += tileHeight;
                 }
 
-                cells.Add(new Cell(index, row, col, col * tileWidth, y, tileWidth, tileHeight));
+                var x = columnXs is { Count: > 0 } ? columnXs[col] : col * tileWidth;
+                cells.Add(new Cell(index, row, col, x, y, tileWidth, tileHeight));
                 index++;
             }
 
@@ -72,8 +185,9 @@ internal static class TileSpatialNavigation
 
     /// <summary>
     /// One visual row up (<paramref name="sign"/> = -1) or down (+1) in the same
-    /// column. Empty cell (short last row, end of a section): nearest tile in
-    /// that column, then nearest in the adjacent row.
+    /// <em>screen</em> column (layout X), not <c>index % columns</c>. Empty cell
+    /// (short last row, end of a section): nearest tile in that column, then
+    /// nearest in the adjacent row.
     /// </summary>
     public static int? PickVertical(IReadOnlyList<Cell> cells, int currentIndex, int sign)
     {
@@ -81,30 +195,28 @@ internal static class TileSpatialNavigation
             return null;
 
         sign = Math.Sign(sign);
-        var targetRow = cur.Row + sign;
-        var adjacent = cells.Where(c => c.Row == targetRow).ToList();
+        var inColumn = cells
+            .Where(c => c.Index != cur.Index && SameColumnX(c, cur) && FurtherY(c, cur, sign))
+            .ToList();
+        if (inColumn.Count > 0)
+            return inColumn.MinBy(c => (Math.Abs(c.CenterY - cur.CenterY), c.Index)).Index;
 
-        if (CellInColumn(adjacent, cur.Col) is { } sameColOnRow)
-            return sameColOnRow.Index;
+        var others = cells
+            .Where(c => c.Index != cur.Index && FurtherY(c, cur, sign))
+            .ToList();
+        if (others.Count == 0)
+            return null;
 
-        var further = cells
-            .Where(c => c.Col == cur.Col && c.Row * sign > cur.Row * sign)
-            .OrderBy(c => Math.Abs(c.Row - cur.Row))
-            .ThenBy(c => c.Index)
-            .FirstOrDefault();
-        if (further.Width > 0)
-            return further.Index;
-
-        if (adjacent.Count > 0)
-            return adjacent.MinBy(c => (Math.Abs(c.Col - cur.Col), c.Index)).Index;
-
-        return null;
+        var nextY = others.MinBy(c => Math.Abs(c.CenterY - cur.CenterY)).CenterY;
+        var rowSlop = Math.Max(cur.Height * 0.5, 1);
+        var adjacent = others.Where(c => Math.Abs(c.CenterY - nextY) <= rowSlop).ToList();
+        return adjacent.MinBy(c => (Math.Abs(c.CenterX - cur.CenterX), c.Index)).Index;
     }
 
     /// <summary>
-    /// After moving the viewport by one page, pick the tile in the same column
-    /// closest to the same vertical position within the viewport. Not "skip N
-    /// items" and not a jump onto a section header.
+    /// After moving the viewport by one page, pick the tile in the same visual
+    /// column closest to the same vertical position within the viewport. Not
+    /// "skip N items" and not a jump onto a section header.
     /// </summary>
     public static int? PickPage(
         IReadOnlyList<Cell> cells,
@@ -123,15 +235,13 @@ internal static class TileSpatialNavigation
         var targetY = newViewportTop + yInViewport;
 
         var sameCol = cells
-            .Where(c => c.Col == cur.Col && c.Index != cur.Index)
-            .Where(c => sign > 0 ? c.CenterY > cur.CenterY : c.CenterY < cur.CenterY)
+            .Where(c => c.Index != cur.Index && SameColumnX(c, cur) && FurtherY(c, cur, sign))
             .ToList();
         if (sameCol.Count > 0)
             return ClosestToY(sameCol, targetY, sign).Index;
 
         var others = cells
-            .Where(c => c.Index != cur.Index)
-            .Where(c => sign > 0 ? c.CenterY > cur.CenterY : c.CenterY < cur.CenterY)
+            .Where(c => c.Index != cur.Index && FurtherY(c, cur, sign))
             .ToList();
         if (others.Count == 0)
             return null;
@@ -139,7 +249,7 @@ internal static class TileSpatialNavigation
         var rowY = others.MinBy(c => Math.Abs(c.CenterY - targetY)).CenterY;
         var slop = Math.Max(cur.Height * 0.5, 1);
         var row = others.Where(c => Math.Abs(c.CenterY - rowY) <= slop).ToList();
-        return row.MinBy(c => (Math.Abs(c.Col - cur.Col), c.Index)).Index;
+        return row.MinBy(c => (Math.Abs(c.CenterX - cur.CenterX), c.Index)).Index;
     }
 
     /// <summary>
@@ -176,16 +286,16 @@ internal static class TileSpatialNavigation
         return true;
     }
 
-    private static Cell? CellInColumn(List<Cell> row, int col)
+    private static bool SameColumnX(Cell a, Cell b)
     {
-        foreach (var c in row)
-        {
-            if (c.Col == col)
-                return c;
-        }
-
-        return null;
+        var slop = Math.Max(Math.Max(a.Width, b.Width) * 0.5, 1);
+        return Math.Abs(a.CenterX - b.CenterX) <= slop;
     }
+
+    private static bool FurtherY(Cell candidate, Cell current, int sign) =>
+        sign > 0
+            ? candidate.CenterY > current.CenterY + 1
+            : candidate.CenterY < current.CenterY - 1;
 
     private static Cell ClosestToY(List<Cell> cells, double targetY, int sign) =>
         cells.MinBy(c =>
