@@ -5,6 +5,8 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.1-beta1] - 2026-08-21
+
 ### Added
 - **About + updater** on the hamburger menu — current version (installed/portable), GitHub
   release check, Update / Update (prerelease) when a newer build is available, progress and
