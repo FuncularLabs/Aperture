@@ -1,7 +1,9 @@
 # Create v{Version} on main when the landed Version is SemVer-greater than
-# every existing v* tag. The tag push would not start Release by itself
-# (GITHUB_TOKEN events do not re-enter workflows), so this workflow then
-# calls release.yml — the same signed-publish job, not a copy.
+# every existing v* tag. This job only writes the tag. Signing stays in
+# release.yml (same Funcular Labs Azure Trusted Signing identity Markdown
+# Midget uses). A GITHUB_TOKEN tag push does not start other workflows, so
+# we call release.yml with secrets: inherit — do not sign here, do not
+# invent another cert/SP, do not skip the fail-fast secret check.
 name: Tag version
 
 on:
@@ -75,6 +77,8 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
+    # Passes AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_CLIENT_SECRET through
+    # to the existing signed-release job (org secrets; values never in the tree).
     secrets: inherit
     # Same write the standalone Release run needs (create the GitHub release).
     permissions:
