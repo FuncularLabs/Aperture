@@ -661,6 +661,19 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Empty-canvas click in the tile pane: move keyboard focus onto the grid so
+    /// arrows / PageUp / PageDown / scroll keys apply here, not the folder tree.
+    /// Tile and section-header clicks already focus themselves; text boxes and
+    /// dialogs are left alone.
+    /// </summary>
+    private void OnContentsPanePreviewLeftDown(object sender, MouseButtonEventArgs e)
+    {
+        if (LibraryPaneFocus.ShouldFocusContentsPane(
+                e.OriginalSource as DependencyObject, Keyboard.FocusedElement))
+            ItemsList.Focus();
+    }
+
     // --- Drag a tile (or the whole selection) out to the shell as real file(s) ---
     // Lets you drop images straight onto an email, a folder, or any file-drop target.
     private Point _tileDragStart;

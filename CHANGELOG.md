@@ -5,6 +5,13 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.3-beta1] - 2026-08-21
+
+### Fixed
+- **Clicking the tile-pane canvas** (empty background, not a tile or section header) now
+  moves keyboard focus to the contents pane, so arrows, PageUp/PageDown, and scroll keys
+  apply to the grid instead of staying on the folder tree.
+
 ## [0.8.2-beta1] - 2026-08-21
 
 ### Added
