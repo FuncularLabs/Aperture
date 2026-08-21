@@ -369,8 +369,14 @@
                                 <StackPanel VerticalAlignment="Center" Margin="10,0,0,0">
                                     <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource Ink}"
                                                FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" />
+                                    <Border Background="#EEF1F6" CornerRadius="8" Padding="6,1" Margin="0,4,0,0"
+                                            HorizontalAlignment="Left"
+                                            ToolTip="This process is the AppData install when the caption is installed; anything else is portable.">
+                                        <TextBlock Text="{Binding InstallKindCaption}" Foreground="{StaticResource Muted}"
+                                                   FontSize="10" />
+                                    </Border>
                                     <TextBlock Text="A fast local image &amp; video browser" Foreground="{StaticResource Muted}"
-                                               FontSize="11" />
+                                               FontSize="11" Margin="0,4,0,0" />
                                 </StackPanel>
                             </StackPanel>
                             <TextBlock Text="{Binding OnDiskVersionText}" Foreground="{StaticResource Accent}"

@@ -52,6 +52,14 @@ internal static class RegistrationService
         catch { return false; }
     }
 
+    /// <summary>
+    /// Caption the About surface and updater already share: "installed" when
+    /// this process <em>is</em> the AppData exe, otherwise "portable". Same
+    /// check as <see cref="IsRunningFromAppDataInstall"/> — not "a copy exists
+    /// under AppData while this process is still a download."
+    /// </summary>
+    public static string RunningKind => IsRunningFromAppDataInstall() ? "installed" : "portable";
+
     // ===== AppData install + Start Menu =====
 
     /// <summary>Copy the current exe to %LocalAppData%\Programs\Aperture.</summary>
