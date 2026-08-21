@@ -1,0 +1,85 @@
+# Create v{Version} on main when the landed Version is SemVer-greater than
+# every existing v* tag. This job only writes the tag. Signing stays in
+# release.yml (same Funcular Labs Azure Trusted Signing identity Markdown
+# Midget uses). A GITHUB_TOKEN tag push does not start other workflows, so
+# we call release.yml with secrets: inherit — do not sign here, do not
+# invent another cert/SP, do not skip the fail-fast secret check.
+name: Tag version
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: tag-version-main
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  tag:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.push.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Fetch v* tags
+        shell: pwsh
+        run: git fetch --tags --force origin
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Decide whether to tag
+        id: decide
+        shell: pwsh
+        run: |
+          $tagsFile = Join-Path $env:RUNNER_TEMP 'v-tags.txt'
+          git tag -l 'v*' | Set-Content -Path $tagsFile -Encoding utf8NoBOM
+          dotnet run --project scripts/DecideReleaseTag -- `
+            --repo . --tags-file $tagsFile --github-output
+
+      - name: Create and push tag
+        id: push
+        if: steps.decide.outputs.should_tag == 'true'
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.decide.outputs.tag }}'
+          if ($tag -notmatch '^v') { throw "Refusing to create non-v* tag '$tag'" }
+
+          $remote = git ls-remote --tags origin "refs/tags/$tag"
+          if ($remote) {
+            Write-Host "Tag $tag already exists on origin; not force-pushing."
+            return
+          }
+          if (git show-ref --verify --quiet "refs/tags/$tag") {
+            Write-Host "Tag $tag already exists locally; not force-pushing."
+            return
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a $tag -m "Aperture Image Viewer $tag"
+          git push origin "refs/tags/$tag"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Pushed $tag"
+
+  release:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    # Passes AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_CLIENT_SECRET through
+    # to the existing signed-release job (org secrets; values never in the tree).
+    secrets: inherit
+    # Same write the standalone Release run needs (create the GitHub release).
+    permissions:
+      contents: write
