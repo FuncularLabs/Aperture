@@ -41,6 +41,89 @@ public class UpdateVersionTests
     }
 }
 
+public class ReleaseTagTests
+{
+    // Same ordering as UpdateVersionTests.CompareTo_Orders — the tag job must
+    // use those rules, not git's string sort or GitHub's "latest release" date.
+    [Theory]
+    [InlineData("0.8.1-beta1", new[] { "v0.8.0-beta1" }, "v0.8.1-beta1")]
+    [InlineData("0.8.0", new[] { "v0.8.0-beta1" }, "v0.8.0")]
+    [InlineData("0.8.0-beta2", new[] { "v0.8.0-beta1" }, "v0.8.0-beta2")]
+    [InlineData("0.8.0-rc1", new[] { "v0.8.0-beta9" }, "v0.8.0-rc1")]
+    [InlineData("0.8.1-beta1", new string[] { }, "v0.8.1-beta1")]
+    [InlineData("v0.8.1-beta1", new[] { "v0.8.0-beta1" }, "v0.8.1-beta1")]
+    public void TagToCreate_WhenGreater(string landed, string[] existing, string expected) =>
+        Assert.Equal(expected, ReleaseTag.TagToCreate(landed, existing));
+
+    [Theory]
+    [InlineData("0.8.0-beta1", new[] { "v0.8.0-beta1" })]
+    [InlineData("0.8.0-beta1", new[] { "v0.8.1-beta1" })]
+    [InlineData("0.8.0-beta1", new[] { "v0.8.0" })]
+    [InlineData("0.7.1-beta1", new[] { "v0.8.0-beta1", "v0.7.1-beta1" })]
+    [InlineData("0.8.1-beta1", new[] { "v0.8.1-beta1", "v0.8.0-beta1" })]
+    [InlineData("garbage", new[] { "v0.8.0-beta1" })]
+    [InlineData("", new[] { "v0.8.0-beta1" })]
+    [InlineData(null, new[] { "v0.8.0-beta1" })]
+    public void TagToCreate_WhenEqualLowerOrPresent(string? landed, string[] existing) =>
+        Assert.Null(ReleaseTag.TagToCreate(landed, existing));
+
+    [Fact]
+    public void LatestTag_UsesSemVerNotStringSort()
+    {
+        // String-max would pick v0.9.0-beta1 over v0.10.0; SemVer must not.
+        var latest = ReleaseTag.LatestTag(new[] { "v0.9.0-beta1", "v0.10.0-beta1", "v0.8.0" });
+        Assert.Equal("v0.10.0-beta1", latest);
+    }
+
+    [Fact]
+    public void LatestTag_StableOutranksItsPrerelease()
+    {
+        Assert.Equal("v0.8.0", ReleaseTag.LatestTag(new[] { "v0.8.0-beta1", "v0.8.0", "v0.7.1-beta1" }));
+    }
+
+    [Fact]
+    public void ReadLandedVersion_PrefersAppCsprojOverProps()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir.FullName, "src", "Aperture.App"));
+            File.WriteAllText(
+                Path.Combine(dir.FullName, "Directory.Build.props"),
+                "<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>");
+            File.WriteAllText(
+                Path.Combine(dir.FullName, "src", "Aperture.App", "Aperture.App.csproj"),
+                "<Project><PropertyGroup><Version>0.8.1-beta1</Version></PropertyGroup></Project>");
+            Assert.Equal("0.8.1-beta1", ReleaseTag.ReadLandedVersion(dir.FullName));
+        }
+        finally
+        {
+            dir.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void ReadLandedVersion_FallsBackToDirectoryBuildProps()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir.FullName, "src", "Aperture.App"));
+            File.WriteAllText(
+                Path.Combine(dir.FullName, "Directory.Build.props"),
+                "<Project><PropertyGroup><Version>0.9.0-rc1</Version></PropertyGroup></Project>");
+            File.WriteAllText(
+                Path.Combine(dir.FullName, "src", "Aperture.App", "Aperture.App.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0-windows</TargetFramework></PropertyGroup></Project>");
+            Assert.Equal("0.9.0-rc1", ReleaseTag.ReadLandedVersion(dir.FullName));
+        }
+        finally
+        {
+            dir.Delete(true);
+        }
+    }
+}
+
 public class UpdateOfferTests
 {
     private static ReleaseInfo Rel(string tag, bool prerelease) =>

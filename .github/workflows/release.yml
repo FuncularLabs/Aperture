@@ -10,6 +10,14 @@ on:
         description: 'Tag to release (must already exist)'
         required: true
         type: string
+  # Invoked by tag-version.yml after it creates a tag. A GITHUB_TOKEN tag push
+  # does not start this workflow on its own (Actions will not re-enter).
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -22,11 +30,7 @@ jobs:
         id: tag
         shell: pwsh
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            '${{ inputs.tag }}'
-          } else {
-            $env:GITHUB_REF_NAME
-          }
+          $tag = '${{ inputs.tag || github.ref_name }}'
           if (-not $tag) { throw "No tag provided." }
           $version = $tag -replace '^v',''
           # Numeric base for assembly/file version (strip any -prerelease suffix).

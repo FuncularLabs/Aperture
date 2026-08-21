@@ -1,7 +1,7 @@
 # Publishing to GitHub
 
 Repo: **`github.com/FuncularLabs/Aperture`** — **private** for now (flip to public when ready).
-CI (`.github/workflows/ci.yml`) and a signed release pipeline (`release.yml`) are in the tree.
+CI (`.github/workflows/ci.yml`), auto-tag on a greater Version landing on `main` (`tag-version.yml`), and a signed release pipeline (`release.yml`) are in the tree.
 
 ## Pre-flight (already done ✓)
 - `LICENSE` — MIT, **© 2026 Funcular Labs**.
@@ -44,10 +44,22 @@ and signs any number of that publisher's products. Nothing new needs to be provi
   "Aperture Image Viewer"`, and attaches it to a GitHub Release built from `CHANGELOG.md`.
 
 ## Cutting a release
-1. Ensure `CHANGELOG.md` has a `## [<version>]` section for the version.
-2. Tag and push: `git tag v0.7.0-beta1 && cd C:\code\Reel && git push origin v0.7.0-beta1`.
-3. The `Release` workflow builds → tests → publishes → **signs** → creates the (pre)release with the exe.
-   (`-beta`/`-rc` tags are marked as prereleases automatically.)
+
+Happy path — **no manual `git tag`**:
+
+1. Bump `<Version>` in `src/Aperture.App/Aperture.App.csproj` (the shipped assembly version; `Directory.Build.props` is only a fallback if the csproj has no Version) and add a `## [<version>]` section in `CHANGELOG.md`.
+2. Merge that to `main`.
+3. On push to `main` only (not pull requests), the **Tag version** workflow (`.github/workflows/tag-version.yml`) reads that Version and compares it to existing `v*` tags with the same SemVer rules as the in-app updater (`src/Aperture.App/Updates/UpdateVersion.cs` — prerelease suffixes matter: `0.8.1-beta1` &gt; `0.8.0-beta1`, and `0.8.0-beta1` &lt; `0.8.0`). If the landed version is **greater** and `v{version}` does not already exist, it creates and pushes that tag (never force-pushes). Equal or lower versions are left untagged.
+4. The existing **Release** workflow then builds → tests → publishes → **signs** → creates the (pre)release with the exe. (`-beta`/`-rc` tags are marked as prereleases automatically.) Signing/publish stays in `release.yml`; the tag job does not duplicate it.
+
+Fallback — tag by hand if the automatic job cannot run (workflow not yet on `main`, or you need to re-cut an already-tagged version after fixing the tag job):
+
+```powershell
+git tag v0.8.1-beta1
+git push origin v0.8.1-beta1
+```
+
+Or **Actions → Release → Run workflow** and pass a tag that already exists.
 
 Notes:
 - Local git history is intact (the Reel→Aperture rebrand preserved it), so the full commit trail comes along.

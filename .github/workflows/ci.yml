@@ -34,3 +34,16 @@ jobs:
       # The test project isn't in the slnx (app-only solution), so it restores/builds itself here.
       - name: Test
         run: dotnet test tests/Aperture.Core.Tests/Aperture.Core.Tests.csproj -c Release
+
+      # net10.0 (not windows) helper used by tag-version.yml — compile + a
+      # greater-than-latest decision against a fake tag list.
+      - name: Release-tag helper
+        shell: pwsh
+        run: |
+          $tagsFile = Join-Path $env:RUNNER_TEMP 'v-tags.txt'
+          Set-Content -Path $tagsFile -Value "v0.8.0-beta1" -Encoding utf8NoBOM
+          $out = dotnet run --project scripts/DecideReleaseTag --nologo -- --version 0.8.1-beta1 --tags-file $tagsFile
+          $out
+          if ($out -notmatch 'should_tag=true' -or $out -notmatch 'tag=v0.8.1-beta1') {
+            throw "DecideReleaseTag did not request v0.8.1-beta1. Output:`n$out"
+          }
