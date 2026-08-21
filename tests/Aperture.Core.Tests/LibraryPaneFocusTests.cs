@@ -12,14 +12,25 @@ namespace Aperture.Core.Tests;
 /// </summary>
 public class LibraryPaneFocusTests
 {
-    [Theory]
-    [InlineData(LibraryPaneFocus.Hit.Canvas, true)]
-    [InlineData(LibraryPaneFocus.Hit.Tile, false)]
-    [InlineData(LibraryPaneFocus.Hit.SectionHeader, false)]
-    [InlineData(LibraryPaneFocus.Hit.TextInput, false)]
-    [InlineData(LibraryPaneFocus.Hit.Dialog, false)]
-    public void ShouldFocusContentsPane_OnlyCanvasClaimsTheGrid(LibraryPaneFocus.Hit hit, bool expected) =>
-        Assert.Equal(expected, LibraryPaneFocus.ShouldFocusContentsPane(hit));
+    [Fact]
+    public void Canvas_ClaimsTheGrid() =>
+        Assert.True(LibraryPaneFocus.ShouldFocusContentsPane(LibraryPaneFocus.Hit.Canvas));
+
+    [Fact]
+    public void Tile_DoesNotClaim() =>
+        Assert.False(LibraryPaneFocus.ShouldFocusContentsPane(LibraryPaneFocus.Hit.Tile));
+
+    [Fact]
+    public void SectionHeader_DoesNotClaim() =>
+        Assert.False(LibraryPaneFocus.ShouldFocusContentsPane(LibraryPaneFocus.Hit.SectionHeader));
+
+    [Fact]
+    public void TextInput_DoesNotClaim() =>
+        Assert.False(LibraryPaneFocus.ShouldFocusContentsPane(LibraryPaneFocus.Hit.TextInput));
+
+    [Fact]
+    public void Dialog_DoesNotClaim() =>
+        Assert.False(LibraryPaneFocus.ShouldFocusContentsPane(LibraryPaneFocus.Hit.Dialog));
 
     [Fact]
     public void Classify_NullSourceIsCanvas() =>
