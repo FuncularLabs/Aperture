@@ -50,18 +50,27 @@ internal static class TileSpatialNavigation
     public static IReadOnlyList<double> DistinctColumnXs(IReadOnlyList<double> xs, double slop)
     {
         if (xs is null || xs.Count == 0)
-            return [];
+            return Array.Empty<double>();
 
         slop = Math.Max(1, slop);
         var sorted = xs.OrderBy(x => x).ToList();
         var groups = new List<List<double>>();
-        groups.Add([sorted[0]]);
+        var first = new List<double>();
+        first.Add(sorted[0]);
+        groups.Add(first);
         for (var i = 1; i < sorted.Count; i++)
         {
-            if (Math.Abs(sorted[i] - groups[^1][0]) > slop)
-                groups.Add([sorted[i]]);
+            var last = groups[groups.Count - 1];
+            if (Math.Abs(sorted[i] - last[0]) > slop)
+            {
+                var next = new List<double>();
+                next.Add(sorted[i]);
+                groups.Add(next);
+            }
             else
-                groups[^1].Add(sorted[i]);
+            {
+                last.Add(sorted[i]);
+            }
         }
 
         return groups.Select(g => g.Average()).ToList();
