@@ -753,12 +753,16 @@
 
             <!-- Thumbnail grid + preview pane; cells/splitter configured in code (ConfigurePreviewLayout) -->
             <Grid x:Name="ContentGrid" Grid.Column="2">
-                <!-- Browser grid (real resizable column/row so the wrap panel reflows when the preview opens) -->
-                <Grid x:Name="BrowserHost">
+                <!-- Browser grid (real resizable column/row so the wrap panel reflows when the preview opens).
+                     Transparent background so empty canvas is hit-testable; a click there focuses the
+                     contents pane (same as a tile click) so arrows / PageUp / PageDown apply to the grid. -->
+                <Grid x:Name="BrowserHost" Background="Transparent"
+                      PreviewMouseLeftButtonDown="OnContentsPanePreviewLeftDown">
                 <ListBox x:Name="ItemsList"
                      ItemsSource="{Binding ItemsView}"
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      SelectionMode="Extended"
+                     Focusable="True"
                      SelectionChanged="OnGridSelectionChanged"
                      PreviewMouseRightButtonDown="OnGridRightButtonDown"
                      PreviewMouseLeftButtonDown="OnGridPreviewLeftDown"
@@ -781,7 +785,8 @@
                 </ListBox.InputBindings>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <vwp:VirtualizingWrapPanel Orientation="Horizontal" SpacingMode="Uniform" />
+                        <vwp:VirtualizingWrapPanel Orientation="Horizontal" SpacingMode="Uniform"
+                                                   Background="Transparent" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.GroupStyle>
