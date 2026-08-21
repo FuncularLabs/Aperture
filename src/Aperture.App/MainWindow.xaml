@@ -353,23 +353,49 @@
                 </Popup>
                 <Popup IsOpen="{Binding IsChecked, ElementName=SettingsToggle}"
                        PlacementTarget="{Binding ElementName=SettingsToggle}" Placement="Bottom"
-                       StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-160">
+                       StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-180"
+                       Opened="OnSettingsOpened">
                     <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                            BorderThickness="1" CornerRadius="8" Padding="16" Width="280"
+                            BorderThickness="1" CornerRadius="8" Padding="16" Width="320"
                             Margin="8" SnapsToDevicePixels="True">
                         <Border.Effect>
                             <DropShadowEffect Color="#22000000" BlurRadius="16" ShadowDepth="2" Direction="270" />
                         </Border.Effect>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="640"
+                                      HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                 <Image Source="Assets/mascot.png" Width="34" Height="34" />
                                 <StackPanel VerticalAlignment="Center" Margin="10,0,0,0">
                                     <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource Ink}"
-                                               FontWeight="SemiBold" FontSize="14" />
+                                               FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" />
                                     <TextBlock Text="A fast local image &amp; video browser" Foreground="{StaticResource Muted}"
                                                FontSize="11" />
                                 </StackPanel>
                             </StackPanel>
+                            <TextBlock Text="{Binding OnDiskVersionText}" Foreground="{StaticResource Accent}"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
+                                       Visibility="{Binding ShowOnDiskVersion, Converter={StaticResource BoolToVis}}" />
+                            <TextBlock Text="{Binding NewestReleaseText}" Foreground="{StaticResource Muted}"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4" />
+                            <Button Content="Update" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    Padding="8,5" Margin="0,0,0,6" Command="{Binding UpdateStableCommand}"
+                                    IsEnabled="{Binding CanApplyUpdate}" Cursor="Hand"
+                                    Visibility="{Binding ShowStableUpdate, Converter={StaticResource BoolToVis}}"
+                                    Foreground="{StaticResource Ink}" />
+                            <TextBlock Text="{Binding NewestPrereleaseText}" Foreground="{StaticResource Muted}"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"
+                                       Visibility="{Binding ShowPrereleaseRow, Converter={StaticResource BoolToVis}}" />
+                            <Button Content="Update (prerelease)" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    Padding="8,5" Margin="0,0,0,6" Command="{Binding UpdatePrereleaseCommand}"
+                                    IsEnabled="{Binding CanApplyUpdate}" Cursor="Hand"
+                                    Visibility="{Binding ShowPrereleaseUpdate, Converter={StaticResource BoolToVis}}"
+                                    Foreground="{StaticResource Ink}" />
+                            <TextBlock Text="{Binding UpdateMessage}" Foreground="{StaticResource Accent}"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"
+                                       Visibility="{Binding ShowUpdateMessage, Converter={StaticResource BoolToVis}}" />
+                            <ProgressBar Height="6" Margin="0,0,0,10" IsIndeterminate="True"
+                                         Visibility="{Binding UpdateBusy, Converter={StaticResource BoolToVis}}" />
 
                             <TextBlock Text="VIEW" Foreground="{StaticResource Muted}" FontSize="11"
                                        FontWeight="SemiBold" Margin="0,0,0,8" />
@@ -397,7 +423,11 @@
                                        Margin="22,2,0,10" />
 
                             <CheckBox Content="Group into date sections" IsChecked="{Binding GroupByDate}"
-                                      Margin="0,0,0,12" />
+                                      Margin="0,0,0,10" />
+
+                            <CheckBox Content="Start with Windows" IsChecked="{Binding StartWithWindows}"
+                                      Margin="0,0,0,12"
+                                      ToolTip="Launch Aperture when you sign in to Windows." />
 
                             <TextBlock Text="Caption format" Foreground="{StaticResource Ink}" FontSize="12"
                                        FontWeight="SemiBold" Margin="0,0,0,4" />
@@ -423,11 +453,24 @@
                                     Foreground="{StaticResource Ink}"
                                     ToolTip="Merge tags &amp; notes from a JSON file (upsert; remaps folders by alias)." />
                             <Button Content="📖  View README (help)" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                    Padding="8,6" Command="{Binding OpenReadmeCommand}"
+                                    Padding="8,6" Margin="0,0,0,6" Command="{Binding OpenReadmeCommand}"
                                     Background="Transparent" BorderThickness="0" Cursor="Hand"
                                     Foreground="{StaticResource Ink}" />
+                            <Button Content="Install Aperture on this PC…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Margin="0,0,0,6" Command="{Binding InstallCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}"
+                                    Visibility="{Binding ShowInstall, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="Copy Aperture to AppData and add a Start menu shortcut." />
+                            <Button Content="Uninstall…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                    Padding="8,6" Command="{Binding UninstallCommand}"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Foreground="{StaticResource Ink}"
+                                    Visibility="{Binding ShowUninstall, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="Remove Start menu / Desktop shortcuts and the AppData copy." />
 
                         </StackPanel>
+                        </ScrollViewer>
                     </Border>
                 </Popup>
 

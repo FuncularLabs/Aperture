@@ -16,14 +16,21 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\aperture.ico</ApplicationIcon>
     <AssemblyName>Aperture</AssemblyName>
-    <Version>0.8.0-beta1</Version>
+    <Version>0.8.1-beta1</Version>
     <AssemblyTitle>Aperture Image Viewer</AssemblyTitle>
     <Product>Aperture Image Viewer</Product>
     <Description>A fast local image &amp; video browser for Windows.</Description>
     <Company>Funcular Labs</Company>
     <Authors>Funcular Labs</Authors>
     <Copyright>© 2026 Funcular Labs</Copyright>
+    <!-- Don't append the +git-sha suffix to InformationalVersion — it clutters
+         the About line and the update check parses it as the running version. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aperture.Core.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\aperture.ico" />

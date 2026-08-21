@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aperture.Core\Aperture.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aperture.App\Aperture.App.csproj" />
   </ItemGroup>
 
 </Project>
