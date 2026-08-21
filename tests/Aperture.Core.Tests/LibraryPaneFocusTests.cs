@@ -9,6 +9,11 @@ namespace Aperture.Core.Tests;
 /// folder in the tree → click empty tile-pane canvas → arrows / PageUp /
 /// PageDown / scroll keys move the grid, not the tree. Clicking a folder,
 /// a tile, a section header, the search box, or a dialog must stay as today.
+///
+/// Tab / Shift+Tab (manual): tree arrows keep the folder; Tab to the grid
+/// keeps the selected tile; Up/Down stay in column; Page is ~one screen
+/// same column; Tab back to the tree keeps the folder; ribbon is never a
+/// Tab stop. Search stays on / and Ctrl+F.
 /// </summary>
 public class LibraryPaneFocusTests
 {
@@ -35,4 +40,19 @@ public class LibraryPaneFocusTests
     [Fact]
     public void Classify_NullSourceIsCanvas() =>
         Assert.Equal(LibraryPaneFocus.Hit.Canvas, LibraryPaneFocus.Classify(null, null));
+
+    [Fact]
+    public void TabIntoPane_KeepsSelection_WhenFirstItemWouldTakeFocus() =>
+        Assert.True(LibraryPaneFocus.ShouldKeepExistingSelection(
+            fromOutside: true, newFocusIsItem: true, newFocusIsSelected: false));
+
+    [Fact]
+    public void TabIntoPane_AllowsFocusOnAlreadySelectedItem() =>
+        Assert.False(LibraryPaneFocus.ShouldKeepExistingSelection(
+            fromOutside: true, newFocusIsItem: true, newFocusIsSelected: true));
+
+    [Fact]
+    public void ArrowsInsidePane_DoNotRedirect() =>
+        Assert.False(LibraryPaneFocus.ShouldKeepExistingSelection(
+            fromOutside: false, newFocusIsItem: true, newFocusIsSelected: false));
 }

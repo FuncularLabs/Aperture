@@ -41,23 +41,10 @@ public partial class MainWindow : Window
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         ConfigurePreviewLayout(ViewModel.PreviewMode);
 
-        // Land keyboard focus on the "Everything" library so a single Tab drops into the grid.
+        // Land keyboard focus on the "Everything" library so a single Tab drops into the grid
+        // without changing either pane's selection (ribbon is not a Tab stop).
         Dispatcher.BeginInvoke(new Action(() => EverythingButton.Focus()),
             System.Windows.Threading.DispatcherPriority.Loaded);
-    }
-
-    /// <summary>Tab from the "Everything" library jumps straight to the grid's first item.</summary>
-    private void OnEverythingKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) == 0 && ViewModel is not null)
-        {
-            ItemsList.Focus();
-            var first = ViewModel.MoveCursorToFirstItem(); // selects the first tile
-            GridScroll()?.ScrollToTop();
-            if (first is not null)
-                try { ItemsList.ScrollIntoView(first); } catch { }
-            e.Handled = true;
-        }
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -308,6 +295,67 @@ public partial class MainWindow : Window
             node.IsExpanded = !node.IsExpanded;
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// Tabbing into the tree must not change its selection. WPF TreeView focuses
+    /// (and selects) the first node when nothing is selected — keep Everything /
+    /// the current folder.
+    /// </summary>
+    private void OnTreePreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not System.Windows.Controls.TreeViewItem item)
+            return;
+        if (!LibraryPaneFocus.ShouldKeepExistingSelection(
+                fromOutside: !IsInTree(e.OldFocus as DependencyObject),
+                newFocusIsItem: true,
+                newFocusIsSelected: item.IsSelected))
+            return;
+
+        e.Handled = true;
+        if (FolderTreeView.SelectedItem is FolderNodeVm selected
+            && FindTreeViewItem(FolderTreeView, selected) is { } keep)
+            keep.Focus();
+        else
+            FolderTreeView.Focus();
+    }
+
+    private static System.Windows.Controls.TreeViewItem? FindTreeViewItem(
+        System.Windows.Controls.ItemsControl parent, FolderNodeVm node)
+    {
+        if (parent.ItemContainerGenerator.ContainerFromItem(node) is System.Windows.Controls.TreeViewItem match)
+            return match;
+        var count = parent.Items.Count;
+        for (var i = 0; i < count; i++)
+        {
+            if (parent.ItemContainerGenerator.ContainerFromIndex(i) is not System.Windows.Controls.TreeViewItem child)
+                continue;
+            if (FindTreeViewItem(child, node) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Tabbing into the grid must not change its selection. WPF ListBox focuses
+    /// (and selects) the first tile when focus lands on an unselected container.
+    /// </summary>
+    private void OnGridPreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not System.Windows.Controls.ListBoxItem item)
+            return;
+        if (!LibraryPaneFocus.ShouldKeepExistingSelection(
+                fromOutside: !IsDescendantOf(e.OldFocus as DependencyObject, ItemsList),
+                newFocusIsItem: true,
+                newFocusIsSelected: item.IsSelected))
+            return;
+
+        e.Handled = true;
+        if (ItemsList.SelectedItem is { } selected
+            && ItemsList.ItemContainerGenerator.ContainerFromItem(selected) is System.Windows.Controls.ListBoxItem keep)
+            keep.Focus();
+        else
+            ItemsList.Focus();
     }
 
     private void OnSearchFocus(object sender, RoutedEventArgs e) => ViewModel?.OpenQuickPicks();
@@ -787,6 +835,9 @@ public partial class MainWindow : Window
         return (hit as System.Windows.Controls.ListBoxItem)?.DataContext as TileVm;
     }
 
+    /// <summary>Last visual column walked by Up/Down / Page — used when leaving a section header.</summary>
+    private int _lastNavCol;
+
     /// <summary>Explorer-style arrow navigation over the grid, plus Ctrl+C / Ctrl+X on the selection.</summary>
     private void OnGridKeyDown(object sender, KeyEventArgs e)
     {
@@ -830,6 +881,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.Key is Key.PageUp or Key.PageDown)
+        {
+            MoveGridPage(e.Key == Key.PageDown ? +1 : -1);
+            e.Handled = true;
+            return;
+        }
+
         // On a section header, Left/Right collapse/expand it (rather than moving the cursor).
         if (ViewModel.CursorIsHeader && (e.Key == Key.Left || e.Key == Key.Right))
         {
@@ -839,20 +897,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.Key is Key.Up or Key.Down)
+        {
+            // Keyboard focus follows the scroll: if the cursor tile was scrolled out of
+            // view (wheel, scrollbar, Ctrl+End…), re-anchor to a visible tile first so the
+            // arrow doesn't jump back to wherever the cursor used to be.
+            if (!ViewModel.CursorIsHeader && !IsSelectedVisible() && TopVisibleItem() is { } top)
+                ViewModel.SetCursorToItem(top);
+
+            MoveGridVertical(e.Key == Key.Down ? +1 : -1);
+            ItemsList.Focus();
+            e.Handled = true;
+            return;
+        }
+
         var direction = e.Key switch
         {
             Key.Left => "left",
             Key.Right => "right",
-            Key.Up => "up",
-            Key.Down => "down",
             _ => null,
         };
 
         if (direction is not null)
         {
-            // Keyboard focus follows the scroll: if the cursor tile was scrolled out of
-            // view (wheel, scrollbar, Ctrl+End…), re-anchor to a visible tile first so the
-            // arrow doesn't jump back to wherever the cursor used to be.
             if (!ViewModel.CursorIsHeader && !IsSelectedVisible() && TopVisibleItem() is { } top)
                 ViewModel.SetCursorToItem(top);
 
@@ -872,6 +939,266 @@ public partial class MainWindow : Window
             ViewModel.OpenQuickLookCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// Same-column Up/Down. Headers are not stops — the next/prev section's tile
+    /// in this column is. Empty cells (short last row) fall back to the nearest
+    /// tile in the column, then the nearest in the row.
+    /// </summary>
+    private void MoveGridVertical(int sign)
+    {
+        if (ViewModel is null || !TryBuildCells(out var cells, out var items))
+            return;
+
+        int? pick;
+        if (ViewModel.CursorIsHeader)
+            pick = PickFromHeader(cells, sign);
+        else if (CurrentCellIndex(items) is { } cur)
+            pick = TileSpatialNavigation.PickVertical(cells, cur, sign);
+        else
+            pick = items.Count > 0 ? 0 : null;
+
+        ApplyTilePick(cells, items, pick, scrollIntoView: true);
+    }
+
+    /// <summary>
+    /// Scroll roughly one viewport, then select the tile in the same column at
+    /// the same screen Y. Not skip-N-items and not a jump onto a section header.
+    /// </summary>
+    private void MoveGridPage(int sign)
+    {
+        if (ViewModel is null)
+            return;
+
+        var sv = GridScroll();
+        var viewH = sv?.ViewportHeight ?? 0;
+        if (viewH <= 0)
+            viewH = Math.Max(ItemsList.ActualHeight, 1);
+
+        if (!TryBuildCells(out var cells, out var items))
+            return;
+
+        var cur = CurrentCellIndex(items);
+        if (cur is null && ViewModel.CursorIsHeader)
+            cur = PickFromHeader(cells, sign);
+        if (cur is null)
+            return;
+
+        var offset = sv?.VerticalOffset ?? 0;
+        var pick = TileSpatialNavigation.PickPage(cells, cur.Value, offset, viewH, sign);
+
+        // Prefer the realized tile's viewport slot so refine survives header-height drift.
+        var (anchorX, anchorViewportY) = ViewportAnchor(items[cur.Value], cells[cur.Value], offset);
+
+        var max = Math.Max(0, (sv?.ExtentHeight ?? 0) - viewH);
+        sv?.ScrollToVerticalOffset(Math.Clamp(offset + sign * viewH, 0, max));
+
+        ApplyTilePick(cells, items, pick, scrollIntoView: false);
+        ItemsList.Focus();
+
+        // After the panel lays out the new page, land on the realized tile in
+        // the same column at the same screen Y (layout Y can drift vs. scroll).
+        Dispatcher.BeginInvoke(
+            new Action(() => RefinePageSelection(anchorX, anchorViewportY)),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private (double X, double Y) ViewportAnchor(
+        IGridItem current, TileSpatialNavigation.Cell estimated, double scrollOffset)
+    {
+        var realized = CollectRealizedCells();
+        for (var i = 0; i < realized.Items.Count; i++)
+        {
+            if (ReferenceEquals(realized.Items[i], current))
+                return (realized.Cells[i].CenterX, realized.Cells[i].CenterY);
+        }
+        return (estimated.CenterX, estimated.CenterY - scrollOffset);
+    }
+
+    private void RefinePageSelection(double columnX, double viewportY)
+    {
+        if (ViewModel is null)
+            return;
+        var realized = CollectRealizedCells();
+        if (realized.Cells.Count == 0)
+            return;
+        var pick = TileSpatialNavigation.PickAtColumn(realized.Cells, columnX, viewportY);
+        if (pick is int i)
+            ApplyTilePick(realized.Cells, realized.Items, i, scrollIntoView: false);
+    }
+
+    private int? PickFromHeader(IReadOnlyList<TileSpatialNavigation.Cell> cells, int sign)
+    {
+        if (ViewModel is null || cells.Count == 0)
+            return null;
+
+        var first = ViewModel.FirstVisibleTileIndex(ViewModel.CursorSection);
+        if (sign > 0)
+        {
+            if (first is not int f || f >= cells.Count)
+                return null;
+            return CellInRowNearestColumn(cells, cells[f].Row, _lastNavCol) ?? f;
+        }
+
+        // Up: last row of the previous section, same column, else nearest in that row.
+        if (first is not int start || start <= 0)
+            return null;
+        return CellInRowNearestColumn(cells, cells[start - 1].Row, _lastNavCol) ?? start - 1;
+    }
+
+    private static int? CellInRowNearestColumn(
+        IReadOnlyList<TileSpatialNavigation.Cell> cells, int row, int col)
+    {
+        var rowCells = cells.Where(c => c.Row == row).ToList();
+        if (rowCells.Count == 0)
+            return null;
+        var same = rowCells.FirstOrDefault(c => c.Col == col);
+        if (same.Width > 0)
+            return same.Index;
+        return rowCells.MinBy(c => (Math.Abs(c.Col - col), c.Index)).Index;
+    }
+
+    private void ApplyTilePick(
+        IReadOnlyList<TileSpatialNavigation.Cell> cells,
+        IReadOnlyList<IGridItem> items,
+        int? pick,
+        bool scrollIntoView)
+    {
+        if (ViewModel is null || pick is not int i || i < 0 || i >= items.Count)
+            return;
+        _lastNavCol = cells[i].Col;
+        ViewModel.SetCursorToItem(items[i]);
+        if (scrollIntoView)
+        {
+            try { ItemsList.ScrollIntoView(items[i]); } catch { /* virtualized generator can throw mid-refresh */ }
+        }
+    }
+
+    private bool TryBuildCells(
+        out IReadOnlyList<TileSpatialNavigation.Cell> cells,
+        out IReadOnlyList<IGridItem> items)
+    {
+        cells = [];
+        items = [];
+        if (ViewModel is null)
+            return false;
+
+        var layout = ViewModel.GetVisibleTileLayout();
+        items = layout.Tiles;
+        if (items.Count == 0)
+            return false;
+
+        var columns = VisualColumnCount();
+        var (tileW, tileH) = MeasureTileSize();
+        var headerH = layout.HasHeaders ? MeasureSectionHeaderHeight() : 0;
+        cells = TileSpatialNavigation.LayoutWrap(layout.SectionCounts, columns, tileW, tileH, headerH);
+        return cells.Count > 0;
+    }
+
+    private int? CurrentCellIndex(IReadOnlyList<IGridItem> items)
+    {
+        if (ViewModel?.SelectedItem is not IGridItem sel)
+            return null;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], sel))
+                return i;
+        }
+        return null;
+    }
+
+    private (IReadOnlyList<TileSpatialNavigation.Cell> Cells, IReadOnlyList<IGridItem> Items) CollectRealizedCells()
+    {
+        var cells = new List<TileSpatialNavigation.Cell>();
+        var items = new List<IGridItem>();
+        CollectRealizedTileRects(ItemsList, ItemsList, cells, items);
+        return (cells, items);
+    }
+
+    private static void CollectRealizedTileRects(
+        DependencyObject node,
+        UIElement origin,
+        List<TileSpatialNavigation.Cell> cells,
+        List<IGridItem> items)
+    {
+        if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem item } li)
+        {
+            // Origin is the ListBox: coordinates are viewport-relative (scroll already applied).
+            var tl = li.TranslatePoint(new Point(0, 0), origin);
+            cells.Add(new TileSpatialNavigation.Cell(
+                cells.Count, Row: 0, Col: 0, tl.X, tl.Y, li.ActualWidth, li.ActualHeight));
+            items.Add(item);
+            return;
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+            CollectRealizedTileRects(VisualTreeHelper.GetChild(node, i), origin, cells, items);
+    }
+
+    private int VisualColumnCount()
+    {
+        var realized = new List<Rect>();
+        CollectRealizedItemRects(ItemsList, ItemsList, realized);
+        if (realized.Count > 0)
+        {
+            var itemW = realized.Max(r => r.Width);
+            var fitted = (int)((ItemsList.ActualWidth - 12) / Math.Max(1, itemW));
+            var fullestRow = realized
+                .GroupBy(r => Math.Round(r.Y / 8.0) * 8.0)
+                .Select(g => g.Count())
+                .DefaultIfEmpty(1)
+                .Max();
+            return Math.Max(1, Math.Max(fullestRow, fitted));
+        }
+        return ColumnsPerRow();
+    }
+
+    private (double Width, double Height) MeasureTileSize()
+    {
+        var realized = new List<Rect>();
+        CollectRealizedItemRects(ItemsList, ItemsList, realized);
+        if (realized.Count > 0)
+            return (realized[0].Width, realized[0].Height);
+        var outer = (ViewModel?.TileSize ?? 200) + 20;
+        return (outer, outer + 18);
+    }
+
+    private double MeasureSectionHeaderHeight()
+    {
+        var header = FindFirstSectionHeader(ItemsList);
+        if (header is { ActualHeight: > 0 } h)
+            return h.ActualHeight + h.Margin.Top + h.Margin.Bottom;
+        return 44;
+    }
+
+    private static System.Windows.Controls.Primitives.ToggleButton? FindFirstSectionHeader(DependencyObject node)
+    {
+        if (node is System.Windows.Controls.Primitives.ToggleButton header
+            && header.TemplatedParent is System.Windows.Controls.GroupItem)
+            return header;
+
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+        {
+            if (FindFirstSectionHeader(VisualTreeHelper.GetChild(node, i)) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    private static void CollectRealizedItemRects(DependencyObject node, UIElement origin, List<Rect> rects)
+    {
+        if (node is System.Windows.Controls.ListBoxItem { IsVisible: true, DataContext: IGridItem } li)
+        {
+            rects.Add(new Rect(li.TranslatePoint(new Point(0, 0), origin), li.RenderSize));
+            return;
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+            CollectRealizedItemRects(VisualTreeHelper.GetChild(node, i), origin, rects);
     }
 
     /// <summary>Home/End: move the cursor to the first/last stop and scroll the grid to that extreme.</summary>

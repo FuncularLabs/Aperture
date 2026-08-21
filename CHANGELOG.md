@@ -5,6 +5,20 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.4-beta1] - 2026-08-21
+
+### Fixed
+- **Tile-pane Up/Down** move in the same visual column (Explorer-style), including
+  across date-section headers, instead of jumping by linear item index. An empty
+  cell (short last row) lands on the nearest tile in that column, then the nearest
+  in the row — not a section header and not a random index.
+- **PageUp/PageDown** scroll roughly one viewport (regardless of zoom / tile size)
+  and keep the selection in the same column at the same screen Y. They no longer
+  skip N items or jump to a date-section header.
+- **Tab / Shift+Tab** cycle only the folder tree and the tile pane, do not change
+  either pane's selection, and skip the ribbon (hamburger / command bar / search).
+  Search stays on `/` and Ctrl+F.
+
 ## [0.8.3-beta1] - 2026-08-21
 
 ### Fixed

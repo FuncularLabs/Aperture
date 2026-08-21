@@ -287,11 +287,12 @@
 
         <!-- Toolbar -->
         <Border DockPanel.Dock="Top" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                BorderThickness="0,0,0,1">
+                BorderThickness="0,0,0,1" KeyboardNavigation.TabNavigation="None">
             <DockPanel Margin="12,10">
                 <!-- Settings (right) -->
                 <ToggleButton x:Name="SettingsToggle" DockPanel.Dock="Right" Content="☰"
                               FontSize="16" Padding="12,4" Style="{StaticResource ToolToggle}" Margin="6,0,0,0"
+                              IsTabStop="False"
                               ToolTip="Menu" />
 
                 <!-- Search (right, left of settings) -->
@@ -314,12 +315,13 @@
                         </TextBlock>
                         <TextBox x:Name="SearchBox" Background="Transparent" BorderThickness="0"
                                  VerticalContentAlignment="Center" Margin="7,0,26,0" FontSize="12"
+                                 IsTabStop="False"
                                  GotKeyboardFocus="OnSearchFocus" LostKeyboardFocus="OnSearchBlur"
                                  KeyDown="OnSearchKeyDown"
                                  Text="{Binding SearchInput, UpdateSourceTrigger=PropertyChanged}" />
                         <Button Content="✕" Command="{Binding ClearSearchCommand}" HorizontalAlignment="Right"
                                 Width="24" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Muted}"
-                                Cursor="Hand" />
+                                IsTabStop="False" Cursor="Hand" />
                     </Grid>
                 </Border>
 
@@ -525,7 +527,7 @@
 
         <!-- Status bar -->
         <Border DockPanel.Dock="Bottom" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                BorderThickness="0,1,0,0">
+                BorderThickness="0,1,0,0" KeyboardNavigation.TabNavigation="None">
             <Grid Margin="12,6">
                 <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
                            VerticalAlignment="Center" />
@@ -571,14 +573,14 @@
 
             <!-- Roots pane -->
             <Border Grid.Column="0" Background="{StaticResource CanvasPanel}" BorderBrush="{StaticResource CanvasLine}"
-                    BorderThickness="0,0,1,0">
+                    BorderThickness="0,0,1,0" KeyboardNavigation.TabNavigation="Once">
                 <DockPanel>
                     <!-- Libraries: a saved view over one or more folders. Only the built-in "Everything"
                          (the union of every included folder) exists for now; add/remove comes later. -->
                     <TextBlock DockPanel.Dock="Top" Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}"
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
                     <Button x:Name="EverythingButton" DockPanel.Dock="Top" Command="{Binding NavigateHomeCommand}"
-                            Margin="8,0,8,2" KeyboardNavigation.TabIndex="0" PreviewKeyDown="OnEverythingKeyDown"
+                            Margin="8,0,8,2" KeyboardNavigation.TabIndex="0"
                             HorizontalContentAlignment="Stretch" Cursor="Hand" Padding="0" BorderThickness="0"
                             Foreground="{StaticResource CanvasInk}" FontSize="14"
                             ToolTip="Show everything across all folders">
@@ -616,7 +618,9 @@
                     <TreeView x:Name="FolderTreeView" ItemsSource="{Binding FolderTree}"
                               BorderThickness="0" Background="Transparent" Foreground="{StaticResource CanvasInk}"
                               FontSize="14"
-                              SelectedItemChanged="OnTreeSelectedChanged" PreviewKeyDown="OnTreeKeyDown">
+                              KeyboardNavigation.TabNavigation="Once"
+                              SelectedItemChanged="OnTreeSelectedChanged" PreviewKeyDown="OnTreeKeyDown"
+                              PreviewGotKeyboardFocus="OnTreePreviewGotKeyboardFocus">
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
@@ -749,7 +753,7 @@
             </Border>
 
             <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
-                          Background="Transparent" />
+                          Background="Transparent" Focusable="False" IsTabStop="False" />
 
             <!-- Thumbnail grid + preview pane; cells/splitter configured in code (ConfigurePreviewLayout) -->
             <Grid x:Name="ContentGrid" Grid.Column="2">
@@ -763,10 +767,12 @@
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      SelectionMode="Extended"
                      Focusable="True"
+                     KeyboardNavigation.TabNavigation="Once"
                      SelectionChanged="OnGridSelectionChanged"
                      PreviewMouseRightButtonDown="OnGridRightButtonDown"
                      PreviewMouseLeftButtonDown="OnGridPreviewLeftDown"
                      PreviewMouseMove="OnGridPreviewMove"
+                     PreviewGotKeyboardFocus="OnGridPreviewGotKeyboardFocus"
                      Background="{StaticResource CanvasBg}" BorderThickness="0" Padding="6"
                      ItemContainerStyle="{StaticResource TileContainer}"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -958,12 +964,14 @@
                 </Grid>
 
                 <!-- Drag handle between the browser and the preview (left edge for right-dock, top for bottom) -->
-                <GridSplitter x:Name="PreviewSplitter" Visibility="Collapsed" Background="{StaticResource CanvasLine}" />
+                <GridSplitter x:Name="PreviewSplitter" Visibility="Collapsed" Background="{StaticResource CanvasLine}"
+                              Focusable="False" IsTabStop="False" />
 
             <!-- Preview / inspector pane (docks right or bottom; cell + size set in ConfigurePreviewLayout) -->
             <Border x:Name="PreviewPane" Visibility="Collapsed"
                     Background="{StaticResource CanvasPanel}"
-                    BorderBrush="{StaticResource CanvasLine}" BorderThickness="1">
+                    BorderBrush="{StaticResource CanvasLine}" BorderThickness="1"
+                    KeyboardNavigation.TabNavigation="None">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Margin="14,12,10,10">
                         <TextBlock Text="PREVIEW" Foreground="{StaticResource CanvasMuted}" FontSize="11" FontWeight="SemiBold"
@@ -1092,6 +1100,7 @@
 
         <!-- Quick-look overlay -->
         <Grid x:Name="QuickLookOverlay" Background="#EE0E1014" MouseDown="OnQuickLookBackgroundClick"
+              KeyboardNavigation.TabNavigation="None"
               Visibility="{Binding QuickLookOpen, Converter={StaticResource BoolToVis}}">
             <!-- Transparent hit-target over the central image area, so the tile context menu
                  (right-click) and double-click-to-open work regardless of how the image letterboxes.

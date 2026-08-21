@@ -1436,6 +1436,89 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public SectionVm? CursorSection => _cursorSection;
 
     /// <summary>
+    /// Visible tiles in grid order plus per-section counts (0 for a collapsed
+    /// date bucket). Used by Explorer-style 2D Up/Down and PageUp/PageDown.
+    /// </summary>
+    internal readonly record struct VisibleTileLayout(
+        IReadOnlyList<IGridItem> Tiles,
+        IReadOnlyList<int> SectionCounts,
+        IReadOnlyList<SectionVm?> Sections,
+        bool HasHeaders);
+
+    internal VisibleTileLayout GetVisibleTileLayout()
+    {
+        var tiles = new List<IGridItem>();
+        var counts = new List<int>();
+        var sections = new List<SectionVm?>();
+        var nav = BuildNav();
+        var n = 0;
+        SectionVm? current = null;
+        var seenHeader = false;
+
+        void Flush()
+        {
+            counts.Add(n);
+            sections.Add(current);
+            n = 0;
+        }
+
+        foreach (var s in nav)
+        {
+            if (s.IsHeader)
+            {
+                if (seenHeader || n > 0)
+                    Flush();
+                current = s.Section;
+                seenHeader = true;
+                continue;
+            }
+
+            current = s.Section;
+            tiles.Add(s.Item!);
+            n++;
+        }
+
+        if (seenHeader || n > 0)
+            Flush();
+        else if (tiles.Count > 0)
+        {
+            counts.Add(tiles.Count);
+            sections.Add(tiles[0].Section);
+        }
+
+        return new VisibleTileLayout(tiles, counts, sections, seenHeader);
+    }
+
+    /// <summary>
+    /// First visible-tile index of <paramref name="section"/>, or the first tile
+    /// after it when the section is collapsed. Null when there is no tile past
+    /// that header.
+    /// </summary>
+    internal int? FirstVisibleTileIndex(SectionVm? section)
+    {
+        var layout = GetVisibleTileLayout();
+        if (section is null)
+            return layout.Tiles.Count > 0 ? 0 : null;
+
+        var idx = 0;
+        var seen = false;
+        for (var i = 0; i < layout.SectionCounts.Count; i++)
+        {
+            if (ReferenceEquals(layout.Sections[i], section))
+            {
+                seen = true;
+                if (layout.SectionCounts[i] > 0)
+                    return idx;
+            }
+            else if (seen && layout.SectionCounts[i] > 0)
+                return idx;
+            idx += layout.SectionCounts[i];
+        }
+
+        return seen ? null : (layout.Tiles.Count > 0 ? 0 : null);
+    }
+
+    /// <summary>
     /// The linear sequence the keyboard walks: each section's header, then that
     /// section's tiles when it's expanded (collapsed sections contribute only a header).
     /// </summary>
@@ -1477,7 +1560,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return 0;
     }
 
-    /// <summary>Moves the keyboard cursor. Returns the item/section to scroll into view.</summary>
+    /// <summary>
+    /// Moves the keyboard cursor Left/Right along visual order (including date-section
+    /// headers). Up/Down and PageUp/PageDown are layout-based in the view
+    /// (<c>TileSpatialNavigation</c>) so they stay in column.
+    /// </summary>
     public object? MoveGrid(string direction, int columns)
     {
         var nav = BuildNav();
