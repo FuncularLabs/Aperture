@@ -146,9 +146,10 @@ public class TileSpatialNavigationTests
     [Fact]
     public void PickAtColumn_EmptyColumn_NearestInRow()
     {
-        var cells = TileSpatialNavigation.LayoutWrap([6], columns: 4, tileWidth: 100, tileHeight: 100, headerHeight: 0);
-        // Col 3 (center 350) at the short second row (Y~150) → A5 is nearest in that row.
-        Assert.Equal(5, TileSpatialNavigation.PickAtColumn(cells, columnX: 350, targetY: 150));
+        // Realized short last row only (the page after a scroll). Col 3 is empty
+        // on this page, so land on the nearest tile in the row (index 1).
+        var row = TileSpatialNavigation.LayoutWrap([2], columns: 4, tileWidth: 100, tileHeight: 100, headerHeight: 0);
+        Assert.Equal(1, TileSpatialNavigation.PickAtColumn(row, columnX: 350, targetY: 50));
     }
 
     [Fact]
