@@ -619,6 +619,9 @@ public partial class MainWindow : Window
     /// <summary>Closes the settings/overflow popup after Refresh runs (it opens no dialog to steal focus).</summary>
     private void OnRefreshMenuClick(object sender, RoutedEventArgs e) => SettingsToggle.IsChecked = false;
 
+    /// <summary>Hamburger opened: refresh Start-with-Windows from the Run key and check GitHub for updates.</summary>
+    private void OnSettingsOpened(object sender, EventArgs e) => ViewModel?.OnSettingsOpened();
+
     /// <summary>
     /// Explorer-style right-click: clicking a tile that isn't in the current selection
     /// selects just it; clicking within the selection keeps it, so the context menu

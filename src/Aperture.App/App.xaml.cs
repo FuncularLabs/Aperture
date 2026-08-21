@@ -32,6 +32,7 @@ public partial class App : Application
 
         _library = new LibraryService(dataDir);
         var thumbnails = new ThumbnailService(_library);
+        UpdateService.CleanupOldBinaries();
         _viewModel = new MainViewModel(_library, thumbnails);
 
         var window = new MainWindow { DataContext = _viewModel };

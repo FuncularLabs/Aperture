@@ -5,6 +5,13 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+### Added
+- **About + updater** on the hamburger menu — current version, GitHub release check, Update /
+  Update (prerelease) when a newer build is available, progress and errors. Apply is portable
+  (new exe next to the current one) because there is no installer yet.
+- **Start with Windows** — opt-in checkbox on the same Settings surface. Writes or deletes
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Aperture`; off by default.
+
 ## [0.8.0-beta1] - 2026-07-14
 
 ### Added

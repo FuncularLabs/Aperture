@@ -12,6 +12,8 @@ using Aperture.Core.Annotations;
 using Aperture.Core.Formatting;
 using Aperture.Core.Library;
 using Aperture.Core.Models;
+using Aperture.Core.Startup;
+using Aperture.Core.Updates;
 
 namespace Aperture.App.ViewModels;
 
@@ -25,6 +27,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private readonly LibraryService _library;
     private readonly SynchronizationContext _ui;
+    private readonly IRunKeyStore _runKeys = new CurrentUserRunKeyStore();
+    private readonly string? _exePath = Environment.ProcessPath;
+    private readonly UpdateVersion? _currentVersion;
     private readonly Lock _indexLock = new();
     private readonly CollectionViewSource _view = new();
     private readonly Dictionary<long, SectionVm> _sections = [];
@@ -80,6 +85,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Thumbnails = thumbnails;
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
         _zoom = Math.Clamp(_library.Settings.Current.DefaultZoom, 0, ZoomSizes.Length - 1);
+        _currentVersion = UpdateVersion.Parse(
+            Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
 
         AddRootCommand = new RelayCommand(AddRoot);
         RemoveRootCommand = new RelayCommand<RootVm>(RemoveRoot);
@@ -116,6 +124,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ImportAnnotationsCommand = new RelayCommand(ImportAnnotations);
         ExportAnnotationsCommand = new RelayCommand(ExportAnnotations);
         OpenReadmeCommand = new RelayCommand(OpenReadme);
+        UpdateStableCommand = new RelayCommand(() => _ = UpdateToAsync(_stable, prerelease: false));
+        UpdatePrereleaseCommand = new RelayCommand(() => _ = UpdateToAsync(_prerelease, prerelease: true));
         NavigateHomeCommand = new RelayCommand(() => NavigateTo(null, ""));
         NavigateUpCommand = new RelayCommand(NavigateUp, () => !IsHome);
         NavigateBackCommand = new RelayCommand(NavigateBack, () => _back.Count > 0);
@@ -247,6 +257,235 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                           ?? asm.GetName().Version?.ToString(3) ?? "0.7.0";
             return "Aperture Image Viewer v" + version;
         }
+    }
+
+    // --- About / updater (hamburger header) --------------------------------
+
+    private ReleaseInfo? _stable;
+    private ReleaseInfo? _prerelease;
+    private bool _updating;
+    private bool _updateCheckInFlight;
+    private int _updateCheckGeneration;
+
+    private string _newestReleaseText = "Newest release: checking…";
+    private string _newestPrereleaseText = "";
+    private string _updateMessage = "";
+    private bool _showStableUpdate;
+    private bool _showPrereleaseUpdate;
+    private bool _showPrereleaseRow;
+    private bool _showUpdateMessage;
+    private bool _updateBusy;
+
+    public string NewestReleaseText
+    {
+        get => _newestReleaseText;
+        private set => SetProperty(ref _newestReleaseText, value);
+    }
+
+    public string NewestPrereleaseText
+    {
+        get => _newestPrereleaseText;
+        private set => SetProperty(ref _newestPrereleaseText, value);
+    }
+
+    public string UpdateMessage
+    {
+        get => _updateMessage;
+        private set => SetProperty(ref _updateMessage, value);
+    }
+
+    public bool ShowStableUpdate
+    {
+        get => _showStableUpdate;
+        private set => SetProperty(ref _showStableUpdate, value);
+    }
+
+    public bool ShowPrereleaseUpdate
+    {
+        get => _showPrereleaseUpdate;
+        private set => SetProperty(ref _showPrereleaseUpdate, value);
+    }
+
+    public bool ShowPrereleaseRow
+    {
+        get => _showPrereleaseRow;
+        private set => SetProperty(ref _showPrereleaseRow, value);
+    }
+
+    public bool ShowUpdateMessage
+    {
+        get => _showUpdateMessage;
+        private set => SetProperty(ref _showUpdateMessage, value);
+    }
+
+    public bool UpdateBusy
+    {
+        get => _updateBusy;
+        private set
+        {
+            if (SetProperty(ref _updateBusy, value))
+                OnPropertyChanged(nameof(CanApplyUpdate));
+        }
+    }
+
+    public bool CanApplyUpdate => !_updateBusy;
+
+    public ICommand UpdateStableCommand { get; }
+    public ICommand UpdatePrereleaseCommand { get; }
+
+    /// <summary>Called when the hamburger popup opens: refresh the Run-key checkbox and check GitHub.</summary>
+    public void OnSettingsOpened()
+    {
+        OnPropertyChanged(nameof(StartWithWindows));
+        _ = CheckForUpdatesAsync();
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        if (_updateCheckInFlight || _updating) return;
+        _updateCheckInFlight = true;
+        var generation = ++_updateCheckGeneration;
+        NewestReleaseText = "Newest release: checking…";
+        ShowStableUpdate = false;
+        ShowPrereleaseUpdate = false;
+        ShowPrereleaseRow = false;
+        ShowUpdateMessage = false;
+        try
+        {
+            var check = await UpdateService.CheckAsync();
+            if (generation != _updateCheckGeneration) return;
+            ApplyUpdateCheck(check);
+        }
+        finally
+        {
+            if (generation == _updateCheckGeneration)
+                _updateCheckInFlight = false;
+        }
+    }
+
+    private void ApplyUpdateCheck(UpdateCheck? check)
+    {
+        if (check is null)
+        {
+            NewestReleaseText = "Newest release: couldn't check (offline?)";
+            ShowStableUpdate = false;
+            ShowPrereleaseUpdate = false;
+            ShowPrereleaseRow = false;
+            ShowUpdateMessage = false;
+            _stable = null;
+            _prerelease = null;
+            return;
+        }
+
+        _stable = check.Stable;
+        _prerelease = check.PrereleaseRelease;
+
+        NewestReleaseText = _stable is not null
+            ? $"Newest release: {_stable.Tag}"
+            : _prerelease is not null
+                ? $"Newest release: {_prerelease.Tag}"
+                : "Newest release: none published";
+
+        var stableNewer = UpdateOffer.ShowStableUpdate(_stable, _currentVersion);
+        ShowStableUpdate = stableNewer;
+
+        var showPre = UpdateOffer.ShowPrerelease(_prerelease, _stable, _currentVersion);
+        if (showPre)
+        {
+            NewestPrereleaseText = $"Newest prerelease: {_prerelease!.Tag}";
+            ShowPrereleaseRow = _stable is not null; // already named on the main line when there is no stable
+            ShowPrereleaseUpdate = true;
+        }
+        else
+        {
+            _prerelease = null;
+            ShowPrereleaseRow = false;
+            ShowPrereleaseUpdate = false;
+        }
+
+        if (!stableNewer && !showPre)
+        {
+            UpdateMessage = "You're up to date.";
+            ShowUpdateMessage = true;
+        }
+        else if (!_updating)
+        {
+            ShowUpdateMessage = false;
+        }
+    }
+
+    private async Task UpdateToAsync(ReleaseInfo? release, bool prerelease)
+    {
+        if (release is null || _updating) return;
+
+        if (UpdateService.AlreadyUpdatedOnDisk(release.Version, _currentVersion, out var onDisk))
+        {
+            UpdateMessage = $"Already at {onDisk} on disk — close and reopen Aperture to pick it up.";
+            ShowUpdateMessage = true;
+            ShowStableUpdate = ShowPrereleaseUpdate = false;
+            return;
+        }
+
+        var what = prerelease
+            ? $"{release.Tag} is a PRERELEASE — early access, may contain rough edges."
+            : $"{release.Tag} is the newest stable release.";
+        var how = "The new version will be downloaded next to the current one and started; the current exe stays behind.";
+        var owner = System.Windows.Application.Current?.MainWindow;
+        var result = owner is not null
+            ? System.Windows.MessageBox.Show(owner, $"{what}\n\n{how}\n\nUpdate now?",
+                "Aperture update", System.Windows.MessageBoxButton.YesNo,
+                prerelease ? System.Windows.MessageBoxImage.Warning : System.Windows.MessageBoxImage.Question)
+            : System.Windows.MessageBox.Show($"{what}\n\n{how}\n\nUpdate now?",
+                "Aperture update", System.Windows.MessageBoxButton.YesNo,
+                prerelease ? System.Windows.MessageBoxImage.Warning : System.Windows.MessageBoxImage.Question);
+        if (result != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        _updating = true;
+        UpdateBusy = true;
+        ShowUpdateMessage = true;
+        try
+        {
+            UpdateMessage = $"Downloading {release.AssetName}…";
+            var file = await UpdateService.DownloadAsync(release);
+            if (file is null)
+            {
+                FailUpdate("Download failed — check your connection and try again.");
+                return;
+            }
+
+            UpdateMessage = "Verifying signature…";
+            var ok = await Task.Run(() => UpdateService.VerifySignature(file, out _));
+            if (!ok)
+            {
+                try { File.Delete(file); } catch { /* leftover in %TEMP%; next download overwrites */ }
+                FailUpdate("The downloaded file failed signature verification and was NOT installed.");
+                return;
+            }
+
+            UpdateMessage = "Installing…";
+            UpdateService.ApplyPortableAndRestart(file, release.AssetName ?? "Aperture.exe");
+            System.Windows.Application.Current?.Shutdown();
+        }
+        catch (InvalidOperationException ex)
+        {
+            FailUpdate(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            FailUpdate($"Update failed: {ex.Message}");
+        }
+    }
+
+    private void FailUpdate(string message)
+    {
+        _updating = false;
+        UpdateBusy = false;
+        UpdateMessage = message;
+        ShowUpdateMessage = true;
+        // The hamburger closes when the confirm MessageBox takes focus, so an
+        // error must also land in a dialog the user can actually see.
+        Notify(message, warn: true);
     }
 
     private string _windowTitle = "Aperture Image Viewer";
@@ -484,6 +723,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged();
             foreach (var rootVm in Roots.ToList())
                 _ = IndexRootAsync(rootVm.Model, watchAfter: false);
+        }
+    }
+
+    /// <summary>
+    /// Launch Aperture at Windows logon. Source of truth is the HKCU Run key
+    /// (checked iff a value named Aperture points at this exe). Registry failures
+    /// never throw; the checkbox re-reads the actual key.
+    /// </summary>
+    public bool StartWithWindows
+    {
+        get => WindowsStartup.IsEnabled(_runKeys, _exePath);
+        set
+        {
+            if (value == WindowsStartup.IsEnabled(_runKeys, _exePath))
+                return;
+            WindowsStartup.TrySetEnabled(_runKeys, _exePath, value);
+            OnPropertyChanged();
         }
     }
 
@@ -2152,6 +2408,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _updateCheckGeneration++; // in-flight GitHub checks must not write back after shutdown
         _library.RootChanged -= OnRootChanged;
         _library.Dispose();
     }
