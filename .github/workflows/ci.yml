@@ -42,8 +42,9 @@ jobs:
         run: |
           $tagsFile = Join-Path $env:RUNNER_TEMP 'v-tags.txt'
           Set-Content -Path $tagsFile -Value "v0.8.0-beta1" -Encoding utf8NoBOM
-          $out = dotnet run --project scripts/DecideReleaseTag -- --version 0.8.1-beta1 --tags-file $tagsFile
+          $out = dotnet run --project scripts/DecideReleaseTag -- --version 0.8.1-beta1 --tags-file $tagsFile | Out-String
           $out
+          if ($LASTEXITCODE -ne 0) { throw "DecideReleaseTag exited $LASTEXITCODE`n$out" }
           if ($out -notmatch 'should_tag=true' -or $out -notmatch 'tag=v0.8.1-beta1') {
             throw "DecideReleaseTag did not request v0.8.1-beta1. Output:`n$out"
           }
