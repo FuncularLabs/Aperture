@@ -14,6 +14,8 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
   arrows move folders immediately. Arrowing the tree commits the selected node at
   once; the tile pane rebuilds in the background and shows the existing Loading…
   spinner if that rebuild is slow, instead of gating the next arrow on grid render.
+- **First click** on an unfocused window or pane focuses the clicked folder / tile /
+  canvas in that same click (Explorer-style). The activating click is not swallowed.
 
 ## [0.8.5-beta1] - 2026-08-21
 

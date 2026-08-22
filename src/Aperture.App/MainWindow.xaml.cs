@@ -28,6 +28,23 @@ public partial class MainWindow : Window
             ApplyWindowPlacement(p);
         if (ViewModel?.GetNavWidth() is { } w && w >= NavColumn.MinWidth)
             NavColumn.Width = new GridLength(w);
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero && HwndSource.FromHwnd(hwnd) is { } source)
+            source.AddHook(WndProc);
+    }
+
+    /// <summary>
+    /// Explorer-style: the click that activates Aperture is also delivered to
+    /// the folder / tile / canvas under the cursor. Default Win32/WPF can
+    /// return MA_ACTIVATEANDEAT and eat that first click.
+    /// </summary>
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (!LibraryPaneFocus.TryPassActivatingClick(msg, out var result))
+            return IntPtr.Zero;
+        handled = true;
+        return result;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -805,6 +822,10 @@ public partial class MainWindow : Window
         if (ContainerFrom(e.OriginalSource as DependencyObject) is not { DataContext: TileVm pressed } container
             || IsWithinButton(e.OriginalSource as DependencyObject))
             return;
+
+        // Same-click focus when the grid was not the keyboard pane (tree had focus,
+        // or the window just activated). Do not handle — selection and drag still run.
+        container.Focus();
 
         // Capture the drag set BEFORE WPF collapses the selection on mouse-down: pressing an
         // already-selected tile drags the whole selection (Explorer-style); otherwise just this one.

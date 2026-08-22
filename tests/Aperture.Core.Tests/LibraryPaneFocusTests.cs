@@ -13,8 +13,9 @@ namespace Aperture.Core.Tests;
 /// Tab / Shift+Tab (manual): only tree ↔ tile list; ribbon and Everything
 /// are not stops. Tab to the tree keeps the folder (or Everything) and
 /// arrows move folders immediately; Tab to the grid keeps the selected tile.
-/// Click in the tree focuses it. Tree Up/Down commit the node at once; the
-/// tile pane may spinner. Search stays on / and Ctrl+F.
+/// Click in the tree focuses it. First click on an unfocused window or pane
+/// focuses the clicked folder / tile / canvas in that same click. Tree Up/Down
+/// commit the node at once; the tile pane may spinner. Search stays on / and Ctrl+F.
 /// </summary>
 public class LibraryPaneFocusTests
 {
@@ -105,4 +106,18 @@ public class LibraryPaneFocusTests
             LibraryPaneFocus.OnTreeKeyboardArrival(
                 fromOutside: false, mousePressed: false,
                 newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: true));
+
+    [Fact]
+    public void ActivatingClick_IsPassedThrough_NotEaten()
+    {
+        Assert.True(LibraryPaneFocus.TryPassActivatingClick(LibraryPaneFocus.WmMouseActivate, out var result));
+        Assert.Equal(LibraryPaneFocus.MaActivate, result.ToInt32());
+    }
+
+    [Fact]
+    public void NonActivateMessage_IsNotHandled()
+    {
+        Assert.False(LibraryPaneFocus.TryPassActivatingClick(0x0201, out var result)); // WM_LBUTTONDOWN
+        Assert.Equal(IntPtr.Zero, result);
+    }
 }

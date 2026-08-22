@@ -48,6 +48,28 @@ internal static class LibraryPaneFocus
     public static bool ShouldKeepExistingSelection(bool fromOutside, bool newFocusIsItem, bool newFocusIsSelected) =>
         fromOutside && newFocusIsItem && !newFocusIsSelected;
 
+    /// <summary>Win32 <c>WM_MOUSEACTIVATE</c> — the click that activates a window.</summary>
+    internal const int WmMouseActivate = 0x0021;
+
+    /// <summary>Activate and deliver the click to the control (Explorer). Not <c>MA_ACTIVATEANDEAT</c>.</summary>
+    internal const int MaActivate = 1;
+
+    /// <summary>
+    /// True when this is the click that activates the window. Return
+    /// <see cref="MaActivate"/> so the same click focuses the folder / tile /
+    /// canvas — an activation-only first click would swallow it.
+    /// </summary>
+    public static bool TryPassActivatingClick(int msg, out IntPtr result)
+    {
+        if (msg != WmMouseActivate)
+        {
+            result = IntPtr.Zero;
+            return false;
+        }
+        result = new IntPtr(MaActivate);
+        return true;
+    }
+
     internal enum TreeFocusAction
     {
         /// <summary>Leave WPF's focus target alone (arrows inside the tree, or a click).</summary>
