@@ -82,6 +82,66 @@ internal static class LibraryPaneFocus
         FocusTree,
     }
 
+    /// <summary>What a left-click on the folder tree should do to keyboard focus.</summary>
+    internal enum TreeClickAction
+    {
+        /// <summary>Folder row / name / icon — <c>TreeViewItem.Focus()</c> (which also selects).</summary>
+        FocusItem,
+        /// <summary>
+        /// Expand chevron or include checkbox: do not <c>Focus()</c> the item.
+        /// That call selects the folder; Explorer and 0.8.5 keep those hits off selection.
+        /// Alias text boxes keep the caret.
+        /// </summary>
+        Leave,
+        /// <summary>Empty tree chrome — focus the TreeView without changing selection.</summary>
+        FocusTree,
+    }
+
+    internal enum TreeHit
+    {
+        Row,
+        Expander,
+        IncludeCheckBox,
+        TextInput,
+        Canvas,
+    }
+
+    /// <summary>
+    /// Same-click folder focus applies to the row only. The expander
+    /// (<see cref="ToggleButton"/>, <c>Focusable=False</c>) and the root include
+    /// checkbox must not select the folder.
+    /// </summary>
+    public static TreeClickAction OnTreePreviewClick(TreeHit hit) => hit switch
+    {
+        TreeHit.Row => TreeClickAction.FocusItem,
+        TreeHit.Canvas => TreeClickAction.FocusTree,
+        _ => TreeClickAction.Leave,
+    };
+
+    public static TreeClickAction OnTreePreviewClick(DependencyObject? originalSource) =>
+        OnTreePreviewClick(ClassifyTreeHit(originalSource));
+
+    internal static TreeHit ClassifyTreeHit(DependencyObject? originalSource)
+    {
+        var node = originalSource;
+        while (node is not null)
+        {
+            if (node is TextBox or PasswordBox or ComboBox or RichTextBox)
+                return TreeHit.TextInput;
+            // CheckBox before ToggleButton — CheckBox is a ToggleButton.
+            if (node is CheckBox)
+                return TreeHit.IncludeCheckBox;
+            if (node is ToggleButton)
+                return TreeHit.Expander;
+            if (node is TreeViewItem)
+                return TreeHit.Row;
+            if (node is TreeView or Window)
+                return TreeHit.Canvas;
+            node = Parent(node);
+        }
+        return TreeHit.Canvas;
+    }
+
     /// <summary>
     /// Where keyboard focus should land when it arrives on the folder tree.
     /// Tab must not change the selected folder; click must not yank focus back
@@ -95,7 +155,7 @@ internal static class LibraryPaneFocus
         if (!fromOutside)
             return TreeFocusAction.Leave;
 
-        // Click path focuses the item in PreviewMouseDown; IsSelected may still be false.
+        // Row-click path focuses the item in PreviewMouseDown; IsSelected may still be false.
         if (mousePressed)
             return TreeFocusAction.Leave;
 

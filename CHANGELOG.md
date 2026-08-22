@@ -16,6 +16,7 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
   spinner if that rebuild is slow, instead of gating the next arrow on grid render.
 - **First click** on an unfocused window or pane focuses the clicked folder / tile /
   canvas in that same click (Explorer-style). The activating click is not swallowed.
+  The folder expand arrow and include checkbox do not change the selected folder.
 
 ## [0.8.5-beta1] - 2026-08-21
 

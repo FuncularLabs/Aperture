@@ -94,7 +94,7 @@ public class LibraryPaneFocusTests
                 newFocusIsItem: true, newFocusIsSelected: true, hasSelectedItem: true));
 
     [Fact]
-    public void ClickTreeItem_LeavesFocusOnClickedItem() =>
+    public void ClickTreeRow_LeavesFocusOnClickedItem() =>
         Assert.Equal(LibraryPaneFocus.TreeFocusAction.Leave,
             LibraryPaneFocus.OnTreeKeyboardArrival(
                 fromOutside: true, mousePressed: true,
@@ -106,6 +106,35 @@ public class LibraryPaneFocusTests
             LibraryPaneFocus.OnTreeKeyboardArrival(
                 fromOutside: false, mousePressed: false,
                 newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: true));
+
+    [Fact]
+    public void TreeClick_Row_FocusesItem() =>
+        Assert.Equal(LibraryPaneFocus.TreeClickAction.FocusItem,
+            LibraryPaneFocus.OnTreePreviewClick(LibraryPaneFocus.TreeHit.Row));
+
+    [Fact]
+    public void TreeClick_Expander_DoesNotSelectFolder() =>
+        Assert.Equal(LibraryPaneFocus.TreeClickAction.Leave,
+            LibraryPaneFocus.OnTreePreviewClick(LibraryPaneFocus.TreeHit.Expander));
+
+    [Fact]
+    public void TreeClick_IncludeCheckBox_DoesNotSelectFolder() =>
+        Assert.Equal(LibraryPaneFocus.TreeClickAction.Leave,
+            LibraryPaneFocus.OnTreePreviewClick(LibraryPaneFocus.TreeHit.IncludeCheckBox));
+
+    [Fact]
+    public void TreeClick_AliasEdit_LeavesCaret() =>
+        Assert.Equal(LibraryPaneFocus.TreeClickAction.Leave,
+            LibraryPaneFocus.OnTreePreviewClick(LibraryPaneFocus.TreeHit.TextInput));
+
+    [Fact]
+    public void TreeClick_EmptyChrome_FocusesTree() =>
+        Assert.Equal(LibraryPaneFocus.TreeClickAction.FocusTree,
+            LibraryPaneFocus.OnTreePreviewClick(LibraryPaneFocus.TreeHit.Canvas));
+
+    [Fact]
+    public void ClassifyTreeHit_NullIsCanvas() =>
+        Assert.Equal(LibraryPaneFocus.TreeHit.Canvas, LibraryPaneFocus.ClassifyTreeHit(null));
 
     [Fact]
     public void ActivatingClick_IsPassedThrough_NotEaten()

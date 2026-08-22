@@ -336,22 +336,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Click in the tree must put keyboard focus on the clicked item so Up/Down
-    /// move folders immediately. Do not handle the event — selection still happens.
+    /// Same-click focus onto a folder row so Up/Down move folders immediately
+    /// when the tree was not the keyboard pane. Do not handle the event —
+    /// selection still happens. Focusing a TreeViewItem selects the node —
+    /// skip that for the expand chevron and the include checkbox so those
+    /// hits stay off selection (Explorer).
     /// </summary>
     private void OnTreePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        var src = e.OriginalSource as DependencyObject;
-        while (src is not null && !ReferenceEquals(src, FolderTreeView))
+        var action = LibraryPaneFocus.OnTreePreviewClick(e.OriginalSource as DependencyObject);
+        if (action == LibraryPaneFocus.TreeClickAction.Leave)
+            return;
+        if (action == LibraryPaneFocus.TreeClickAction.FocusItem)
         {
-            if (src is System.Windows.Controls.TreeViewItem item)
+            var src = e.OriginalSource as DependencyObject;
+            while (src is not null && !ReferenceEquals(src, FolderTreeView))
             {
-                item.Focus();
-                return;
+                if (src is System.Windows.Controls.TreeViewItem item)
+                {
+                    item.Focus();
+                    return;
+                }
+                src = src is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                    ? VisualTreeHelper.GetParent(src)
+                    : LogicalTreeHelper.GetParent(src);
             }
-            src = src is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
-                ? VisualTreeHelper.GetParent(src)
-                : LogicalTreeHelper.GetParent(src);
         }
         FolderTreeView.Focus();
     }
@@ -363,7 +372,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Tabbing into the tree must not change its selection. WPF TreeView focuses
     /// (and selects) the first node when nothing is selected — keep Everything /
-    /// the current folder. A click already focused the item in PreviewMouseDown.
+    /// the current folder. A row click already focused the item in PreviewMouseDown.
     /// </summary>
     private void OnTreePreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
