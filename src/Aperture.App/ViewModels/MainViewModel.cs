@@ -5,6 +5,7 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using Aperture.App.Mvvm;
 using Aperture.App.Services;
@@ -1304,7 +1305,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private bool _navigating;
 
-    private void NavigateTo(long? rootId, string relDir, bool pushBack = true)
+    private void NavigateTo(long? rootId, string relDir, bool pushBack = true, bool syncTree = true)
     {
         if (_navigating)
             return;
@@ -1321,13 +1322,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _searchInput = "";
             _searchText = "";
             OnPropertyChanged(nameof(SearchInput));
-            SelectedItem = null;
-            RequestBuildView(); // debounced + async so rapid tree navigation doesn't queue
+            // Do not clear SelectedItem or rebuild the grid here: that invalidates
+            // tile layout and the dispatcher would Render before the next tree
+            // keydown. ApplyView drops the stale selection when the tiles land.
+            RequestBuildView();
             OnPropertyChanged(nameof(IsHome));
-            if (rootId is null)
-                ClearTreeSelection(FolderTree); // "Everything" — no folder node should stay highlighted
-            else
-                SelectPath(rootId, relDir); // keep the tree's selection in sync
+            if (syncTree)
+            {
+                if (rootId is null)
+                    ClearTreeSelection(FolderTree); // "Everything" — no folder node should stay highlighted
+                else
+                    SelectPath(rootId, relDir); // keep the tree's selection in sync
+            }
         }
         finally
         {
@@ -1973,7 +1979,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Debounced, last-one-wins async rebuild. Rapid triggers — arrowing the folder
     /// tree, typing in search — coalesce, and the heavy filter/sort/tile work runs off
-    /// the UI thread so keystrokes never queue behind it. A brief spinner covers the gap.
+    /// the UI thread. Generation is stamped at request time (not after debounce) so an
+    /// in-flight compute from folder A cannot ApplyView after the user has moved to B.
+    /// ApplyView is posted at Background (below Input) so queued tree arrows drain
+    /// first. The existing Loading… spinner covers a slow rebuild after the tree node
+    /// has already moved.
     /// </summary>
     private async void RequestBuildView()
     {
@@ -1981,18 +1991,35 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var cts = new CancellationTokenSource();
         _buildDebounce = cts;
         var token = cts.Token;
+        var generation = ++_buildGeneration;
         try { await Task.Delay(BuildDebounceMs, token); }
         catch (OperationCanceledException) { return; }
 
-        var generation = ++_buildGeneration;
+        if (generation != _buildGeneration)
+            return;
+
         IsLoadingView = true;
         var inputs = CaptureBuildInputs();
 
         try
         {
             var build = await Task.Run(() => ComputeView(inputs), token);
-            if (generation == _buildGeneration) // a newer request may have superseded this one
+            if (generation != _buildGeneration)
+                return;
+
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher is not null && !dispatcher.HasShutdownStarted)
+            {
+                await dispatcher.InvokeAsync(() =>
+                {
+                    if (generation == _buildGeneration)
+                        ApplyView(build);
+                }, DispatcherPriority.Background);
+            }
+            else if (generation == _buildGeneration)
+            {
                 ApplyView(build);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2088,6 +2115,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ClearCursorHighlight();
         _cursorSection = null;
         _selectedTiles = []; // stale references across a view rebuild would act on the wrong tiles
+        // Folder change drops the old tile; a streaming/sort rebuild that reuses the
+        // same TileVm must not. Clearing here (not in NavigateTo) keeps tree keydown
+        // off the grid's layout pass.
+        if (_selectedItem is not TileVm stay || !build.MediaTiles.Contains(stay))
+            SelectedItem = null;
 
         _sections.Clear();
         foreach (var (key, section) in build.Sections)
@@ -2236,11 +2268,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             .ToList();
     }
 
-    /// <summary>Called from the tree when the user selects a node.</summary>
+    /// <summary>
+    /// Called from the tree when the user selects a node. The TreeView has
+    /// already committed the highlight; do not SelectPath (that would walk /
+    /// lazy-load children on the keydown) and do not wait for the tile rebuild.
+    /// </summary>
     public void NavigateToNode(FolderNodeVm? node)
     {
         if (node is not null)
-            NavigateTo(node.RootId, node.RelDir);
+            NavigateTo(node.RootId, node.RelDir, pushBack: true, syncTree: false);
     }
 
     /// <summary>Clears selection on every loaded tree node — used when navigating to "Everything".</summary>

@@ -5,6 +5,16 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.6-beta1] - 2026-08-21
+
+### Fixed
+- **Folder-tree keyboard** — Tab / Shift+Tab cycle only the folder tree and the tile
+  list (ribbon and the Everything button stay out). Tabbing in does not change the
+  destination selection. Clicking or Tabbing to the tree gives it keyboard focus so
+  arrows move folders immediately. Arrowing the tree commits the selected node at
+  once; the tile pane rebuilds in the background and shows the existing Loading…
+  spinner if that rebuild is slow, instead of gating the next arrow on grid render.
+
 ## [0.8.5-beta1] - 2026-08-21
 
 ### Fixed

@@ -8,9 +8,10 @@ using Aperture.App.ViewModels;
 namespace Aperture.App;
 
 /// <summary>
-/// Keyboard focus for the library contents/tile pane. Clicking a tile already
-/// focuses that <see cref="ListBoxItem"/>; clicking the empty canvas did not,
-/// so arrow / PageUp / PageDown / scroll keys stayed on the folder tree.
+/// Keyboard focus for the library: folder tree ↔ tile pane. Clicking a tile
+/// already focuses that <see cref="ListBoxItem"/>; clicking the empty canvas
+/// did not, so arrow / PageUp / PageDown / scroll keys stayed on the folder
+/// tree. Tab onto either pane must not change its selection.
 /// </summary>
 internal static class LibraryPaneFocus
 {
@@ -46,6 +47,45 @@ internal static class LibraryPaneFocus
     /// </summary>
     public static bool ShouldKeepExistingSelection(bool fromOutside, bool newFocusIsItem, bool newFocusIsSelected) =>
         fromOutside && newFocusIsItem && !newFocusIsSelected;
+
+    internal enum TreeFocusAction
+    {
+        /// <summary>Leave WPF's focus target alone (arrows inside the tree, or a click).</summary>
+        Leave,
+        /// <summary>Focus the already-selected folder so arrows move from there.</summary>
+        FocusSelectedItem,
+        /// <summary>
+        /// Keep focus on the TreeView — "Everything" is showing; do not select the first folder.
+        /// </summary>
+        FocusTree,
+    }
+
+    /// <summary>
+    /// Where keyboard focus should land when it arrives on the folder tree.
+    /// Tab must not change the selected folder; click must not yank focus back
+    /// to a previous node while the new item's <c>IsSelected</c> is still catching up.
+    /// </summary>
+    public static TreeFocusAction OnTreeKeyboardArrival(
+        bool fromOutside, bool mousePressed,
+        bool newFocusIsItem, bool newFocusIsSelected,
+        bool hasSelectedItem)
+    {
+        if (!fromOutside)
+            return TreeFocusAction.Leave;
+
+        // Click path focuses the item in PreviewMouseDown; IsSelected may still be false.
+        if (mousePressed)
+            return TreeFocusAction.Leave;
+
+        if (newFocusIsItem && newFocusIsSelected)
+            return TreeFocusAction.Leave;
+
+        if (hasSelectedItem)
+            return TreeFocusAction.FocusSelectedItem;
+
+        // Tab onto the tree (or onto the first folder) while Everything is showing.
+        return TreeFocusAction.FocusTree;
+    }
 
     public static Hit Classify(DependencyObject? originalSource, IInputElement? currentFocus)
     {

@@ -41,9 +41,9 @@ public partial class MainWindow : Window
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         ConfigurePreviewLayout(ViewModel.PreviewMode);
 
-        // Land keyboard focus on the "Everything" library so a single Tab drops into the grid
+        // Land keyboard focus on the folder tree so Tab cycles tree ↔ tile list
         // without changing either pane's selection (ribbon is not a Tab stop).
-        Dispatcher.BeginInvoke(new Action(() => EverythingButton.Focus()),
+        Dispatcher.BeginInvoke(new Action(FocusTreeWithoutChangingSelection),
             System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
@@ -250,6 +250,27 @@ public partial class MainWindow : Window
 
         var focused = Keyboard.FocusedElement;
 
+        // Tab / Shift+Tab: only the folder tree and the tile list. Ribbon stays out.
+        // Two stops — either direction toggles. Do not change the destination selection.
+        if (e.Key == Key.Tab && (Keyboard.Modifiers & ~ModifierKeys.Shift) == 0)
+        {
+            if (ViewModel.ShowFirstRun)
+                return; // first-run overlay owns Tab
+            if (SettingsToggle.IsChecked == true)
+                return; // hamburger menu owns Tab
+            if (focused is System.Windows.Controls.TextBox tb && !ReferenceEquals(tb, SearchBox))
+                return; // alias rename / caption field — leave caret Tab alone
+            if (focused is DependencyObject d && System.Windows.Window.GetWindow(d) is not MainWindow)
+                return;
+
+            e.Handled = true;
+            if (IsInTree(focused as DependencyObject))
+                FocusTileListWithoutChangingSelection();
+            else
+                FocusTreeWithoutChangingSelection();
+            return;
+        }
+
         // "/" focuses search (unless already typing).
         if (e.Key == Key.Oem2 && Keyboard.Modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox)
@@ -298,26 +319,72 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Click in the tree must put keyboard focus on the clicked item so Up/Down
+    /// move folders immediately. Do not handle the event — selection still happens.
+    /// </summary>
+    private void OnTreePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var src = e.OriginalSource as DependencyObject;
+        while (src is not null && !ReferenceEquals(src, FolderTreeView))
+        {
+            if (src is System.Windows.Controls.TreeViewItem item)
+            {
+                item.Focus();
+                return;
+            }
+            src = src is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(src)
+                : LogicalTreeHelper.GetParent(src);
+        }
+        FolderTreeView.Focus();
+    }
+
+    /// <summary>Everything is click-only (not a Tab stop). After Home, park keyboard on the tree.</summary>
+    private void OnEverythingClick(object sender, RoutedEventArgs e) =>
+        FolderTreeView.Focus();
+
+    /// <summary>
     /// Tabbing into the tree must not change its selection. WPF TreeView focuses
     /// (and selects) the first node when nothing is selected — keep Everything /
-    /// the current folder.
+    /// the current folder. A click already focused the item in PreviewMouseDown.
     /// </summary>
     private void OnTreePreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (e.NewFocus is not System.Windows.Controls.TreeViewItem item)
-            return;
-        if (!LibraryPaneFocus.ShouldKeepExistingSelection(
-                fromOutside: !IsInTree(e.OldFocus as DependencyObject),
-                newFocusIsItem: true,
-                newFocusIsSelected: item.IsSelected))
+        // WPF TreeView.Focus() hops onto the first item with OldFocus=TreeView
+        // (which IsInTree). Treat that hop as outside so Tab onto Everything does
+        // not select the first folder.
+        var action = LibraryPaneFocus.OnTreeKeyboardArrival(
+            fromOutside: !IsInTree(e.OldFocus as DependencyObject)
+                || ReferenceEquals(e.OldFocus, FolderTreeView),
+            mousePressed: Mouse.LeftButton == MouseButtonState.Pressed,
+            newFocusIsItem: e.NewFocus is System.Windows.Controls.TreeViewItem,
+            newFocusIsSelected: e.NewFocus is System.Windows.Controls.TreeViewItem { IsSelected: true },
+            hasSelectedItem: FolderTreeView.SelectedItem is FolderNodeVm);
+        if (action == LibraryPaneFocus.TreeFocusAction.Leave)
             return;
 
         e.Handled = true;
+        if (action == LibraryPaneFocus.TreeFocusAction.FocusSelectedItem)
+            FocusTreeWithoutChangingSelection();
+        // FocusTree: swallow the hop onto the first folder; the TreeView keeps focus.
+    }
+
+    private void FocusTreeWithoutChangingSelection()
+    {
         if (FolderTreeView.SelectedItem is FolderNodeVm selected
             && FindTreeViewItem(FolderTreeView, selected) is { } keep)
             keep.Focus();
         else
             FolderTreeView.Focus();
+    }
+
+    private void FocusTileListWithoutChangingSelection()
+    {
+        if (ItemsList.SelectedItem is { } selected
+            && ItemsList.ItemContainerGenerator.ContainerFromItem(selected) is System.Windows.Controls.ListBoxItem keep)
+            keep.Focus();
+        else
+            ItemsList.Focus();
     }
 
     private static System.Windows.Controls.TreeViewItem? FindTreeViewItem(

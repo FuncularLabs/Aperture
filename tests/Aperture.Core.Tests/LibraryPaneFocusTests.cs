@@ -10,10 +10,11 @@ namespace Aperture.Core.Tests;
 /// PageDown / scroll keys move the grid, not the tree. Clicking a folder,
 /// a tile, a section header, the search box, or a dialog must stay as today.
 ///
-/// Tab / Shift+Tab (manual): tree arrows keep the folder; Tab to the grid
-/// keeps the selected tile; Up/Down stay in column; Page is ~one screen
-/// same column; Tab back to the tree keeps the folder; ribbon is never a
-/// Tab stop. Search stays on / and Ctrl+F.
+/// Tab / Shift+Tab (manual): only tree ↔ tile list; ribbon and Everything
+/// are not stops. Tab to the tree keeps the folder (or Everything) and
+/// arrows move folders immediately; Tab to the grid keeps the selected tile.
+/// Click in the tree focuses it. Tree Up/Down commit the node at once; the
+/// tile pane may spinner. Search stays on / and Ctrl+F.
 /// </summary>
 public class LibraryPaneFocusTests
 {
@@ -55,4 +56,53 @@ public class LibraryPaneFocusTests
     public void ArrowsInsidePane_DoNotRedirect() =>
         Assert.False(LibraryPaneFocus.ShouldKeepExistingSelection(
             fromOutside: false, newFocusIsItem: true, newFocusIsSelected: false));
+
+    [Fact]
+    public void TabIntoTree_RedirectsToSelectedFolder() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.FocusSelectedItem,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: false,
+                newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: true));
+
+    [Fact]
+    public void TabOntoTree_WithSelection_FocusesSelectedItem() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.FocusSelectedItem,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: false,
+                newFocusIsItem: false, newFocusIsSelected: false, hasSelectedItem: true));
+
+    [Fact]
+    public void TabOntoTree_Everything_FocusesTreeNotFirstFolder() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.FocusTree,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: false,
+                newFocusIsItem: false, newFocusIsSelected: false, hasSelectedItem: false));
+
+    [Fact]
+    public void TabOntoFirstFolder_WhenEverything_DoesNotSelectIt() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.FocusTree,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: false,
+                newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: false));
+
+    [Fact]
+    public void TabOntoAlreadySelectedFolder_LeavesIt() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.Leave,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: false,
+                newFocusIsItem: true, newFocusIsSelected: true, hasSelectedItem: true));
+
+    [Fact]
+    public void ClickTreeItem_LeavesFocusOnClickedItem() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.Leave,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: true, mousePressed: true,
+                newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: true));
+
+    [Fact]
+    public void ArrowsInsideTree_DoNotRedirect() =>
+        Assert.Equal(LibraryPaneFocus.TreeFocusAction.Leave,
+            LibraryPaneFocus.OnTreeKeyboardArrival(
+                fromOutside: false, mousePressed: false,
+                newFocusIsItem: true, newFocusIsSelected: false, hasSelectedItem: true));
 }
