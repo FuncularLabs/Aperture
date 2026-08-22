@@ -5,6 +5,30 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.6-beta1] - 2026-08-21
+
+### Fixed
+- **Folder-tree keyboard** — Tab / Shift+Tab cycle only the folder tree and the tile
+  list (ribbon and the Everything button stay out). Tabbing in does not change the
+  destination selection. Clicking or Tabbing to the tree gives it keyboard focus so
+  arrows move folders immediately. Arrowing the tree commits the selected node at
+  once; the tile pane rebuilds in the background and shows the existing Loading…
+  spinner if that rebuild is slow, instead of gating the next arrow on grid render.
+- **First click** on an unfocused window or pane focuses the clicked folder / tile /
+  canvas in that same click (Explorer-style). The activating click is not swallowed.
+  The folder expand arrow and include checkbox do not change the selected folder.
+
+## [0.8.5-beta1] - 2026-08-21
+
+### Fixed
+- **Tile-pane Up/Down** stay in the same *visual* column at every zoom. 0.8.4
+  stepped by a width-based column count that came out one low once the
+  scrollbar (and padding) were already excluded from the wrap viewport — a
+  4-column grid walked as 3, so selection moved diagonally. The picker now
+  uses layout X (and a column count that cannot undercut columns already on
+  screen). PageUp/PageDown still move one viewport in that same column;
+  Left/Right are unchanged. Headers are not stops.
+
 ## [0.8.4-beta1] - 2026-08-21
 
 ### Fixed

@@ -497,12 +497,15 @@
                     <TextBlock Text="Sort" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
                                Margin="0,0,6,0" FontSize="12" />
                     <ComboBox ItemsSource="{Binding SortLabels}" SelectedItem="{Binding SortPreset, Mode=TwoWay}"
-                              Width="120" VerticalAlignment="Center" VerticalContentAlignment="Center" Height="30" />
+                              Width="120" VerticalAlignment="Center" VerticalContentAlignment="Center" Height="30"
+                              IsTabStop="False" />
                     <Rectangle Width="1" Fill="{StaticResource Line}" Margin="8,2,6,2" />
                     <TextBlock Text="Show" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
                                Margin="0,0,6,0" FontSize="12" />
-                    <CheckBox Content="Pictures" IsChecked="{Binding ShowImages}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <CheckBox Content="Videos" IsChecked="{Binding ShowVideos}" VerticalAlignment="Center" />
+                    <CheckBox Content="Pictures" IsChecked="{Binding ShowImages}" VerticalAlignment="Center" Margin="0,0,8,0"
+                              IsTabStop="False" />
+                    <CheckBox Content="Videos" IsChecked="{Binding ShowVideos}" VerticalAlignment="Center"
+                              IsTabStop="False" />
                     <Button Content="{Binding PreviewLabel}" Style="{StaticResource ToolButton}" Margin="10,0,0,0"
                             Command="{Binding CyclePreviewCommand}"
                             ToolTip="Preview / inspector pane — click to cycle: right → bottom → off" />
@@ -580,7 +583,8 @@
                     <TextBlock DockPanel.Dock="Top" Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}"
                                FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
                     <Button x:Name="EverythingButton" DockPanel.Dock="Top" Command="{Binding NavigateHomeCommand}"
-                            Margin="8,0,8,2" KeyboardNavigation.TabIndex="0"
+                            Click="OnEverythingClick"
+                            Margin="8,0,8,2" IsTabStop="False" Focusable="False"
                             HorizontalContentAlignment="Stretch" Cursor="Hand" Padding="0" BorderThickness="0"
                             Foreground="{StaticResource CanvasInk}" FontSize="14"
                             ToolTip="Show everything across all folders">
@@ -620,11 +624,14 @@
                               FontSize="14"
                               KeyboardNavigation.TabNavigation="Once"
                               SelectedItemChanged="OnTreeSelectedChanged" PreviewKeyDown="OnTreeKeyDown"
+                              PreviewMouseLeftButtonDown="OnTreePreviewMouseLeftButtonDown"
                               PreviewGotKeyboardFocus="OnTreePreviewGotKeyboardFocus">
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                 <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                <Setter Property="Focusable" Value="True" />
+                                <Setter Property="KeyboardNavigation.IsTabStop" Value="False" />
                                 <Setter Property="Padding" Value="2,3" />
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 <!-- Custom template: the selection cue is driven by the item's own IsSelected
@@ -697,6 +704,7 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,2">
                                     <CheckBox IsChecked="{Binding Root.IsIncluded, Mode=TwoWay}" VerticalAlignment="Center"
                                               Margin="0,0,6,0" ToolTip="Include this folder"
+                                              Focusable="False" IsTabStop="False"
                                               Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}" />
                                     <Path Data="M2,5 L6,5 L7.6,6.8 L14,6.8 L14,13 L2,13 Z" Fill="#3FC2B6"
                                           Stretch="Uniform" Width="15" Height="15" Margin="0,0,6,0" VerticalAlignment="Center"
