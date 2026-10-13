@@ -5,6 +5,16 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+### Security
+- **FunkyORM 3.10.1** — file paths and tag names now reach the database as query
+  parameters. FunkyORM 3.9.0 wrote a lookup key into the SQL text, so a key with a
+  quote in it could change the query.
+
+### Fixed
+- **Tags and notes on files whose path contains an apostrophe** (`Paul's photos`)
+  failed to save with a SQLite syntax error, and so did adding a tag that contains an
+  apostrophe (`mom's birthday`). Both now save, update and clear normally.
+
 ## [0.8.6-beta1] - 2026-08-21
 
 ### Fixed
