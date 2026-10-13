@@ -5,8 +5,8 @@ namespace Aperture.Core.Tests;
 
 /// <summary>
 /// Annotation paths and tag names are FunkyORM string keys. FunkyORM 3.10.1 sends a key to the database as a
-/// parameter; up to 3.10.0 it was written into the SQL, so a path or tag with an apostrophe ("Paul's photos")
-/// failed to save, and a crafted key could match another row.
+/// parameter; up to 3.10.0 it was written into the SQL, so a path with an apostrophe ("Paul's photos") failed to
+/// save, a tag with one was saved but threw while its use was recorded, and a crafted key could match another row.
 /// </summary>
 public class StorageKeyTests
 {

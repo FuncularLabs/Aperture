@@ -7,13 +7,16 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ### Security
 - **FunkyORM 3.10.1** — file paths and tag names now reach the database as query
-  parameters. FunkyORM 3.9.0 wrote a lookup key into the SQL text, so a key with a
-  quote in it could change the query.
+  parameters. FunkyORM 3.9.0 wrote a lookup key into the SQL text, so a file whose
+  name contained a quote could read or overwrite another file's tags and note.
 
 ### Fixed
-- **Tags and notes on files whose path contains an apostrophe** (`Paul's photos`)
-  failed to save with a SQLite syntax error, and so did adding a tag that contains an
-  apostrophe (`mom's birthday`). Both now save, update and clear normally.
+- **Files whose path contains an apostrophe** (`Paul's photos`): saving tags or a note
+  closed Aperture without saving, and importing tags & notes stopped at the first such
+  file. They now save and import normally.
+- **Tags that contain an apostrophe** (`mom's birthday`): adding one closed Aperture
+  after saving it to the first selected file only, and renaming a tag to one stopped
+  after the first file. They now save to every selected file.
 
 ## [0.8.6-beta1] - 2026-08-21
 
