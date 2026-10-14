@@ -62,19 +62,110 @@ internal static class RegistrationService
 
     // ===== AppData install + Start Menu =====
 
-    /// <summary>Copy the current exe to %LocalAppData%\Programs\Aperture.</summary>
+    /// <summary>
+    /// Copy the current exe — plus whichever of <see cref="KnownNativeLibraries"/> sit
+    /// beside it — to %LocalAppData%\Programs\Aperture. Throws if any can't be copied.
+    /// </summary>
     public static string InstallToAppData()
     {
-        Directory.CreateDirectory(AppDataInstallDir);
-        var source = CurrentExePath;
-        // If we're already running from the target location, skip the copy —
+        // If we're already running from the target location, CopyProgram skips —
         // the file is locked anyway.
-        if (!string.Equals(Path.GetFullPath(source), Path.GetFullPath(AppDataInstallExe),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            File.Copy(source, AppDataInstallExe, overwrite: true);
-        }
+        CopyProgram(CurrentExePath, AppDataInstallExe);
         return AppDataInstallExe;
+    }
+
+    /// <summary>
+    /// The native libraries Aperture loads at startup, by file name. A single-file
+    /// publish carries them inside the exe (IncludeNativeLibrariesForSelfExtract); a
+    /// publish without that flag leaves them loose beside it, and an exe copied without
+    /// them dies at startup with DllNotFoundException. Only these names are ever copied
+    /// by an install: the exe usually sits in Downloads, and the other DLLs there are
+    /// not ours. A test pins this list to the win-x64 native assets the build actually
+    /// produces, so a new native dependency fails the suite until it is added here.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> KnownNativeLibraries =
+    [
+        "e_sqlite3.dll",                     // SQLitePCLRaw bundle (Microsoft.Data.Sqlite)
+        "libSkiaSharp.dll",                  // SkiaSharp
+        "Microsoft.Data.SqlClient.SNI.dll",  // Microsoft.Data.SqlClient, via FunkyORM
+    ];
+
+    /// <summary>
+    /// Copy the exe plus whichever of <see cref="KnownNativeLibraries"/> sit loose
+    /// beside it. A bundled single-file exe has none and this is a plain exe copy.
+    ///
+    /// Not a general folder copy: a multi-file build (managed DLLs, .deps.json,
+    /// .runtimeconfig.json beside the exe) is not something install supports.
+    ///
+    /// Natives first, then a check that each one is at the destination, then the exe.
+    /// So if a native can't land, the exe at the destination is untouched — a NEW exe
+    /// beside missing natives is precisely the broken install this guards against.
+    /// Natives copied earlier in the same attempt may already be the new version; the
+    /// next attempt overwrites them again. Any failure throws; the caller reports it.
+    /// </summary>
+    internal static void CopyProgram(string sourceExe, string destExe)
+        => CopyProgram(sourceExe, destExe, (from, to) => File.Copy(from, to, overwrite: true));
+
+    /// <summary>
+    /// As above, with the file copy injectable so the "a native did not land" check can
+    /// be exercised: a copy that reports success and leaves no file is what a
+    /// quarantine-on-write scanner looks like from here.
+    /// </summary>
+    internal static void CopyProgram(string sourceExe, string destExe, Action<string, string> copy)
+    {
+        var sourceFull = Path.GetFullPath(sourceExe);
+        var destFull = Path.GetFullPath(destExe);
+        if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var destDir = Path.GetDirectoryName(destFull)
+                      ?? throw new IOException("Install destination has no folder: " + destFull);
+        Directory.CreateDirectory(destDir);
+
+        var natives = NativeSiblings(sourceFull);
+        foreach (var native in natives)
+        {
+            var name = Path.GetFileName(native);
+            try
+            {
+                copy(native, Path.Combine(destDir, name));
+            }
+            catch (Exception ex)
+            {
+                throw new IOException(
+                    $"Couldn't copy {name} to {destDir} — the installed copy would not start " +
+                    "without it, so the program file was not replaced. " + ex.Message, ex);
+            }
+        }
+
+        // Fail loudly, before the exe goes in, rather than leave an exe that dies on
+        // launch: a scanner or quarantine can remove a native the instant it is written.
+        var missing = natives
+            .Select(n => Path.GetFileName(n))
+            .Where(name => !File.Exists(Path.Combine(destDir, name)))
+            .ToList();
+        if (missing.Count > 0)
+            throw new IOException(
+                $"Native libraries did not land in {destDir}: {string.Join(", ", missing)}. " +
+                "The installed copy would not start without them, so the program file was not replaced.");
+
+        copy(sourceFull, destFull);
+    }
+
+    /// <summary>
+    /// Which of <see cref="KnownNativeLibraries"/> sit directly beside
+    /// <paramref name="exePath"/>, in list order. Nothing else beside the exe is
+    /// considered, whatever its extension.
+    /// </summary>
+    internal static IReadOnlyList<string> NativeSiblings(string exePath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(exePath));
+        if (string.IsNullOrEmpty(dir))
+            return [];
+        return KnownNativeLibraries
+            .Select(name => Path.Combine(dir, name))
+            .Where(File.Exists)
+            .ToList();
     }
 
     public static void UninstallFromAppData()
@@ -141,15 +232,20 @@ internal static class RegistrationService
         catch { return null; }
     }
 
-    /// <summary>Copy the installed exe back to <paramref name="destPath"/>.</summary>
-    public static bool RestoreToOriginal(string destPath)
+    /// <summary>Copy the installed exe (and its natives) back to <paramref name="destPath"/>.</summary>
+    public static bool RestoreToOriginal(string destPath) => RestoreProgram(AppDataInstallExe, destPath);
+
+    /// <summary>
+    /// Same copy as the install, in reverse; a bare exe put back in Downloads would
+    /// recreate the no-natives crash there. False when there is nothing to restore
+    /// or the copy failed.
+    /// </summary>
+    internal static bool RestoreProgram(string installedExe, string destPath)
     {
         try
         {
-            if (!File.Exists(AppDataInstallExe)) return false;
-            var dir = Path.GetDirectoryName(destPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.Copy(AppDataInstallExe, destPath, overwrite: true);
+            if (!File.Exists(installedExe)) return false;
+            CopyProgram(installedExe, destPath);
             return true;
         }
         catch { return false; }
