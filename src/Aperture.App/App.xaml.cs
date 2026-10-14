@@ -21,6 +21,28 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += (_, args) => LogCrash(args.ExceptionObject as Exception);
 
+        // Anything that throws before the window is up (a missing native DLL surfaces
+        // here as a TypeInitializationException from the first SqliteConnection) used
+        // to end the process with only a crash.log entry. Say so on screen instead.
+        try
+        {
+            StartUp(e);
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            try
+            {
+                MessageBox.Show(StartupGuard.Describe(ex, CrashLogPath), StartupGuard.Title,
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch { /* the report must not become a second crash */ }
+            Shutdown(1);
+        }
+    }
+
+    private void StartUp(StartupEventArgs e)
+    {
         // APERTURE_DATA_DIR relocates the index/thumbnail store (handy for testing or
         // pointing at a different drive); otherwise the default under LOCALAPPDATA.
         var overrideDir = Environment.GetEnvironmentVariable("APERTURE_DATA_DIR");
@@ -65,15 +87,16 @@ public partial class App : Application
         // Let it terminate — an unhandled UI exception means state is suspect.
     }
 
+    private static string CrashLogPath => Path.Combine(AperturePaths.DefaultDataDir, "crash.log");
+
     private static void LogCrash(Exception? ex)
     {
         if (ex is null)
             return;
         try
         {
-            var path = Path.Combine(AperturePaths.DefaultDataDir, "crash.log");
             Directory.CreateDirectory(AperturePaths.DefaultDataDir);
-            File.AppendAllText(path, $"[{DateTime.Now:O}] {ex}\n\n");
+            File.AppendAllText(CrashLogPath, $"[{DateTime.Now:O}] {ex}\n\n");
         }
         catch { /* logging must never throw */ }
     }

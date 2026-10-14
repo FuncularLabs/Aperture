@@ -26,6 +26,12 @@
     <!-- Don't append the +git-sha suffix to InformationalVersion — it clutters
          the About line and the update check parses it as the running version. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- A single-file publish carries its native DLLs (e_sqlite3, libSkiaSharp,
+         Microsoft.Data.SqlClient.SNI) inside the exe. Without this they are loose files
+         beside it, and an exe copied anywhere on its own dies at startup with
+         DllNotFoundException. The release workflow passed this on the command line;
+         a local publish.ps1 did not, which is how 0.8.6-beta1 shipped a bare exe. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>

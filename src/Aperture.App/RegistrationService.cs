@@ -62,19 +62,84 @@ internal static class RegistrationService
 
     // ===== AppData install + Start Menu =====
 
-    /// <summary>Copy the current exe to %LocalAppData%\Programs\Aperture.</summary>
+    /// <summary>
+    /// Copy the current exe — and every native DLL beside it — to
+    /// %LocalAppData%\Programs\Aperture. Throws if any of them can't be copied.
+    /// </summary>
     public static string InstallToAppData()
     {
-        Directory.CreateDirectory(AppDataInstallDir);
-        var source = CurrentExePath;
-        // If we're already running from the target location, skip the copy —
+        // If we're already running from the target location, CopyProgram skips —
         // the file is locked anyway.
-        if (!string.Equals(Path.GetFullPath(source), Path.GetFullPath(AppDataInstallExe),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            File.Copy(source, AppDataInstallExe, overwrite: true);
-        }
+        CopyProgram(CurrentExePath, AppDataInstallExe);
         return AppDataInstallExe;
+    }
+
+    /// <summary>
+    /// Copy a program folder's runnable set: the exe plus every <c>*.dll</c> that sits
+    /// directly beside it. A single-file publish that bundles its natives has no
+    /// siblings and this is a plain exe copy; a publish whose natives are loose files
+    /// (e_sqlite3.dll, libSkiaSharp.dll, Microsoft.Data.SqlClient.SNI.dll) needs all of
+    /// them next to the copy or the copy dies at startup with DllNotFoundException.
+    ///
+    /// Natives go first, then the exe, then every native is checked at the
+    /// destination. If a native can't land the exe at the destination is untouched —
+    /// a NEW exe beside missing natives is precisely the broken install this guards
+    /// against. Any failure throws; the caller reports it.
+    /// </summary>
+    internal static void CopyProgram(string sourceExe, string destExe)
+    {
+        var sourceFull = Path.GetFullPath(sourceExe);
+        var destFull = Path.GetFullPath(destExe);
+        if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var destDir = Path.GetDirectoryName(destFull)
+                      ?? throw new IOException("Install destination has no folder: " + destFull);
+        Directory.CreateDirectory(destDir);
+
+        var natives = NativeSiblings(sourceFull);
+        foreach (var native in natives)
+        {
+            var target = Path.Combine(destDir, Path.GetFileName(native));
+            try
+            {
+                File.Copy(native, target, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                throw new IOException(
+                    $"Couldn't copy {Path.GetFileName(native)} to {destDir} — the installed copy " +
+                    "would not start without it, so nothing was installed. " + ex.Message, ex);
+            }
+        }
+
+        File.Copy(sourceFull, destFull, overwrite: true);
+
+        // Fail loudly rather than leave an exe that dies on launch: anything (a
+        // scanner, a quarantine) that removed a native between the copy and here.
+        var missing = natives
+            .Select(Path.GetFileName)
+            .Where(name => !File.Exists(Path.Combine(destDir, name!)))
+            .ToList();
+        if (missing.Count > 0)
+            throw new IOException(
+                "Installed copy is missing native libraries it needs to start: " +
+                string.Join(", ", missing) + " (in " + destDir + ").");
+    }
+
+    /// <summary>
+    /// The <c>*.dll</c> files directly beside <paramref name="exePath"/>, sorted by
+    /// name. Top level only: the docs folder shipped next to the exe is not program.
+    /// </summary>
+    internal static IReadOnlyList<string> NativeSiblings(string exePath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(exePath));
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+            return [];
+        return Directory.EnumerateFiles(dir, "*.dll", SearchOption.TopDirectoryOnly)
+            .Where(f => string.Equals(Path.GetExtension(f), ".dll", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public static void UninstallFromAppData()
@@ -141,15 +206,20 @@ internal static class RegistrationService
         catch { return null; }
     }
 
-    /// <summary>Copy the installed exe back to <paramref name="destPath"/>.</summary>
-    public static bool RestoreToOriginal(string destPath)
+    /// <summary>Copy the installed exe (and its natives) back to <paramref name="destPath"/>.</summary>
+    public static bool RestoreToOriginal(string destPath) => RestoreProgram(AppDataInstallExe, destPath);
+
+    /// <summary>
+    /// Same copy as the install, in reverse; a bare exe put back in Downloads would
+    /// recreate the no-natives crash there. False when there is nothing to restore
+    /// or the copy failed.
+    /// </summary>
+    internal static bool RestoreProgram(string installedExe, string destPath)
     {
         try
         {
-            if (!File.Exists(AppDataInstallExe)) return false;
-            var dir = Path.GetDirectoryName(destPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.Copy(AppDataInstallExe, destPath, overwrite: true);
+            if (!File.Exists(installedExe)) return false;
+            CopyProgram(installedExe, destPath);
             return true;
         }
         catch { return false; }

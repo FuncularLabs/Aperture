@@ -11,6 +11,15 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
   name contained a quote could read or overwrite another file's tags and note.
 
 ### Fixed
+- **Install on this PC copied only the exe.** A build whose native libraries
+  (`e_sqlite3.dll`, `libSkiaSharp.dll`, `Microsoft.Data.SqlClient.SNI.dll`) sat beside
+  `Aperture.exe` was installed without them, and the installed copy closed at
+  startup without a word. Install (and the uninstall-time restore) now copy every
+  DLL beside the exe and refuse to install if one can't be copied. Local
+  `publish.ps1` builds bundle the natives inside the exe, as the release build
+  already did, and fail if any are left loose.
+- **Startup errors are shown.** An error before the main window opens now shows a
+  dialog with the error chain and the crash-log path instead of closing silently.
 - **Files whose path contains an apostrophe** (`Paul's photos`): saving tags or a note
   closed Aperture without saving, and importing tags & notes stopped at the first such
   file. They now save and import normally.
