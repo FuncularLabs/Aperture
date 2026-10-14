@@ -75,18 +75,43 @@ internal static class RegistrationService
     }
 
     /// <summary>
-    /// Copy a program folder's runnable set: the exe plus every <c>*.dll</c> that sits
-    /// directly beside it. A single-file publish that bundles its natives has no
-    /// siblings and this is a plain exe copy; a publish whose natives are loose files
-    /// (e_sqlite3.dll, libSkiaSharp.dll, Microsoft.Data.SqlClient.SNI.dll) needs all of
-    /// them next to the copy or the copy dies at startup with DllNotFoundException.
+    /// The native libraries Aperture loads at startup, by file name. A single-file
+    /// publish carries them inside the exe (IncludeNativeLibrariesForSelfExtract); a
+    /// publish without that flag leaves them loose beside it, and an exe copied without
+    /// them dies at startup with DllNotFoundException. Only these names are ever copied
+    /// by an install: the exe usually sits in Downloads, and the other DLLs there are
+    /// not ours. A test pins this list to the native assets the build actually
+    /// produces, so a new native dependency fails the suite until it is added here.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> KnownNativeLibraries =
+    [
+        "e_sqlite3.dll",                     // SQLitePCLRaw bundle (Microsoft.Data.Sqlite)
+        "libSkiaSharp.dll",                  // SkiaSharp
+        "Microsoft.Data.SqlClient.SNI.dll",  // Microsoft.Data.SqlClient, via FunkyORM
+    ];
+
+    /// <summary>
+    /// Copy the exe plus whichever of <see cref="KnownNativeLibraries"/> sit loose
+    /// beside it. A bundled single-file exe has none and this is a plain exe copy.
     ///
-    /// Natives go first, then the exe, then every native is checked at the
-    /// destination. If a native can't land the exe at the destination is untouched —
-    /// a NEW exe beside missing natives is precisely the broken install this guards
-    /// against. Any failure throws; the caller reports it.
+    /// Not a general folder copy: a multi-file build (managed DLLs, .deps.json,
+    /// .runtimeconfig.json beside the exe) is not something install supports.
+    ///
+    /// Natives first, then a check that each one is at the destination, then the exe.
+    /// So if a native can't land, the exe at the destination is untouched — a NEW exe
+    /// beside missing natives is precisely the broken install this guards against.
+    /// Natives copied earlier in the same attempt may already be the new version; the
+    /// next attempt overwrites them again. Any failure throws; the caller reports it.
     /// </summary>
     internal static void CopyProgram(string sourceExe, string destExe)
+        => CopyProgram(sourceExe, destExe, (from, to) => File.Copy(from, to, overwrite: true));
+
+    /// <summary>
+    /// As above, with the file copy injectable so the "a native did not land" check can
+    /// be exercised: a copy that reports success and leaves no file is what a
+    /// quarantine-on-write scanner looks like from here.
+    /// </summary>
+    internal static void CopyProgram(string sourceExe, string destExe, Action<string, string> copy)
     {
         var sourceFull = Path.GetFullPath(sourceExe);
         var destFull = Path.GetFullPath(destExe);
@@ -100,45 +125,46 @@ internal static class RegistrationService
         var natives = NativeSiblings(sourceFull);
         foreach (var native in natives)
         {
-            var target = Path.Combine(destDir, Path.GetFileName(native));
+            var name = Path.GetFileName(native);
             try
             {
-                File.Copy(native, target, overwrite: true);
+                copy(native, Path.Combine(destDir, name));
             }
             catch (Exception ex)
             {
                 throw new IOException(
-                    $"Couldn't copy {Path.GetFileName(native)} to {destDir} — the installed copy " +
-                    "would not start without it, so nothing was installed. " + ex.Message, ex);
+                    $"Couldn't copy {name} to {destDir} — the installed copy would not start " +
+                    "without it, so the program file was not replaced. " + ex.Message, ex);
             }
         }
 
-        File.Copy(sourceFull, destFull, overwrite: true);
-
-        // Fail loudly rather than leave an exe that dies on launch: anything (a
-        // scanner, a quarantine) that removed a native between the copy and here.
+        // Fail loudly, before the exe goes in, rather than leave an exe that dies on
+        // launch: a scanner or quarantine can remove a native the instant it is written.
         var missing = natives
-            .Select(Path.GetFileName)
-            .Where(name => !File.Exists(Path.Combine(destDir, name!)))
+            .Select(n => Path.GetFileName(n))
+            .Where(name => !File.Exists(Path.Combine(destDir, name)))
             .ToList();
         if (missing.Count > 0)
             throw new IOException(
-                "Installed copy is missing native libraries it needs to start: " +
-                string.Join(", ", missing) + " (in " + destDir + ").");
+                $"Native libraries did not land in {destDir}: {string.Join(", ", missing)}. " +
+                "The installed copy would not start without them, so the program file was not replaced.");
+
+        copy(sourceFull, destFull);
     }
 
     /// <summary>
-    /// The <c>*.dll</c> files directly beside <paramref name="exePath"/>, sorted by
-    /// name. Top level only: the docs folder shipped next to the exe is not program.
+    /// Which of <see cref="KnownNativeLibraries"/> sit directly beside
+    /// <paramref name="exePath"/>, in list order. Nothing else beside the exe is
+    /// considered, whatever its extension.
     /// </summary>
     internal static IReadOnlyList<string> NativeSiblings(string exePath)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(exePath));
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+        if (string.IsNullOrEmpty(dir))
             return [];
-        return Directory.EnumerateFiles(dir, "*.dll", SearchOption.TopDirectoryOnly)
-            .Where(f => string.Equals(Path.GetExtension(f), ".dll", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+        return KnownNativeLibraries
+            .Select(name => Path.Combine(dir, name))
+            .Where(File.Exists)
             .ToList();
     }
 

@@ -14,8 +14,9 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 - **Install on this PC copied only the exe.** A build whose native libraries
   (`e_sqlite3.dll`, `libSkiaSharp.dll`, `Microsoft.Data.SqlClient.SNI.dll`) sat beside
   `Aperture.exe` was installed without them, and the installed copy closed at
-  startup without a word. Install (and the uninstall-time restore) now copy every
-  DLL beside the exe and refuse to install if one can't be copied. Local
+  startup without a word. Install (and the uninstall-time restore) now copy those
+  libraries when they sit beside the exe, nothing else from that folder, and refuse
+  to install if one can't be copied. Local
   `publish.ps1` builds bundle the natives inside the exe, as the release build
   already did, and fail if any are left loose.
 - **Startup errors are shown.** An error before the main window opens now shows a
