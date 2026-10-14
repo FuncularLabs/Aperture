@@ -63,8 +63,8 @@ internal static class RegistrationService
     // ===== AppData install + Start Menu =====
 
     /// <summary>
-    /// Copy the current exe — and every native DLL beside it — to
-    /// %LocalAppData%\Programs\Aperture. Throws if any of them can't be copied.
+    /// Copy the current exe — plus whichever of <see cref="KnownNativeLibraries"/> sit
+    /// beside it — to %LocalAppData%\Programs\Aperture. Throws if any can't be copied.
     /// </summary>
     public static string InstallToAppData()
     {
@@ -80,7 +80,7 @@ internal static class RegistrationService
     /// publish without that flag leaves them loose beside it, and an exe copied without
     /// them dies at startup with DllNotFoundException. Only these names are ever copied
     /// by an install: the exe usually sits in Downloads, and the other DLLs there are
-    /// not ours. A test pins this list to the native assets the build actually
+    /// not ours. A test pins this list to the win-x64 native assets the build actually
     /// produces, so a new native dependency fails the suite until it is added here.
     /// </summary>
     internal static readonly IReadOnlyList<string> KnownNativeLibraries =
