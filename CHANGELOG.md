@@ -5,6 +5,13 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+### Security
+- **System.Security.Cryptography.Pkcs 9.0.21** — the transitive package (via FunkyORM's
+  Microsoft.Data.SqlClient) is pinned past GHSA-846f-f764-76mx (high) and
+  GHSA-2fmv-rv2c-59x7 (moderate), so restore no longer warns NU1902/NU1903. The running
+  app takes Pkcs from the installed .NET Desktop Runtime, and never opens a SQL Server
+  connection, so this changes the build audit, not the shipped behaviour.
+
 ## [0.8.7-beta1] - 2026-10-14
 
 ### Security
