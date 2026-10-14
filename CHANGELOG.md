@@ -5,6 +5,8 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.7-beta1] - 2026-10-14
+
 ### Security
 - **FunkyORM 3.10.1** — file paths and tag names now reach the database as query
   parameters. FunkyORM 3.9.0 wrote a lookup key into the SQL text, so a file whose
