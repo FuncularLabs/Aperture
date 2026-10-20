@@ -1811,7 +1811,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await Task.Delay(StartupReconcileDelayMs);
         foreach (var rootVm in Roots.ToList())
             _ = IndexRootAsync(rootVm.Model, watchAfter: true);
+
+        // Enforce the thumbnail cache cap once per session, off the UI thread. Auto-sized to the
+        // library, so it only evicts genuine excess and never thrashes a legitimately large cache.
+        // Deferred so a (rare) eviction doesn't contend with the startup reconcile's thumbnail writes.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(ThumbnailPruneDelayMs);
+            try { _library.PruneThumbnailCache(); }
+            catch (Exception ex) { Debug.WriteLine($"Thumbnail cache prune failed: {ex}"); }
+        });
     }
+
+    /// <summary>Delay before the once-per-session thumbnail-cache prune, to stay clear of the reconcile burst.</summary>
+    private const int ThumbnailPruneDelayMs = 60_000;
 
     // --- Zoom ---------------------------------------------------------------
 

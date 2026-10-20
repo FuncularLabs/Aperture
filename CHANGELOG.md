@@ -5,6 +5,23 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
+## [0.8.8-beta1] - 2026-10-19
+
+### Fixed
+- **Transparent images no longer thumbnail as a black tile** — PNG/WebP sources with an
+  alpha channel (icons, logos, diagrams) are composited onto white before the JPEG thumbnail
+  is encoded. JPEG has no alpha, so transparent pixels were flattening to black and the whole
+  tile looked corrupt.
+- **Video thumbnails skip a black intro** — a clip that opens on a black fade-in now seeks
+  progressively deeper and keeps the brightest frame, so it shows real content instead of a
+  black tile. A genuinely dark clip still yields its brightest (dark) frame, which is correct.
+
+### Changed
+- **The thumbnail cache size cap is now enforced.** A least-recently-used eviction pass runs
+  once per session (off the UI thread), auto-sized to the library so it only trims genuine
+  excess and never evicts thumbnails a normal library still needs. Previously the cap was
+  configured but never applied, so `thumbs.db` could grow without bound.
+
 ### Security
 - **System.Security.Cryptography.Pkcs 9.0.21** — the transitive package (via FunkyORM's
   Microsoft.Data.SqlClient) is pinned past GHSA-846f-f764-76mx (high) and

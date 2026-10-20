@@ -96,13 +96,79 @@ public sealed class ThumbnailStore(ApertureDatabase database)
         return (int)(long)cmd.ExecuteScalar()!;
     }
 
-    /// <summary>Sum of stored thumbnail bytes — the figure LRU eviction caps.</summary>
+    /// <summary>Sum of stored thumbnail bytes — the figure <see cref="Prune"/> caps.</summary>
     public long TotalBytes()
     {
         using var conn = _db.OpenThumbnails();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COALESCE(SUM(bytes), 0) FROM thumbs;";
         return (long)cmd.ExecuteScalar()!;
+    }
+
+    /// <summary>Rough on-disk budget per item across its cached sizes (~3 JPEGs).</summary>
+    public const long PerItemBudgetBytes = 48 * 1024;
+
+    /// <summary>
+    /// The cache ceiling actually enforced: the configured cap, but never below what the current
+    /// library legitimately needs (<paramref name="itemCount"/> × <see cref="PerItemBudgetBytes"/>).
+    /// Auto-sizing up keeps a large library from sitting above a too-small cap and thrashing —
+    /// evicting a thumbnail only to regenerate it the next time its tile scrolls into view.
+    /// </summary>
+    public static long EffectiveCapBytes(long configuredCapMb, int itemCount) =>
+        Math.Max(configuredCapMb * 1024L * 1024L, (long)itemCount * PerItemBudgetBytes);
+
+    /// <summary>Outcome of a <see cref="Prune"/> pass.</summary>
+    public readonly record struct PruneResult(int ItemsEvicted, long BytesFreed);
+
+    /// <summary>
+    /// When the total exceeds <paramref name="capBytes"/>, evicts whole items' thumbnails
+    /// least-recently-used first (by the most recent use across an item's cached sizes) until the
+    /// total is at or below <paramref name="lowWaterBytes"/>. Evicting down to a low-water mark (not
+    /// exactly the cap) batches the work instead of churning one item at a time at the boundary.
+    /// Evicted items simply regenerate on next view. No-op when already within cap.
+    /// </summary>
+    public PruneResult Prune(long capBytes, long lowWaterBytes)
+    {
+        if (TotalBytes() is var total && total <= capBytes)
+            return default;
+
+        var toFree = total - lowWaterBytes;
+        using var conn = _db.OpenThumbnails();
+
+        var victims = new List<long>();
+        long freed = 0;
+        using (var pick = conn.CreateCommand())
+        {
+            pick.CommandText = """
+                SELECT item_id, SUM(bytes) AS b
+                FROM thumbs
+                GROUP BY item_id
+                ORDER BY MAX(last_used_ticks) ASC, item_id ASC;
+                """;
+            using var reader = pick.ExecuteReader();
+            while (freed < toFree && reader.Read())
+            {
+                victims.Add(reader.GetInt64(0));
+                freed += reader.GetInt64(1);
+            }
+        }
+        if (victims.Count == 0)
+            return default;
+
+        using (var tx = conn.BeginTransaction())
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM thumbs WHERE item_id = @id;";
+            var p = del.Parameters.Add("@id", SqliteType.Integer);
+            foreach (var id in victims)
+            {
+                p.Value = id;
+                del.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        return new PruneResult(victims.Count, freed);
     }
 
     /// <summary>Deletes all cached thumbnails for the given item ids (cross-DB cascade helper).</summary>

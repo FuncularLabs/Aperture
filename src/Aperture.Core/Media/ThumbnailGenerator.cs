@@ -194,14 +194,44 @@ public sealed class ThumbnailGenerator
 
     private static Dictionary<ThumbSize, ThumbnailData> EncodeSizes(SKBitmap upright, IEnumerable<ThumbSize> sizes)
     {
-        var thumbs = new Dictionary<ThumbSize, ThumbnailData>();
-        foreach (var size in sizes)
+        // JPEG thumbnails carry no alpha, so flatten any transparency once up front — otherwise
+        // transparent pixels encode as black (a transparent PNG/WebP icon showed as a black tile).
+        var (opaque, created) = FlattenOntoWhite(upright);
+        try
         {
-            var data = Encode(upright, ThumbSizes.LongestEdge(size));
-            if (data is not null)
-                thumbs[size] = data;
+            var thumbs = new Dictionary<ThumbSize, ThumbnailData>();
+            foreach (var size in sizes)
+            {
+                var data = Encode(opaque, ThumbSizes.LongestEdge(size));
+                if (data is not null)
+                    thumbs[size] = data;
+            }
+            return thumbs;
         }
-        return thumbs;
+        finally
+        {
+            if (created)
+                opaque.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Composites a source with transparency onto an opaque white background so it survives JPEG
+    /// encoding (which has no alpha). Opaque sources are returned unchanged (no copy). White is the
+    /// conventional neutral backdrop — what Explorer and most viewers show behind transparency.
+    /// </summary>
+    private static (SKBitmap Bitmap, bool Created) FlattenOntoWhite(SKBitmap src)
+    {
+        if (src.AlphaType == SKAlphaType.Opaque)
+            return (src, false);
+
+        var dst = new SKBitmap(new SKImageInfo(src.Width, src.Height, SKColorType.Bgra8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(dst))
+        {
+            canvas.Clear(SKColors.White);
+            canvas.DrawBitmap(src, new SKPoint(0, 0), new SKSamplingOptions()); // src-over: transparent areas stay white
+        }
+        return (dst, true);
     }
 
     private static ThumbnailData? Encode(SKBitmap upright, int longestEdge)
@@ -270,7 +300,10 @@ public sealed class ThumbnailGenerator
         var dstW = swapsAxes ? src.Height : src.Width;
         var dstH = swapsAxes ? src.Width : src.Height;
 
-        var dst = new SKBitmap(dstW, dstH);
+        // Preserve the source's opacity: an opaque photo stays opaque after rotation, so the thumbnail
+        // encode can skip the transparency composite (otherwise every EXIF-rotated photo pays for it).
+        var alpha = src.AlphaType == SKAlphaType.Opaque ? SKAlphaType.Opaque : SKAlphaType.Premul;
+        var dst = new SKBitmap(new SKImageInfo(dstW, dstH, SKColorType.Bgra8888, alpha));
         using (var canvas = new SKCanvas(dst))
         {
             canvas.SetMatrix(OriginMatrix(origin, src.Width, src.Height));

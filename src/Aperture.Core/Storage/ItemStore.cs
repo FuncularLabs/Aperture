@@ -52,6 +52,9 @@ public sealed class ItemStore(ApertureDatabase database)
     public int CountForRoot(long rootId) =>
         _db.Provider.Query<ItemRow>().Where(i => i.RootId == rootId).Count();
 
+    /// <summary>Total indexed items across all roots — used to size the thumbnail cache budget.</summary>
+    public int TotalCount() => _db.Provider.Query<ItemRow>().Count();
+
     /// <summary>All items for a root, newest first. Convenience for tests and M2 wiring.</summary>
     public List<MediaItem> GetForRoot(long rootId) =>
         _db.Provider.Query<ItemRow>().Where(i => i.RootId == rootId).ToList()

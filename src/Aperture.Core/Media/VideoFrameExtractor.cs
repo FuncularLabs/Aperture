@@ -17,11 +17,20 @@ public static class VideoFrameExtractor
 {
     private const int TimeoutMs = 20_000;
 
+    // A frame whose mean luminance is at least this is clearly not a black/fade-in frame, so we stop
+    // seeking deeper and use it. Below this we keep the brightest frame found across the seek points.
+    private const int NotDarkThreshold = 24;
+
     private static readonly Lazy<string?> Ffmpeg = new(Resolve);
 
     public static bool IsAvailable => Ffmpeg.Value is not null;
 
-    /// <summary>Returns a frame fitted within <paramref name="maxEdge"/>, or null if extraction fails.</summary>
+    /// <summary>
+    /// Returns a frame fitted within <paramref name="maxEdge"/>, or null if extraction fails.
+    /// Many clips open on a black fade-in, so if the representative frame is dark we seek progressively
+    /// deeper and keep the brightest frame — recovering real content instead of caching a black tile.
+    /// A genuinely dark clip simply yields its brightest (still dark) frame, which is correct.
+    /// </summary>
     public static SKBitmap? Extract(string videoPath, int maxEdge)
     {
         var ffmpeg = Ffmpeg.Value;
@@ -30,25 +39,65 @@ public static class VideoFrameExtractor
 
         var scale = $"scale=w={maxEdge}:h={maxEdge}:force_original_aspect_ratio=decrease";
 
-        // 1) Let ffmpeg's thumbnail filter pick the most representative frame from the
-        //    opening ~300 frames — it avoids blank/black/transitional frames.
-        // 2..3) Fall back to a plain seek for clips the filter can't process.
-        var bytes = Run(ffmpeg, videoPath, seekSeconds: null, videoFilter: $"thumbnail=300,{scale}");
-        if (bytes is null || bytes.Length == 0)
-            bytes = Run(ffmpeg, videoPath, seekSeconds: 1.0, videoFilter: scale);
-        if (bytes is null || bytes.Length == 0)
-            bytes = Run(ffmpeg, videoPath, seekSeconds: 0.0, videoFilter: scale);
-        if (bytes is null || bytes.Length == 0)
-            return null;
+        // Cheapest / most-representative first. The thumbnail filter already avoids transitional
+        // frames in the opening window; the deeper seeks rescue clips with a long black intro.
+        (double? Seek, string Filter)[] candidates =
+        [
+            (null, $"thumbnail=300,{scale}"),
+            (3.0,  $"thumbnail=100,{scale}"),
+            (10.0, scale),
+            (30.0, scale),
+            (1.0,  scale),
+            (0.0,  scale),
+        ];
 
-        try
+        SKBitmap? best = null;
+        var bestLuma = -1;
+        foreach (var (seek, filter) in candidates)
         {
-            return SKBitmap.Decode(bytes);
+            var bytes = Run(ffmpeg, videoPath, seek, filter);
+            if (bytes is null || bytes.Length == 0)
+                continue;
+
+            SKBitmap? frame;
+            try { frame = SKBitmap.Decode(bytes); } catch { frame = null; }
+            if (frame is null)
+                continue;
+
+            var luma = MeanLuma(frame);
+            if (luma > bestLuma)
+            {
+                best?.Dispose();
+                best = frame;
+                bestLuma = luma;
+            }
+            else
+            {
+                frame.Dispose();
+            }
+
+            if (bestLuma >= NotDarkThreshold)
+                break; // found a clearly-lit frame; no need to seek further
         }
-        catch
-        {
-            return null;
-        }
+
+        return best;
+    }
+
+    /// <summary>Mean luminance (0–255) over a sampled grid — the brightness signal that drives frame selection.</summary>
+    public static int MeanLuma(SKBitmap bitmap)
+    {
+        long sum = 0;
+        var n = 0;
+        var sx = Math.Max(1, bitmap.Width / 32);
+        var sy = Math.Max(1, bitmap.Height / 32);
+        for (var y = 0; y < bitmap.Height; y += sy)
+            for (var x = 0; x < bitmap.Width; x += sx)
+            {
+                var p = bitmap.GetPixel(x, y);
+                sum += (p.Red * 299 + p.Green * 587 + p.Blue * 114) / 1000;
+                n++;
+            }
+        return n == 0 ? 0 : (int)(sum / n);
     }
 
     private static byte[]? Run(string ffmpeg, string input, double? seekSeconds, string videoFilter)

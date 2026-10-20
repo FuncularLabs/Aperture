@@ -112,6 +112,18 @@ public sealed class LibraryService : IDisposable
         return set.Thumbs.TryGetValue(size, out var data) ? data.Bytes : null;
     }
 
+    /// <summary>
+    /// Enforces the thumbnail cache size cap (auto-sized to the library) by evicting least-recently-used
+    /// thumbnails. Call occasionally on a background thread — a no-op when the cache is within budget.
+    /// Evicted thumbnails regenerate on next view.
+    /// </summary>
+    public ThumbnailStore.PruneResult PruneThumbnailCache()
+    {
+        var cap = ThumbnailStore.EffectiveCapBytes(Settings.Current.ThumbnailCacheCapMb, _items.TotalCount());
+        var lowWater = cap - cap / 10; // 90% — leave headroom so eviction runs in batches, not per-tile
+        return _thumbnails.Prune(cap, lowWater);
+    }
+
     // --- Annotations (tags + notes) -----------------------------------------
 
     public Annotation GetAnnotation(string path) => _annotations.Get(path);
