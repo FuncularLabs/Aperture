@@ -1,6 +1,8 @@
-# Aperture Image Viewer
+# Aperture Image Browser
 
-<img src="https://raw.githubusercontent.com/FuncularLabs/Aperture/main/docs/logo.png" alt="Aperture Image Viewer logo" width="120" align="right" />
+<img src="https://raw.githubusercontent.com/FuncularLabs/Aperture/main/docs/logo.png" alt="Aperture Image Browser logo" width="120" align="right" />
+
+*Index · browse · organize your local photos & video.*
 
 [![Latest release](https://img.shields.io/github/v/release/FuncularLabs/Aperture?include_prereleases&sort=semver&color=blue&label=latest)](https://github.com/FuncularLabs/Aperture/releases)
 [![Release date](https://img.shields.io/github/release-date-pre/FuncularLabs/Aperture?color=informational)](https://github.com/FuncularLabs/Aperture/releases)
@@ -8,9 +10,10 @@
 [![CI](https://github.com/FuncularLabs/Aperture/actions/workflows/ci.yml/badge.svg)](https://github.com/FuncularLabs/Aperture/actions/workflows/ci.yml)
 [![Release](https://github.com/FuncularLabs/Aperture/actions/workflows/release.yml/badge.svg)](https://github.com/FuncularLabs/Aperture/actions/workflows/release.yml)
 
-A fast, local image & video browser for Windows. It replaces File Explorer for the
-"just let me look at my photos" case — no multi-second waits on big, image-heavy
-folders like a Dropbox *Camera Uploads* or a *Screenshots* dump.
+A fast, local image & video **browser and organizer** for Windows — an indexer and library
+for the folders you already have. It replaces File Explorer for the "just let me look at my
+photos" case: no multi-second waits on big, image-heavy folders like a Dropbox *Camera Uploads*
+or a *Screenshots* dump.
 
 > Built by [Funcular Labs](https://github.com/FuncularLabs) as a real-world showcase for
 > **[FunkyORM](https://github.com/FuncularLabs/Funcular.FunkyOrm)**, our .NET micro-ORM —
@@ -20,7 +23,7 @@ Aperture keeps a **persistent local index + thumbnail cache**, so the first scan
 folder is the only slow one; every open after that paints instantly. Everything stays
 on your machine — it never uploads anything or phones home.
 
-![Aperture Image Viewer](docs/screenshot.png)
+![Aperture Image Browser](docs/screenshot.png)
 
 ---
 
@@ -38,7 +41,7 @@ on your machine — it never uploads anything or phones home.
 - **Gmail-style search:** `tag:beach`, `note:trip`, `is:video`/`is:image`, `type:mp4`,
   `has:tag`, `camera:`, `folder:`, quoted values (`tag:"date night"`), bare words match
   everywhere — all AND-ed, with `tag:` clauses OR-ed together.
-- **Quick view** (`Space` / `Enter` / double-click) — a full-screen viewer with `←`/`→`
+- **Quick view** (`Space` / `Enter` / double-click) — a full-screen quick-look with `←`/`→`
   paging; right-click for the full item menu.
 - **Inspector pane** (dockable right or bottom) — large preview with zoom/pan, the item's
   tags & notes, and full EXIF/metadata.

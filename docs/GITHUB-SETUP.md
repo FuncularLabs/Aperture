@@ -29,7 +29,7 @@ and signs any number of that publisher's products. Nothing new needs to be provi
 - Tool: `azuretrustedsigntool` (dotnet global tool). Auth: the existing service principal via
   `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`. That SP already holds the
   *Trusted Signing Certificate Profile Signer* role, so **no RBAC change** is required — the only per-app
-  change is `--description "Aperture Image Viewer"` (and `--file`).
+  change is `--description "Aperture Image Browser"` (and `--file`).
 - The `AZURE_*` secrets live at the **FuncularLabs org level** (Markdown Midget uses the same set). They're
   scoped to **Selected repositories**, so a *new* repo doesn't get them automatically — **add Aperture** to
   each secret's repository access (Org → Settings → Secrets and variables → Actions), or the release job's
@@ -41,7 +41,7 @@ and signs any number of that publisher's products. Nothing new needs to be provi
   which products can be signed, so this is cosmetic/accuracy, not a functional requirement.
 - The release workflow (`.github/workflows/release.yml`) mirrors Markdown Midget's, minus the Node/editor
   steps: it publishes a framework-dependent single-file `Aperture.exe`, signs it with `--description
-  "Aperture Image Viewer"`, and attaches it to a GitHub Release built from `CHANGELOG.md`.
+  "Aperture Image Browser"`, and attaches it to a GitHub Release built from `CHANGELOG.md`.
 
 ## Cutting a release
 
@@ -50,7 +50,7 @@ Happy path — **no manual `git tag`**:
 1. Bump `<Version>` in `src/Aperture.App/Aperture.App.csproj` (the shipped assembly version; `Directory.Build.props` is only a fallback if the csproj has no Version) and add a `## [<version>]` section in `CHANGELOG.md`.
 2. Merge that to `main`.
 3. On push to `main` only (not pull requests), the **Tag version** workflow (`.github/workflows/tag-version.yml`) reads that Version and compares it to existing `v*` tags with the same SemVer rules as the in-app updater (`src/Aperture.App/Updates/UpdateVersion.cs` — prerelease suffixes matter: `0.8.1-beta1` &gt; `0.8.0-beta1`, and `0.8.0-beta1` &lt; `0.8.0`). If the landed version is **greater** and `v{version}` does not already exist, it creates and pushes that tag (never force-pushes). Equal or lower versions are left untagged.
-4. The existing **Release** workflow then builds → tests → publishes → **signs** → creates the (pre)release with the exe. (`-beta`/`-rc` tags are marked as prereleases automatically.) The tag job does not sign and does not bypass this job: it calls `release.yml` with `secrets: inherit` so the same Funcular Labs Azure Trusted Signing identity Markdown Midget uses (`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`, account `func-az-artifact-signing`, profile `funcular-labs-public-trust`, endpoint `https://cus.codesigning.azure.net/`, `--description "Aperture Image Viewer"`) still runs, including the fail-fast check that those secrets are present.
+4. The existing **Release** workflow then builds → tests → publishes → **signs** → creates the (pre)release with the exe. (`-beta`/`-rc` tags are marked as prereleases automatically.) The tag job does not sign and does not bypass this job: it calls `release.yml` with `secrets: inherit` so the same Funcular Labs Azure Trusted Signing identity Markdown Midget uses (`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`, account `func-az-artifact-signing`, profile `funcular-labs-public-trust`, endpoint `https://cus.codesigning.azure.net/`, `--description "Aperture Image Browser"`) still runs, including the fail-fast check that those secrets are present.
 
 Fallback — tag by hand if the automatic job cannot run (workflow not yet on `main`, or you need to re-cut an already-tagged version after fixing the tag job):
 

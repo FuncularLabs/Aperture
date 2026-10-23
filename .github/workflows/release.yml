@@ -132,7 +132,7 @@ jobs:
             --profilename funcular-labs-public-trust `
             --trustedendpoint https://cus.codesigning.azure.net/ `
             --signtoolexe "${{ steps.signtool.outputs.path }}" `
-            --description "Aperture Image Viewer" `
+            --description "Aperture Image Browser" `
             --verbose
 
       - name: Verify Authenticode signature
@@ -199,7 +199,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Aperture Image Viewer ${{ steps.tag.outputs.tag }}
+          name: Aperture Image Browser ${{ steps.tag.outputs.tag }}
           body_path: release-notes.md
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
           files: ${{ steps.stage.outputs.asset }}

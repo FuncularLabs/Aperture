@@ -17,9 +17,9 @@
     <ApplicationIcon>Assets\aperture.ico</ApplicationIcon>
     <AssemblyName>Aperture</AssemblyName>
     <Version>0.8.8</Version>
-    <AssemblyTitle>Aperture Image Viewer</AssemblyTitle>
-    <Product>Aperture Image Viewer</Product>
-    <Description>A fast local image &amp; video browser for Windows.</Description>
+    <AssemblyTitle>Aperture Image Browser</AssemblyTitle>
+    <Product>Aperture Image Browser</Product>
+    <Description>A fast, local image &amp; video browser and organizer for Windows.</Description>
     <Company>Funcular Labs</Company>
     <Authors>Funcular Labs</Authors>
     <Copyright>© 2026 Funcular Labs</Copyright>

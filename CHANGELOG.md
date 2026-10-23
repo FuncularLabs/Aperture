@@ -1,9 +1,14 @@
 # Changelog
 
-All notable changes to Aperture Image Viewer are documented here. The format follows
+All notable changes to Aperture Image Browser are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed
+- **Renamed to Aperture Image Browser** (was "Aperture Image Viewer") — it indexes, browses and
+  organizes a local image & video library, which "viewer" undersold. The brand, the `Aperture.exe`
+  name, and the data location are unchanged; only the window title and product name differ.
 
 ## [0.8.8] - 2026-10-22
 

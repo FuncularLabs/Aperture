@@ -252,7 +252,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ThumbnailService Thumbnails { get; }
 
-    /// <summary>"Aperture Image Viewer vX.Y.Z[-suffix]" — from InformationalVersion so a prerelease tag shows.</summary>
+    /// <summary>"Aperture Image Browser vX.Y.Z[-suffix]" — from InformationalVersion so a prerelease tag shows.</summary>
     private static string ProductTitle
     {
         get
@@ -261,7 +261,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             var info = asm.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion;
             var version = info?.Split('+')[0]                      // drop any +<commit> build metadata
                           ?? asm.GetName().Version?.ToString(3) ?? "0.7.0";
-            return "Aperture Image Viewer v" + version;
+            return "Aperture Image Browser v" + version;
         }
     }
 
@@ -701,7 +701,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         System.Windows.MessageBox.Show(text, "Aperture",
             System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
 
-    private string _windowTitle = "Aperture Image Viewer";
+    private string _windowTitle = "Aperture Image Browser";
 
     /// <summary>Window title — shows the current folder's full path.</summary>
     public string WindowTitle
