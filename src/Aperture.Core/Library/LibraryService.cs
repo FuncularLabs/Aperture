@@ -26,6 +26,14 @@ public sealed class LibraryService : IDisposable
     private readonly Dictionary<long, RootWatcher> _watchers = [];
     private readonly Lock _watchersLock = new();
 
+    // Catalog-switch teardown: in-flight indexes are tracked so a shutdown can cancel them and wait for
+    // them to settle before the database is disposed, rather than racing a half-written transaction.
+    private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly List<Task> _indexTasks = [];
+    private readonly Lock _indexLock = new();
+    private bool _shuttingDown;
+    private bool _tornDown;
+
     /// <summary>Raised (on a background thread) when a watched root's files change on disk. Argument is the root id.</summary>
     public event EventHandler<long>? RootChanged;
 
@@ -159,6 +167,34 @@ public sealed class LibraryService : IDisposable
     public IndexResult IndexRoot(Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default) =>
         _indexer.IndexRoot(root, progress, ct, Settings.Current.IncludeVideos);
 
+    /// <summary>
+    /// Runs a full reconcile of a root as a tracked background task. Prefer this over <see cref="IndexRoot"/>
+    /// when the caller is the live app: the task is linked to the service's shutdown token and awaited by
+    /// <see cref="ShutdownAsync"/>, so a catalog switch (or app exit) cancels it and waits for it to settle
+    /// before the database is disposed — no index write can race a teardown. The external
+    /// <paramref name="ct"/> still drives per-root pause/cancel; the two tokens are linked.
+    /// </summary>
+    public Task<IndexResult> IndexRootAsync(Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default)
+    {
+        lock (_indexLock)
+        {
+            ObjectDisposedException.ThrowIf(_shuttingDown, this);
+
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, ct);
+            // The token is observed inside IndexRoot (per-file + per-batch); it is deliberately NOT passed
+            // to Task.Run, so the delegate always runs its finally and disposes the linked source — a
+            // pre-cancelled Task.Run would skip the body and leak it.
+            var task = Task.Run(() =>
+            {
+                try { return _indexer.IndexRoot(root, progress, linked.Token, Settings.Current.IncludeVideos); }
+                finally { linked.Dispose(); }
+            });
+            _indexTasks.RemoveAll(t => t.IsCompleted); // prune settled tasks so the list can't grow unbounded
+            _indexTasks.Add(task);
+            return task;
+        }
+    }
+
     // --- Watching ------------------------------------------------------------
 
     public void Watch(Root root)
@@ -187,7 +223,80 @@ public sealed class LibraryService : IDisposable
         }
     }
 
+    // --- Teardown ------------------------------------------------------------
+
+    /// <summary>
+    /// Cancels every in-flight index, waits for them to settle, stops the watchers, and disposes the
+    /// database. Await this before switching catalogs (and on a clean exit): the indexer commits in
+    /// batches and rolls back only its in-flight batch on cancel, so the database is always left
+    /// consistent and its files are released for the next catalog. Idempotent.
+    /// </summary>
+    public async Task ShutdownAsync()
+    {
+        Task[] pending;
+        lock (_indexLock)
+        {
+            _shuttingDown = true;
+            pending = _indexTasks.Where(t => !t.IsCompleted).ToArray();
+        }
+
+        TryCancelShutdown();
+        try
+        {
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A cancelled index surfaces OperationCanceledException (and a failed one its own error);
+            // committed batches persist and the in-flight batch rolled back, so the DB stays consistent.
+        }
+
+        TearDownCore();
+    }
+
+    /// <summary>
+    /// Synchronous teardown for process exit: cancels in-flight indexes (without awaiting them — the
+    /// process is ending), stops the watchers and disposes the database. Prefer <see cref="ShutdownAsync"/>
+    /// for a catalog switch, where the in-flight index must be awaited before the next catalog opens.
+    /// Idempotent and safe to call after <see cref="ShutdownAsync"/>.
+    /// </summary>
     public void Dispose()
+    {
+        lock (_indexLock)
+            _shuttingDown = true;
+
+        TryCancelShutdown();
+        TearDownCore();
+    }
+
+    private void TryCancelShutdown()
+    {
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already torn down by a prior Shutdown/Dispose.
+        }
+    }
+
+    private void TearDownCore()
+    {
+        lock (_indexLock)
+        {
+            if (_tornDown)
+                return;
+            _tornDown = true;
+        }
+
+        StopAllWatchers();
+        _db.Dispose();
+        _shutdownCts.Dispose();
+    }
+
+    private void StopAllWatchers()
     {
         lock (_watchersLock)
         {

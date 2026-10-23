@@ -10,7 +10,7 @@ namespace Aperture.Core.Storage;
 /// thumbnail BLOBs would otherwise bloat the metadata DB's page cache and slow
 /// down the queries that drive the grid. Splitting keeps metadata scans fast.
 /// </summary>
-public sealed class ApertureDatabase
+public sealed class ApertureDatabase : IDisposable
 {
     public const string MetadataFileName = "aperture.db";
     public const string ThumbnailFileName = "thumbs.db";
@@ -22,6 +22,7 @@ public sealed class ApertureDatabase
     private readonly string _metadataConnectionString;
     private readonly string _thumbnailConnectionString;
     private SqliteOrmDataProvider? _provider;
+    private bool _disposed;
 
     public ApertureDatabase(string directory)
     {
@@ -53,13 +54,28 @@ public sealed class ApertureDatabase
     /// file in <see cref="Initialize"/>; WAL persists in the DB header, so pooled provider
     /// connections inherit it. Non-transactional ops each take their own pooled connection.
     /// </summary>
-    public SqliteOrmDataProvider Provider => _provider ??= new SqliteOrmDataProvider(_metadataConnectionString);
+    public SqliteOrmDataProvider Provider
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _provider ??= new SqliteOrmDataProvider(_metadataConnectionString);
+        }
+    }
 
     /// <summary>Opens a metadata connection with WAL + pragmas applied.</summary>
-    public SqliteConnection OpenMetadata() => Open(_metadataConnectionString);
+    public SqliteConnection OpenMetadata()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Open(_metadataConnectionString);
+    }
 
     /// <summary>Opens a thumbnail connection with WAL + pragmas applied.</summary>
-    public SqliteConnection OpenThumbnails() => Open(_thumbnailConnectionString);
+    public SqliteConnection OpenThumbnails()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Open(_thumbnailConnectionString);
+    }
 
     private static SqliteConnection Open(string connectionString)
     {
@@ -96,6 +112,37 @@ public sealed class ApertureDatabase
         {
             cmd.CommandText = ThumbnailSchema;
             cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Releases the database. Disposes the long-lived FunkyORM provider (closing its connection) and
+    /// clears the ADO.NET connection pool for both files, so the pooled handles the stores open per-op
+    /// are actually released — a catalog switch, or deleting a library's files, needs the files free,
+    /// not just the provider's own connection returned to the pool. Idempotent.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        _provider?.Dispose();
+        _provider = null;
+        ClearPool(_metadataConnectionString);
+        ClearPool(_thumbnailConnectionString);
+    }
+
+    private static void ClearPool(string connectionString)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(connectionString);
+            SqliteConnection.ClearPool(connection);
+        }
+        catch
+        {
+            // Releasing pooled handles is best-effort; it must never throw out of teardown.
         }
     }
 
