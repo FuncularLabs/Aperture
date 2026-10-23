@@ -5,6 +5,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-10-23
+
 ### Changed
 - **Renamed to Aperture Image Browser** (was "Aperture Image Viewer") — it indexes, browses and
   organizes a local image & video library, which "viewer" undersold. The brand, the `Aperture.exe`
