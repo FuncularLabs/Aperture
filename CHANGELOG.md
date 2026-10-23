@@ -5,7 +5,10 @@ All notable changes to Aperture Image Viewer are documented here. The format fol
 
 ## [Unreleased]
 
-## [0.8.8-beta1] - 2026-10-19
+## [0.8.8] - 2026-10-22
+
+First general-availability release. The build is the same as 0.8.8-beta1 (2026-10-19)
+with the prerelease suffix dropped; the in-app updater now offers it as a stable release.
 
 ### Fixed
 - **Transparent images no longer thumbnail as a black tile** — PNG/WebP sources with an
