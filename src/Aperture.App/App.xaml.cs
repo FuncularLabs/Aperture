@@ -11,8 +11,18 @@ namespace Aperture.App;
 
 public partial class App : Application
 {
-    private LibraryService? _library;
+    // In the normal (multi-catalog) path, _catalog owns the live library and swaps it on a switch.
+    // When APERTURE_DATA_DIR pins a single data dir, _catalog is null and _pinnedLibrary is owned here.
+    private CatalogService? _catalog;
+    private LibraryService? _pinnedLibrary;
     private MainViewModel? _viewModel;
+    private MainWindow? _window;
+
+    /// <summary>True when the user may switch catalogs (not pinned by APERTURE_DATA_DIR). Drives the switcher UI.</summary>
+    public bool CatalogSwitchingEnabled => _catalog is not null;
+
+    /// <summary>The catalog registry + active catalog, when switching is enabled; otherwise null.</summary>
+    public CatalogService? Catalogs => _catalog;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -62,22 +72,69 @@ public partial class App : Application
                 RegistrationService.FinishMove(args[++i]);
         }
 
-        _library = new LibraryService(dataDir);
-        var thumbnails = new ThumbnailService(_library);
         UpdateService.CleanupOldBinaries();
         RegistrationService.RefreshAutostartToInstalledCopy();
-        _viewModel = new MainViewModel(_library, thumbnails);
 
-        var window = new MainWindow { DataContext = _viewModel };
-        window.Show();
+        LibraryService library;
+        if (string.IsNullOrWhiteSpace(overrideDir))
+        {
+            // Multi-catalog: the existing default dir auto-registers as the "Default" catalog, and the
+            // user can switch between catalogs at runtime. The registry lives outside any catalog.
+            _catalog = CatalogService.Open(CatalogRegistry.DefaultPath, AperturePaths.DefaultDataDir);
+            _catalog.PreparingToSwitch += (_, _) => _viewModel?.PrepareForClose();
+            _catalog.ActiveLibraryChanged += OnActiveLibraryChanged;
+            library = _catalog.Current;
+        }
+        else
+        {
+            // Pinned single catalog (test/CI or a user-chosen drive): no switching, no registry.
+            _pinnedLibrary = new LibraryService(dataDir);
+            library = _pinnedLibrary;
+        }
+
+        _viewModel = BuildViewModel(library);
+        _window = new MainWindow { DataContext = _viewModel };
+        _window.Show();
 
         // Cached rows are already visible; reconcile with disk in the background.
         _viewModel.StartBackgroundRefresh();
     }
 
+    private static MainViewModel BuildViewModel(LibraryService library) =>
+        new(library, new ThumbnailService(library));
+
+    /// <summary>
+    /// After <see cref="CatalogService"/> has swapped in the new catalog's library, rebuild the view model
+    /// over it and re-point the window. The old view model was already quiesced via
+    /// <see cref="MainViewModel.PrepareForClose"/> (raised as PreparingToSwitch) and is discarded.
+    /// </summary>
+    private void OnActiveLibraryChanged(object? sender, EventArgs e)
+    {
+        _viewModel = BuildViewModel(_catalog!.Current);
+        if (_window is not null)
+            _window.DataContext = _viewModel;
+        _viewModel.StartBackgroundRefresh();
+    }
+
+    /// <summary>Switches to a registered catalog. Entry point for the switcher UI (increment 4).</summary>
+    public Task SwitchCatalogAsync(string catalogId) =>
+        _catalog?.SwitchToAsync(catalogId) ?? Task.CompletedTask;
+
+    /// <summary>Creates a new catalog at <paramref name="dir"/> and switches to it.</summary>
+    public Task CreateCatalogAsync(string name, string dir) =>
+        _catalog?.CreateAndSwitchAsync(name, dir) ?? Task.CompletedTask;
+
     protected override void OnExit(ExitEventArgs e)
     {
-        _viewModel?.Dispose();
+        _viewModel?.PrepareForClose();
+
+        // Release the live library's DB handles. The catalog service owns it in the normal path; a pinned
+        // library is owned here. A bounded wait keeps exit from hanging on a stuck indexer.
+        if (_catalog is not null)
+            _catalog.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
+        else
+            _pinnedLibrary?.Dispose();
+
         base.OnExit(e);
     }
 

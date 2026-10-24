@@ -46,6 +46,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<long, CancellationTokenSource> _indexCts = [];
     private readonly HashSet<long> _pausedRoots = [];
 
+    // Set once this view model is being torn down (app exit or a catalog switch). No new indexing starts,
+    // and the post-index UI bookkeeping is skipped — the library it would read is being disposed.
+    private volatile bool _closing;
+
     private bool _isLoadingView;
     private CancellationTokenSource? _buildDebounce;
     private int _buildGeneration;
@@ -1818,6 +1822,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ = Task.Run(async () =>
         {
             await Task.Delay(ThumbnailPruneDelayMs);
+            if (_closing)
+                return; // a catalog switch/exit disposed this library before the deferred prune fired
             try { _library.PruneThumbnailCache(); }
             catch (Exception ex) { Debug.WriteLine($"Thumbnail cache prune failed: {ex}"); }
         });
@@ -2485,6 +2491,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false)
     {
+        if (_closing)
+            return; // tearing down — don't start new work against a library that's about to be disposed
+
         // Stream partial results into the grid on the initial population, or when the caller is showing
         // the folder being indexed (a freshly added root) — so its thumbnails appear as they're found.
         // Otherwise a watcher/reconcile re-index never yanks the scroll out from under someone browsing.
@@ -2513,7 +2522,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var canceled = false;
         try
         {
-            result = await Task.Run(() => _library.IndexRoot(root, progress, cts.Token)).ConfigureAwait(true);
+            result = await _library.IndexRootAsync(root, progress, cts.Token).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
@@ -2537,6 +2546,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
             RunOnUi(() =>
             {
+                if (_closing)
+                    return; // the library is being disposed; skip bookkeeping that would read it
+
                 var rootVm = Roots.FirstOrDefault(r => r.Id == root.Id);
                 if (rootVm is not null)
                 {
@@ -2666,6 +2678,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void ApplyProgress(long rootId, IndexProgress p, bool streaming)
     {
+        if (_closing)
+            return; // a progress post queued before teardown must not read the library being disposed
+
         var rootVm = Roots.FirstOrDefault(r => r.Id == rootId);
         if (rootVm is null)
             return;
@@ -2775,10 +2790,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _ui.Post(_ => action(), null);
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Quiesces this view model ahead of a catalog switch or app exit: stops new indexing, cancels the
+    /// in-flight ones, and drops the library subscription + background callbacks so nothing writes back to
+    /// a view model (or reads a library) that is going away. The library itself is torn down by its owner
+    /// (the <c>CatalogService</c> / App), not here — a switch awaits <c>LibraryService.ShutdownAsync</c>.
+    /// Idempotent.
+    /// </summary>
+    public void PrepareForClose()
     {
+        if (_closing)
+            return;
+        _closing = true;
         _updateCheckGeneration++; // in-flight GitHub checks must not write back after shutdown
         _library.RootChanged -= OnRootChanged;
-        _library.Dispose();
+        CancelAllIndexing();      // cancels each in-flight index (its token is linked to ShutdownAsync's)
+        _buildDebounce?.Cancel();
+        _searchDebounce?.Cancel();
     }
+
+    public void Dispose() => PrepareForClose();
 }
