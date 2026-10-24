@@ -578,6 +578,43 @@
             <Border Grid.Column="0" Background="{StaticResource CanvasPanel}" BorderBrush="{StaticResource CanvasLine}"
                     BorderThickness="0,0,1,0" KeyboardNavigation.TabNavigation="Once">
                 <DockPanel>
+                    <!-- Catalog switcher (Option B): the active library, with a menu to switch to another,
+                         create/open one, rename, or remove it. Hidden when APERTURE_DATA_DIR pins a single
+                         catalog (Catalog is null then). -->
+                    <Menu DockPanel.Dock="Top" Background="Transparent" Margin="8,10,8,0"
+                          Visibility="{Binding Catalog, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
+                        <MenuItem Padding="6,4" Cursor="Hand"
+                                  ToolTip="Switch or manage libraries">
+                            <MenuItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Data="M2,3 H6 L7.5,4.5 H14 V13 H2 Z" Fill="{StaticResource FolderTealBrush}"
+                                          Stretch="Uniform" Width="14" Height="14" Margin="0,0,7,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Catalog.ActiveName}" FontWeight="SemiBold"
+                                               Foreground="{StaticResource CanvasInk}" VerticalAlignment="Center" />
+                                    <TextBlock Text=" &#x25BE;" Foreground="{StaticResource CanvasMuted}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </MenuItem.Header>
+
+                            <MenuItem Header="Switch library" ItemsSource="{Binding Catalog.OtherCatalogs}"
+                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}">
+                                <MenuItem.ItemContainerStyle>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Header" Value="{Binding Name}" />
+                                        <Setter Property="Command" Value="{Binding Data.Catalog.SwitchCommand, Source={StaticResource Vm}}" />
+                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
+                                    </Style>
+                                </MenuItem.ItemContainerStyle>
+                            </MenuItem>
+                            <Separator Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}" />
+                            <MenuItem Header="New library…" Command="{Binding Catalog.NewLibraryCommand}" />
+                            <MenuItem Header="Open library…" Command="{Binding Catalog.OpenLibraryCommand}" />
+                            <Separator />
+                            <MenuItem Header="Rename…" Command="{Binding Catalog.RenameCommand}" />
+                            <MenuItem Header="Remove from list" Command="{Binding Catalog.RemoveCommand}" />
+                            <MenuItem Header="Delete library files…" Command="{Binding Catalog.DeleteFilesCommand}" />
+                        </MenuItem>
+                    </Menu>
+
                     <!-- Libraries: a saved view over one or more folders. Only the built-in "Everything"
                          (the union of every included folder) exists for now; add/remove comes later. -->
                     <TextBlock DockPanel.Dock="Top" Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}"

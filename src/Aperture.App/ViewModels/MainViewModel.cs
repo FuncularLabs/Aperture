@@ -87,10 +87,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private Dictionary<string, Annotation> _annotations = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _availableTags = [];
 
-    public MainViewModel(LibraryService library, ThumbnailService thumbnails)
+    /// <summary>
+    /// The catalog switcher (active library + switch/new/open/rename/remove), or <c>null</c> when a single
+    /// catalog is pinned (APERTURE_DATA_DIR) and switching is hidden. Owned by App and shared across rebuilds.
+    /// </summary>
+    public CatalogBarViewModel? Catalog { get; }
+
+    public MainViewModel(LibraryService library, ThumbnailService thumbnails, CatalogBarViewModel? catalog = null)
     {
         _library = library;
         Thumbnails = thumbnails;
+        Catalog = catalog;
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
         _zoom = Math.Clamp(_library.Settings.Current.DefaultZoom, 0, ZoomSizes.Length - 1);
         _currentVersion = UpdateVersion.Parse(

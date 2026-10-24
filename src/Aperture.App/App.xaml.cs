@@ -14,6 +14,7 @@ public partial class App : Application
     // In the normal (multi-catalog) path, _catalog owns the live library and swaps it on a switch.
     // When APERTURE_DATA_DIR pins a single data dir, _catalog is null and _pinnedLibrary is owned here.
     private CatalogService? _catalog;
+    private CatalogBarViewModel? _catalogBar;
     private LibraryService? _pinnedLibrary;
     private MainViewModel? _viewModel;
     private MainWindow? _window;
@@ -83,6 +84,7 @@ public partial class App : Application
             _catalog = CatalogService.Open(CatalogRegistry.DefaultPath, AperturePaths.DefaultDataDir);
             _catalog.PreparingToSwitch += (_, _) => _viewModel?.PrepareForClose();
             _catalog.ActiveLibraryChanged += OnActiveLibraryChanged;
+            _catalogBar = new CatalogBarViewModel(_catalog, SwitchCatalogAsync, CreateCatalogAsync);
             library = _catalog.Current;
         }
         else
@@ -100,8 +102,8 @@ public partial class App : Application
         _viewModel.StartBackgroundRefresh();
     }
 
-    private static MainViewModel BuildViewModel(LibraryService library) =>
-        new(library, new ThumbnailService(library));
+    private MainViewModel BuildViewModel(LibraryService library) =>
+        new(library, new ThumbnailService(library), _catalogBar);
 
     /// <summary>
     /// After <see cref="CatalogService"/> has swapped in the new catalog's library, rebuild the view model
@@ -110,6 +112,7 @@ public partial class App : Application
     /// </summary>
     private void OnActiveLibraryChanged(object? sender, EventArgs e)
     {
+        _catalogBar?.Refresh(); // reflect the new active catalog before the new view model binds to it
         _viewModel = BuildViewModel(_catalog!.Current);
         if (_window is not null)
             _window.DataContext = _viewModel;
