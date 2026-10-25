@@ -46,30 +46,51 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task Open_ActiveLibraryUnavailable_FallsBackToDefault_OnEveryLaunch_AndSaysWhy()
+    public async Task Open_ActiveLibraryUnavailable_FallsBackForThisLaunchOnly_AndOpensItAgainOnceItsBack()
     {
         using var outer = new TempDir();
         var regPath = RegistryPath(outer);
         var defaultDir = outer.Combine("default");
+        var usbDir = outer.Combine("usb");
+        var parked = outer.Combine("usb-unplugged");
         string usbId;
         await using (var first = CatalogService.Open(regPath, defaultDir))
         {
-            var usb = AddLibrary(first, "USB", outer.Combine("usb"));
+            var usb = AddLibrary(first, "USB", usbDir);
             await first.SwitchToAsync(usb.Id);
             usbId = usb.Id;
         }
-        Directory.Delete(outer.Combine("usb"), recursive: true); // the drive was unplugged
+        Directory.Move(usbDir, parked); // the drive was unplugged (say, not yet mounted at login)
 
         for (var launch = 0; launch < 2; launch++)
         {
             await using var service = CatalogService.Open(regPath, defaultDir);
             Assert.Equal("Default", service.ActiveCatalog!.Name);
             Assert.Empty(service.Current.GetUnion());
-            if (launch == 0)
-                Assert.Contains("USB", service.OpenWarning);
-            Assert.Contains(service.Registry.List(), c => c.Id == usbId); // still listed, so it can come back
+            Assert.Contains("USB", service.OpenWarning); // said every time, not just once
+            Assert.Contains(service.Registry.List(), c => c.Id == usbId);
         }
-        Assert.False(Directory.Exists(outer.Combine("usb"))); // never silently recreated as an empty library
+        Assert.False(Directory.Exists(usbDir)); // never silently recreated as an empty library
+
+        Directory.Move(parked, usbDir); // plugged back in
+        await using var later = CatalogService.Open(regPath, defaultDir);
+        Assert.Equal(usbId, later.ActiveCatalog!.Id); // the user's choice, not the fallback, opens
+        Assert.Null(later.OpenWarning);
+    }
+
+    [Fact]
+    public async Task Open_UnreadableLibraryList_IsSetAside_AndSaysWhere()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        File.WriteAllText(regPath, "{ broken");
+
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+        var bad = Assert.Single(Directory.GetFiles(outer.Path, "catalogs.json.bad-*"));
+        Assert.Contains(bad, service.OpenWarning);
+        Assert.Contains("Open library", service.OpenWarning);
     }
 
     [Fact]
@@ -113,6 +134,49 @@ public class CatalogServiceTests
             await first.RemoveAsync(first.Registry.List().Single(c => c.Name == "Default").Id);
         }
         Directory.Delete(outer.Combine("work"), recursive: true);
+
+        await using var service = CatalogService.Open(regPath, defaultDir);
+
+        Assert.Equal(Path.GetFullPath(defaultDir), service.ActiveCatalog!.Dir);
+        Assert.Contains("Work", service.OpenWarning);
+    }
+
+    [Fact]
+    public async Task Open_FallsBackToDefault_BeforeAMoreRecentlyOpenedLibrary()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var defaultDir = outer.Combine("default");
+        string defaultId;
+        await using (var first = CatalogService.Open(regPath, defaultDir))
+        {
+            defaultId = first.ActiveCatalog!.Id;
+            var work = AddLibrary(first, "Work", outer.Combine("work"));
+            var travel = AddLibrary(first, "Travel", outer.Combine("travel"));
+            await first.SwitchToAsync(work.Id);   // Work is more recent than Default…
+            await first.SwitchToAsync(travel.Id);
+        }
+        Directory.Delete(outer.Combine("travel"), recursive: true);
+
+        await using var service = CatalogService.Open(regPath, defaultDir);
+
+        Assert.Equal(defaultId, service.ActiveCatalog!.Id); // …but the local Default is tried first
+    }
+
+    [Fact]
+    public async Task Open_NothingOpens_AndTheDefaultFolderIsGoneToo_StillStarts()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var defaultDir = outer.Combine("default");
+        await using (var first = CatalogService.Open(regPath, defaultDir))
+        {
+            var work = AddLibrary(first, "Work", outer.Combine("work"));
+            await first.SwitchToAsync(work.Id);
+            await first.RemoveAsync(first.Registry.List().Single(c => c.Name == "Default").Id);
+        }
+        Directory.Delete(outer.Combine("work"), recursive: true);
+        Directory.Delete(defaultDir, recursive: true);
 
         await using var service = CatalogService.Open(regPath, defaultDir);
 
@@ -197,6 +261,62 @@ public class CatalogServiceTests
 
         Assert.Equal(ui.ThreadId, preparing);
         Assert.Equal(ui.ThreadId, changed); // the host rebinds its window in this handler
+    }
+
+    [Fact]
+    public async Task SwitchToAsync_RaisesPreparingToSwitch_WhileTheOldLibraryIsStillOpen()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        Exception? readDuringPrepare = new("PreparingToSwitch never ran");
+        service.PreparingToSwitch += (_, _) => readDuringPrepare = Record.Exception(() => service.Current.GetUnion());
+
+        await service.SwitchToAsync(work.Id);
+
+        Assert.Null(readDuringPrepare); // the host quiesces its view model before the library closes, not after
+    }
+
+    [Fact]
+    public async Task QueuedSwitches_StillRaiseTheirEventsOnTheCallersContext()
+    {
+        using var outer = new TempDir();
+        using var lib = new TempDir();
+        TestImages.Write(Path.Combine(lib.Path, "a.jpg"), 64, 64);
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var a = AddLibrary(service, "A", outer.Combine("a"));
+        var b = AddLibrary(service, "B", outer.Combine("b"));
+        var held = new BlockingProgress();
+        var indexing = service.Current.IndexRootAsync(service.Current.AddRoot(lib.Path, "L"), held);
+        Assert.True(held.Entered.Wait(5000));
+        var threads = new List<int>();
+        service.ActiveLibraryChanged += (_, _) => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+
+        using var ui = new SingleThreadContext();
+        var first = ui.Run(() => service.SwitchToAsync(a.Id));
+        var second = ui.Run(() => service.SwitchToAsync(b.Id)); // waits its turn behind the first
+        await Task.Delay(200);
+        held.Release();
+        await Task.WhenAll(first, second);
+        await Record.ExceptionAsync(() => indexing);
+
+        Assert.Equal([ui.ThreadId, ui.ThreadId], threads);
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_WhereTheFolderCantBeCreated_KeepsCurrentLive_AndRegistersNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var current = service.Current;
+        var blocker = outer.Combine("blocker");
+        File.WriteAllText(blocker, "a file where the parent folder would have to be");
+
+        await Assert.ThrowsAnyAsync<Exception>(() => service.CreateLibraryAsync("Work", blocker));
+
+        Assert.Single(service.Registry.List());
+        Assert.Same(current, service.Current);
+        Assert.Empty(service.Current.GetUnion()); // opened first, so the current library was never closed
     }
 
     [Fact]
@@ -393,6 +513,11 @@ public class CatalogServiceTests
     [InlineData("a:b")]
     [InlineData("what?")]
     [InlineData("trailing.")]
+    [InlineData("NUL")]     // reserved device names Windows won't treat as ordinary folders
+    [InlineData("con")]
+    [InlineData("COM1")]
+    [InlineData("lpt9")]
+    [InlineData("aux.txt")]
     [InlineData("default")] // case-insensitive duplicate of the existing "Default"
     public async Task CreateLibraryAsync_BadName_IsRefused_BeforeAnythingIsCreated(string name)
     {
@@ -555,8 +680,9 @@ public class CatalogServiceTests
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         AddLibrary(service, "Work", outer.Combine("work"));
 
-        await Assert.ThrowsAsync<CatalogException>(() => service.RemoveAsync(service.ActiveCatalog!.Id));
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.RemoveAsync(service.ActiveCatalog!.Id));
 
+        Assert.Contains("Switch to another library first", ex.Message);
         Assert.Equal(2, service.Registry.List().Count);
     }
 
@@ -611,8 +737,9 @@ public class CatalogServiceTests
         await using var service = CatalogService.Open(RegistryPath(outer), defaultDir);
         AddLibrary(service, "Work", outer.Combine("work"));
 
-        await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(service.ActiveCatalog!.Id));
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(service.ActiveCatalog!.Id));
 
+        Assert.Contains("Switch to another library first", ex.Message);
         Assert.True(File.Exists(Path.Combine(defaultDir, ApertureDatabase.MetadataFileName)));
     }
 
@@ -660,6 +787,168 @@ public class CatalogServiceTests
         }
 
         Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    // --- A change that can't be saved is refused ----------------------------------------------
+
+    [Fact]
+    public async Task CreateLibraryAsync_WhenTheListCannotBeSaved_CreatesNothing_AndKeepsCurrent()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var current = service.Current;
+
+        File.SetAttributes(regPath, FileAttributes.ReadOnly);
+        try
+        {
+            await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+        }
+        finally
+        {
+            File.SetAttributes(regPath, FileAttributes.Normal);
+        }
+
+        Assert.Same(current, service.Current);
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+        Assert.Single(service.Registry.List());
+        Assert.False(Directory.Exists(outer.Combine("Work"))); // the folder it made is gone again
+    }
+
+    [Fact]
+    public async Task OpenLibraryAsync_WhenTheListCannotBeSaved_AddsNothing_AndKeepsCurrent()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var elsewhere = outer.Combine("Elsewhere");
+        using (new LibraryService(elsewhere)) { }
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var current = service.Current;
+
+        File.SetAttributes(regPath, FileAttributes.ReadOnly);
+        try
+        {
+            await Assert.ThrowsAsync<CatalogException>(() => service.OpenLibraryAsync(elsewhere));
+        }
+        finally
+        {
+            File.SetAttributes(regPath, FileAttributes.Normal);
+        }
+
+        Assert.Same(current, service.Current);
+        Assert.Single(service.Registry.List());
+        Assert.False(LibraryService.IsOpen(elsewhere)); // the library it opened was closed again
+    }
+
+    [Fact]
+    public async Task Rename_WhenTheListCannotBeSaved_Throws_AndKeepsTheName()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+
+        File.SetAttributes(regPath, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.Throws<CatalogException>(() => service.Rename(service.ActiveCatalog!.Id, "Home"));
+        }
+        finally
+        {
+            File.SetAttributes(regPath, FileAttributes.Normal);
+        }
+
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+    }
+
+    // --- Another Aperture window --------------------------------------------------------------
+
+    [Fact]
+    public async Task SwitchToAsync_ToALibraryAnotherWindowRemoved_KeepsTheOpenLibraryAndTheListInStep()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        new CatalogRegistry(regPath).Remove(work.Id); // another window forgot it; this window's menu still shows it
+
+        await service.SwitchToAsync(work.Id);
+
+        Assert.Equal(work.Id, service.ActiveCatalog!.Id); // Current and ActiveCatalog agree
+        Assert.Contains(new CatalogRegistry(regPath).List(), c => c.Id == work.Id);
+    }
+
+    [Fact]
+    public async Task RemoveAsync_ALibraryOpenInAnotherWindow_IsRefused()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        using var otherWindow = new LibraryService(work.Dir);
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.RemoveAsync(work.Id));
+
+        Assert.Contains("another Aperture window", ex.Message);
+        Assert.Equal(2, service.Registry.List().Count);
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_ALibraryOpenInAnotherWindow_IsRefused_AndDeletesNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        using (var otherWindow = new LibraryService(work.Dir))
+        {
+            otherWindow.Settings.Update(s => s.DefaultZoom = 3);
+            await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(work.Id));
+        }
+
+        Assert.True(File.Exists(Path.Combine(work.Dir, "settings.json")));
+        Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_AlreadyRemovedInAnotherWindow_SaysSo()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        new CatalogRegistry(regPath).Remove(work.Id);
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.RemoveAsync(work.Id));
+
+        Assert.Contains("already removed", ex.Message);
+        Assert.Single(service.Registry.List()); // and this window's list caught up
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_AlreadyRemovedInAnotherWindow_SaysSo_AndDeletesNothing()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        new CatalogRegistry(regPath).Remove(work.Id);
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(work.Id));
+
+        Assert.Contains("already removed", ex.Message);
+        Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task Rename_AlreadyRemovedInAnotherWindow_SaysSo()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        new CatalogRegistry(regPath).Remove(work.Id);
+
+        var ex = Assert.Throws<CatalogException>(() => service.Rename(work.Id, "Office"));
+
+        Assert.Contains("already removed", ex.Message);
     }
 
     [Fact]

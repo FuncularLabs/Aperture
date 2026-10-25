@@ -35,6 +35,11 @@ public sealed class LibraryService : IDisposable
     private bool _tornDown;
     private bool _watchersClosed; // guarded by _watchersLock: no watcher may start once teardown stopped them
 
+    // Marks this data folder as open, for every Aperture window (process) to see: a named kernel event exists
+    // exactly as long as some window holds the library open — even if that window crashes — so another window
+    // can refuse to remove or delete it out from under it (see IsOpen).
+    private readonly EventWaitHandle _openMarker;
+
     /// <summary>Raised (on a background thread) when a watched root's files change on disk. Argument is the root id.</summary>
     public event EventHandler<long>? RootChanged;
 
@@ -45,10 +50,13 @@ public sealed class LibraryService : IDisposable
 
     public LibraryService(string dataDir)
     {
-        _db = new ApertureDatabase(dataDir);
+        _openMarker = new EventWaitHandle(false, EventResetMode.ManualReset, OpenMarkerName(dataDir));
+        ApertureDatabase? db = null;
         try
         {
-            _db.Initialize();
+            db = new ApertureDatabase(dataDir);
+            db.Initialize();
+            _db = db;
             _roots = new RootStore(_db);
             _items = new ItemStore(_db);
             _thumbnails = new ThumbnailStore(_db);
@@ -61,10 +69,30 @@ public sealed class LibraryService : IDisposable
         catch
         {
             // A library that can't be opened (not a database, unwritable, locked) must not keep its
-            // files open: the user may want to fix, move or delete them while Aperture keeps running.
-            _db.Dispose();
+            // files open, or look open to other windows: the user may want to fix, move or delete them.
+            db?.Dispose();
+            _openMarker.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// True if any Aperture window — this process or another — has the library in <paramref name="dataDir"/>
+    /// open. The folder may be spelled any way (case, trailing separator).
+    /// </summary>
+    public static bool IsOpen(string dataDir)
+    {
+        if (!EventWaitHandle.TryOpenExisting(OpenMarkerName(dataDir), out var marker))
+            return false;
+        marker.Dispose();
+        return true;
+    }
+
+    private static string OpenMarkerName(string dataDir)
+    {
+        var dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir)).ToUpperInvariant();
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(dir));
+        return @"Local\Aperture.Library." + Convert.ToHexString(hash, 0, 16);
     }
 
     // --- Roots ---------------------------------------------------------------
@@ -114,7 +142,8 @@ public sealed class LibraryService : IDisposable
     /// Returns a valid thumbnail for a tile, regenerating it from the source on the spot when the cache
     /// is missing or stale (src mtime mismatch). This lets a just-shown tile paint immediately instead of
     /// waiting for the background reconcile to reach it in scan order — key to instant-feeling startup on a
-    /// realigned/partial cache. Returns null only if the source can't be decoded.
+    /// realigned/partial cache. Returns null if the source file is missing or can't be decoded, or if this
+    /// library has been shut down (a catalog switch closed it while the request was queued).
     /// </summary>
     public byte[]? GetOrCreateThumbnail(long itemId, string path, ThumbSize size, long mtimeTicks, bool isVideo)
     {
@@ -316,6 +345,7 @@ public sealed class LibraryService : IDisposable
 
         StopAllWatchers();
         _db.Dispose();
+        _openMarker.Dispose();
         _shutdownCts.Dispose();
     }
 

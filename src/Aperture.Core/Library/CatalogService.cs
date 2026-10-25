@@ -10,11 +10,12 @@ public sealed class CatalogException(string message) : Exception(message);
 /// Owns the catalog registry and the single live <see cref="LibraryService"/>, and switches the live
 /// library between catalogs (Option B — separate catalogs).
 ///
-/// Invariants: <see cref="Current"/> always corresponds to <see cref="ActiveCatalog"/>; a failed switch
-/// leaves the current library open and untouched (the target is opened <em>before</em> the current one
-/// is torn down); one switch runs at a time; and the library that's open can't be removed or deleted.
-/// Change the catalogs through this class — calling <see cref="Registry"/>'s <c>SetActive</c> or
-/// <c>Remove</c> directly bypasses those rules.
+/// Invariants: <see cref="Current"/> always corresponds to <see cref="ActiveCatalog"/>, and the active catalog
+/// is always listed; a failed switch leaves the current library open and untouched (the target is opened
+/// <em>before</em> the current one is torn down); one switch runs at a time; a library that's open — in this
+/// window or any other Aperture window — can't be removed or deleted; and a library is only registered if the
+/// list could be saved. Change the catalogs through this class — calling <see cref="Registry"/>'s
+/// <c>SetActive</c> or <c>Remove</c> directly bypasses those rules.
 ///
 /// The host (App) handles <see cref="PreparingToSwitch"/> (quiesce its view model before the old library
 /// closes) and <see cref="ActiveLibraryChanged"/> (rebind to the new <see cref="Current"/>). Both are raised
@@ -81,6 +82,8 @@ public sealed class CatalogService : IAsyncDisposable
             .OrderByDescending(c => CatalogRegistry.SameDir(c.Dir, defaultDir))
             .ThenByDescending(c => c.LastOpenedTicks));
 
+        // A fallback is for this launch only (rememberForNextLaunch: false): the user's own choice stays what the
+        // next launch tries first, so a drive that wasn't mounted yet at login doesn't lose it for good.
         ExceptionDispatchInfo? firstFailure = null;
         foreach (var candidate in candidates)
         {
@@ -88,8 +91,8 @@ public sealed class CatalogService : IAsyncDisposable
             {
                 var library = OpenLibrary(candidate.Dir, allowCreate: CatalogRegistry.SameDir(candidate.Dir, defaultDir));
                 if (candidate.Id != active.Id)
-                    registry.SetActive(candidate.Id);
-                return new CatalogService(registry, defaultDir, library, Warning(active, candidate, firstFailure));
+                    registry.Activate(candidate, rememberForNextLaunch: false);
+                return new CatalogService(registry, defaultDir, library, Warning(registry, active, candidate, firstFailure));
             }
             catch (Exception ex)
             {
@@ -101,12 +104,12 @@ public sealed class CatalogService : IAsyncDisposable
         // removed Default): bring back the local Default, which can always be created.
         if (!registry.List().Any(c => CatalogRegistry.SameDir(c.Dir, defaultDir)))
         {
-            var fallback = registry.Add(UniqueName(registry, "Default"), defaultDir);
+            var fallback = new CatalogEntry { Id = Guid.NewGuid().ToString("N"), Name = UniqueName(registry, "Default"), Dir = defaultDir };
             try
             {
                 var library = OpenLibrary(fallback.Dir, allowCreate: true);
-                registry.SetActive(fallback.Id);
-                return new CatalogService(registry, defaultDir, library, Warning(active, fallback, firstFailure));
+                fallback = registry.Activate(fallback, rememberForNextLaunch: false);
+                return new CatalogService(registry, defaultDir, library, Warning(registry, active, fallback, firstFailure));
             }
             catch (Exception ex)
             {
@@ -131,7 +134,7 @@ public sealed class CatalogService : IAsyncDisposable
             var target = Find(catalogId);
             if (target.Id == _registry.Active?.Id)
                 return;
-            await CommitSwitchAsync(target.Id, OpenLibrary(target.Dir));
+            await CommitSwitchAsync(target, OpenLibrary(target.Dir));
         }
         finally
         {
@@ -176,8 +179,18 @@ public sealed class CatalogService : IAsyncDisposable
                 throw;
             }
 
-            var entry = _registry.Add(trimmed, dir);
-            await CommitSwitchAsync(entry.Id, next);
+            CatalogEntry entry;
+            try
+            {
+                entry = _registry.Add(trimmed, dir);
+            }
+            catch (IOException)
+            {
+                next.Dispose();
+                CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed);
+                throw new CatalogException("Aperture couldn't save its list of libraries, so the new library wasn't created.");
+            }
+            await CommitSwitchAsync(entry, next);
             return entry;
         }
         finally
@@ -197,11 +210,12 @@ public sealed class CatalogService : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
+            _registry.Reload(); // another window may have added (or removed) this folder meanwhile
             var known = _registry.List().FirstOrDefault(c => CatalogRegistry.SameDir(c.Dir, full));
             if (known is not null)
             {
                 if (known.Id != _registry.Active?.Id)
-                    await CommitSwitchAsync(known.Id, OpenLibrary(known.Dir));
+                    await CommitSwitchAsync(known, OpenLibrary(known.Dir));
                 return known;
             }
 
@@ -210,8 +224,17 @@ public sealed class CatalogService : IAsyncDisposable
 
             var next = new LibraryService(full);
             var folderName = Path.GetFileName(full);
-            var entry = _registry.Add(UniqueName(_registry, string.IsNullOrEmpty(folderName) ? "Library" : folderName), full);
-            await CommitSwitchAsync(entry.Id, next);
+            CatalogEntry entry;
+            try
+            {
+                entry = _registry.Add(UniqueName(_registry, string.IsNullOrEmpty(folderName) ? "Library" : folderName), full);
+            }
+            catch (IOException)
+            {
+                next.Dispose();
+                throw new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't added.");
+            }
+            await CommitSwitchAsync(entry, next);
             return entry;
         }
         finally
@@ -220,20 +243,27 @@ public sealed class CatalogService : IAsyncDisposable
         }
     }
 
-    /// <summary>Renames a library (trimmed; not empty; not another library's name, case-insensitive).</summary>
+    /// <summary>
+    /// Renames a library (trimmed; not empty; not another library's name, case-insensitive). Throws
+    /// <see cref="CatalogException"/> if another window already removed it, or the list couldn't be saved.
+    /// </summary>
     public void Rename(string catalogId, string name)
     {
-        var entry = Find(catalogId);
-        _registry.Rename(entry.Id, CheckName(name, entry.Id, forFolder: false));
+        var entry = StillListed(Find(catalogId));
+        if (!_registry.Rename(entry.Id, CheckName(name, entry.Id, forFolder: false)))
+            throw new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't renamed.");
     }
 
-    /// <summary>Forgets a library that isn't open; its files stay where they are. Throws if it's the open one.</summary>
+    /// <summary>
+    /// Forgets a library that isn't open — in this window or any other; its files stay where they are.
+    /// Throws <see cref="CatalogException"/> if it's open, already removed, or the list couldn't be saved.
+    /// </summary>
     public async Task RemoveAsync(string catalogId)
     {
         await _gate.WaitAsync();
         try
         {
-            var entry = Find(catalogId);
+            var entry = StillListed(Find(catalogId));
             RefuseIfOpen(entry);
             if (!_registry.Remove(entry.Id))
                 throw new CatalogException("Aperture couldn't save its list of libraries, so nothing was removed.");
@@ -245,21 +275,26 @@ public sealed class CatalogService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Forgets a library that isn't open and deletes Aperture's own files for it (index, thumbnail cache,
-    /// settings) — never anything else in its folder. Throws if it's the open one, or if the list couldn't
-    /// be saved (then nothing is deleted). The result lists any files that couldn't be deleted.
+    /// Forgets a library that isn't open — in this window or any other — and deletes Aperture's own files for
+    /// it (index, thumbnail cache, settings), never anything else in its folder. Throws
+    /// <see cref="CatalogException"/> if it's open, already removed, or the list couldn't be saved (then nothing
+    /// is deleted). The result lists any files that couldn't be deleted.
     /// </summary>
     public async Task<CatalogDeletion> DeleteFilesAsync(string catalogId)
     {
         await _gate.WaitAsync();
         try
         {
-            var entry = Find(catalogId);
+            var entry = StillListed(Find(catalogId));
             RefuseIfOpen(entry);
             var result = _registry.RemoveAndDeleteFiles(entry.Id);
-            if (result.Outcome == CatalogDeletionOutcome.NotForgotten)
-                throw new CatalogException("Aperture couldn't save its list of libraries, so nothing was removed or deleted.");
-            return result;
+            return result.Outcome switch
+            {
+                CatalogDeletionOutcome.NotForgotten => throw new CatalogException(
+                    "Aperture couldn't save its list of libraries, so nothing was removed or deleted."),
+                CatalogDeletionOutcome.NotFound => throw AlreadyRemoved(entry),
+                _ => result,
+            };
         }
         finally
         {
@@ -275,9 +310,10 @@ public sealed class CatalogService : IAsyncDisposable
     }
 
     // The caller holds the gate and has already opened `next`, so nothing can fail between tearing the current
-    // library down and showing the next one. Awaits on the caller's context (no ConfigureAwait(false)): the
+    // library down and showing the next one: Activate lists the target again if another window removed it, so
+    // Current and ActiveCatalog always agree. Awaits on the caller's context (no ConfigureAwait(false)): the
     // host rebinds its window in ActiveLibraryChanged, which has to run on the UI thread.
-    private async Task CommitSwitchAsync(string targetId, LibraryService next)
+    private async Task CommitSwitchAsync(CatalogEntry target, LibraryService next)
     {
         try
         {
@@ -292,7 +328,7 @@ public sealed class CatalogService : IAsyncDisposable
         var previous = _current;
         await previous.ShutdownAsync();
         _current = next;
-        _registry.SetActive(targetId);
+        _registry.Activate(target, rememberForNextLaunch: true);
         ActiveLibraryChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -320,7 +356,28 @@ public sealed class CatalogService : IAsyncDisposable
     {
         if (entry.Id == _registry.Active?.Id)
             throw new CatalogException($"\"{entry.Name}\" is the library that's open. Switch to another library first.");
+        if (LibraryService.IsOpen(entry.Dir))
+            throw new CatalogException($"\"{entry.Name}\" is open in another Aperture window. Close it there first.");
     }
+
+    // Re-reads the list (another window may have changed it since this window's menu was built) and confirms the
+    // library is still in it, so a stale menu can't act on a library that's already gone.
+    private CatalogEntry StillListed(CatalogEntry entry)
+    {
+        _registry.Reload();
+        return _registry.List().FirstOrDefault(c => c.Id == entry.Id) ?? throw AlreadyRemoved(entry);
+    }
+
+    private static CatalogException AlreadyRemoved(CatalogEntry entry) =>
+        new($"\"{entry.Name}\" was already removed from the list (perhaps in another Aperture window), so nothing was changed.");
+
+    // Names Windows reserves for devices: as a folder name they fail, or make a folder some tools can't open.
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
 
     private string CheckName(string name, string? exceptId, bool forFolder)
     {
@@ -331,6 +388,8 @@ public sealed class CatalogService : IAsyncDisposable
             throw new CatalogException("A library name can't contain any of these characters: \\ / : * ? \" < > |");
         if (forFolder && trimmed.EndsWith('.'))
             throw new CatalogException("A library name can't end with a full stop.");
+        if (forFolder && ReservedNames.Contains(trimmed.Split('.')[0].Trim()))
+            throw new CatalogException($"\"{trimmed}\" is a name Windows reserves, so it can't be a folder name. Choose another.");
         if (_registry.List().Any(c => c.Id != exceptId && string.Equals(c.Name, trimmed, StringComparison.CurrentCultureIgnoreCase)))
             throw new CatalogException($"There's already a library named \"{trimmed}\".");
         return trimmed;
@@ -349,8 +408,15 @@ public sealed class CatalogService : IAsyncDisposable
         }
     }
 
-    private static string? Warning(CatalogEntry failed, CatalogEntry opened, ExceptionDispatchInfo? failure) =>
-        failure is null
-            ? null
-            : $"Aperture couldn't open the library \"{failed.Name}\" ({failed.Dir}), so it opened \"{opened.Name}\" instead.\n\n{failure.SourceException.Message}";
+    private static string? Warning(CatalogRegistry registry, CatalogEntry failed, CatalogEntry opened, ExceptionDispatchInfo? failure)
+    {
+        var parts = new List<string>();
+        if (registry.QuarantinedFile is { } bad)
+            parts.Add($"Aperture couldn't read its list of libraries, so it set the file aside as {bad} and started a " +
+                      "new list. To get your other libraries back, use Open library… and choose each library's folder.");
+        if (failure is not null)
+            parts.Add($"Aperture couldn't open the library \"{failed.Name}\" ({failed.Dir}), so it opened \"{opened.Name}\" " +
+                      $"for now. It will try \"{failed.Name}\" again next time.\n\n{failure.SourceException.Message}");
+        return parts.Count == 0 ? null : string.Join("\n\n", parts);
+    }
 }

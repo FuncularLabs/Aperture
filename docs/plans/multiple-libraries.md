@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 2, after review round 1) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 3, after review round 2) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -49,23 +49,33 @@ catalog's files and the list of every catalog never share a folder.
 - **First run** registers the existing `%LOCALAPPDATA%\Aperture` as **"Default"** (zero migration) and sets
   `defaultSeeded`. After that a Default the user removed stays removed — unless no catalog at all is
   registered, because there must always be one library to open.
-- **Tolerant load.** A missing file is an empty registry. Unreadable JSON (corrupt, or another program's
-  file) is renamed to `catalogs.json.bad-<timestamp>` and never overwritten. Entries without an id, with an
-  empty or relative `dir`, or duplicating another's id or folder are dropped; a dangling `activeId` is
-  cleared. Hand edits may use comments, trailing commas, and any property-name casing; the file is
-  written camelCase.
-- **Durable save.** Write `catalogs.json.tmp`, flush to disk, rename over the file: a crash mid-write can't
-  replace a good list with a torn one. `Save` reports failure.
-- **Several Aperture windows.** Every change re-reads the file under a cross-process mutex and merges, so
-  one window can't drop another's additions. Each window keeps its own active catalog in memory (another
-  window switching doesn't change what this one shows); the file records the most recently switched-to
-  catalog, which the next launch opens. A library a window has open stays listed even if another window
-  removes it.
+- **Tolerant load.** A missing file is an empty registry. A file that isn't a readable library list —
+  corrupt, not JSON, or JSON without a `catalogs` list (another program's file, a misspelled hand edit) — is
+  renamed to `catalogs.json.bad-<timestamp>`, never overwritten, and reported (`QuarantinedFile`, shown at
+  launch). Entries without an id, with an empty or relative `dir`, or duplicating another's id or folder are
+  dropped; a dangling `activeId` is cleared. Hand edits may use comments, trailing commas, and any
+  property-name casing; the file is written camelCase.
+- **Durable, honest save.** Write `catalogs.json.tmp`, flush to disk, rename over the file (retrying for
+  ~250 ms if something briefly has it open): a crash mid-write can't replace a good list with a torn one.
+  A change that can't be saved is refused and undone — `Add` throws, `Rename`/`Remove` return `false` — so
+  memory never holds a change that a later re-read would silently drop. Switching is the exception: this
+  window still switches; only which library the next launch opens isn't recorded.
+- **Several Aperture windows.** Every read of the file and every change runs under a cross-process mutex
+  (5 s timeout, then it goes ahead rather than hang), and every change re-reads and merges first, so one
+  window can't drop another's additions. Each window keeps its own active catalog in memory (another window
+  switching doesn't change what this one shows). The file records the library the user most recently
+  switched to in *any* window, which the next launch opens. The library a window has open always stays
+  listed: if another window removes it, it's listed again; if another window re-adds its folder under a new
+  id, this window adopts that id.
 - **Remove vs. delete.** `Remove(id)` forgets a catalog; its files stay. `RemoveAndDeleteFiles(id)` forgets it,
   *then* deletes only Aperture's own files (`CatalogFileNames`: `aperture.db`, `thumbs.db`, their
   `-wal`/`-shm`/`-journal` files, `settings.json`) and the folder if that leaves it empty. Nothing else in the
   folder — the user's photos, other files, a nested catalog — is ever deleted. If the forget can't be saved,
   nothing is deleted; files that can't be deleted (in use) are reported, not swallowed.
+- **Open in any window.** Every open `LibraryService` holds a named kernel event for its folder
+  (`Local\Aperture.Library.<hash>`) for as long as it's open — released even if the window crashes.
+  `LibraryService.IsOpen(dir)` checks it, so a library open in *any* Aperture window can't be removed or
+  deleted from another.
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
@@ -86,7 +96,11 @@ corresponds to `ActiveCatalog`.
   or a drive letter now pointing at another disk) is reported, not silently recreated empty.
 - **Launch never bricks.** `Open` tries the active catalog, then Default, then the others most recently
   opened first, then re-registers Default; it reports which library failed and why in `OpenWarning`, which
-  App shows once the window is up.
+  App shows once the window is up. A fallback is for that launch only: the user's choice stays recorded, so
+  a library on a drive that wasn't mounted yet at login opens again on its own once it's back (and the
+  warning repeats on each launch until then).
+- **A stale menu can't act on a gone library.** Remove, delete and rename re-read the list first and say so
+  if another window already removed the library; switching to one re-lists it.
 - **Teardown (`LibraryService.ShutdownAsync`).** Cancels in-flight indexes (tracked via `IndexRootAsync`,
   linked to a shutdown token), waits for them to stop, stops the watchers (no watcher can start afterwards),
   and disposes the database — the FunkyORM provider plus `SqliteConnection.ClearPool` for both files, so the
@@ -126,20 +140,21 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | Switch while indexing | The index is cancelled and awaited before the database closes; the indexer rolls back only its in-flight batch. |
 | Target can't be opened | Opened first, so the current library is untouched; nothing is registered for a failed New/Open. |
 | Registered library missing at switch | Refused with the folder path in the message; not recreated. |
-| Active library missing at launch | Falls back (Default → most recent → re-register Default) with a message; the missing one stays listed. |
+| Active library missing at launch | Falls back (Default → most recent → re-register Default) with a message, for that launch only; the missing one stays listed and is tried first next time. |
 | Two quick switches | Serialized; the last request wins; nothing leaks. |
-| Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*`; sanitized on load; Aperture starts. |
-| Two Aperture windows | Changes merge; neither drops the other's libraries. Two windows writing the *same* library's database is still possible and out of scope. |
-| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved. |
+| Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*` and reported at launch; sanitized on load; Aperture starts. |
+| List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
+| Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be removed or deleted from the other; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
+| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open. |
 | Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
 ## Work breakdown and tests
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (34) |
-| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase` | `LibraryServiceShutdownTests` (15) — the cancel/await tests hold an index mid-run with `BlockingProgress` |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (46) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (49) |
+| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` | `LibraryServiceShutdownTests` (17) — the cancel/await tests hold an index mid-run with `BlockingProgress` |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (66) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -164,7 +179,34 @@ design:
   ones hold an index mid-run. Revision 1's claim that its tests pinned the indexer's rollback was not true and
   isn't repeated — that behaviour belongs to the pre-existing `Indexer`.
 
+## Revision 3 — what changed after review round 2 (2026-10-25)
+
+Two independent reviews of the round-1 fix (`869145d`) confirmed 15 of the 16 round-1 findings fixed and
+found new problems, nearly all in the round-1 fix's own cross-window code:
+
+- **A change that couldn't be saved** stayed in memory and was silently dropped by the next re-read; a switch
+  could then show a library that wasn't listed (`Current` ≠ `ActiveCatalog`). Unsaved changes are now refused
+  and undone, the save retries a brief lock, the file is read under the lock too, and the active library is
+  always listed (`Activate`).
+- **Another window could delete the library this one had open**, its files freed once SQLite's idle pool let
+  go. Now refused via the per-folder "open" marker.
+- **A launch fallback became the saved choice**, so a drive that was late to mount at login lost its library
+  for good. Fallbacks are now for that launch only.
+- **Smaller:** a stale menu removing an already-removed library gave a false "couldn't save" message (now
+  "already removed"); a set-aside list file was silent (now reported); valid JSON that isn't a list was
+  overwritten (now set aside); Windows-reserved names (`NUL`, `CON`, `COM1`…) were accepted as library names.
+- **Tests with teeth for branches that had none:** the cross-process lock (wait, timeout, abandoned), the
+  Default-first fallback order, the last-resort Default, `PreparingToSwitch` while the old library is still
+  open, a New whose folder can't be created, and a queued switch keeping the caller's thread.
+
+Accepted residual: the cleanup after a New library that fails *halfway through* opening (folder created,
+database partly written) has no deterministic test — there's no way to make SQLite fail mid-`Initialize`
+without fault injection. It deletes only Aperture's own files, and only from a folder that was new or empty.
+
 ## Out of scope (future)
+
+- A single-instance guard (a second launch focuses the first window). It would make most of the cross-window
+  handling above unnecessary; worth considering for a later release.
 
 - Named saved views **within** a catalog (Option A) — complementary, can layer on later.
 - Moving/copying items *between* catalogs.

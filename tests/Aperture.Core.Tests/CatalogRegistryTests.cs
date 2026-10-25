@@ -437,6 +437,24 @@ public class CatalogRegistryTests
         Assert.Equal(garbage, File.ReadAllText(bad)); // the user's (or another app's) bytes survive
     }
 
+    [Theory]
+    [InlineData("""{"settings":{"theme":"dark"}}""")]  // another program's file that happens to have this name
+    [InlineData("""{"catalog":[{"id":"x"}]}""")]       // a hand edit with a misspelled key
+    [InlineData("null")]
+    public void Load_ValidJsonThatIsNotALibraryList_IsKeptAsABadCopy_NotOverwritten(string json)
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        File.WriteAllText(path, json);
+
+        var reg = new CatalogRegistry(path);
+        reg.EnsureDefault(dir.Combine("Aperture"));
+
+        Assert.NotNull(reg.QuarantinedFile);
+        Assert.Equal(json, File.ReadAllText(reg.QuarantinedFile!));
+        Assert.Single(reg.List());
+    }
+
     [Fact]
     public void Load_NullCatalogs_IsTolerated()
     {
@@ -541,6 +559,255 @@ public class CatalogRegistryTests
         Assert.Equal(2, onDisk.Count);
         Assert.Contains(onDisk, c => c.Name == "Home");
         Assert.Contains(onDisk, c => c.Name == "Work");
+    }
+
+    // --- A change that can't be saved is refused, not kept in memory and lost later -----------
+
+    [Fact]
+    public void Add_WhenTheListCannotBeSaved_Throws_AndAddsNothing()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var reg = new CatalogRegistry(path);
+        reg.Add("One", dir.Combine("one"));
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.Throws<IOException>(() => reg.Add("Two", dir.Combine("two")));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.Single(reg.List());
+        Assert.Single(new CatalogRegistry(path).List());
+    }
+
+    [Fact]
+    public void Rename_WhenTheListCannotBeSaved_ReturnsFalse_AndKeepsTheOldName()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var reg = new CatalogRegistry(path);
+        var one = reg.Add("One", dir.Combine("one"));
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.False(reg.Rename(one.Id, "Home"));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.Equal("One", reg.List().Single().Name);
+        reg.Add("Two", dir.Combine("two")); // a later change doesn't resurrect or lose anything
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Save_WaitsOutAnotherWindowBrieflyReadingTheFile()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var reg = new CatalogRegistry(path);
+        reg.Add("One", dir.Combine("one"));
+
+        var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); // blocks the rename
+        var release = Task.Delay(100).ContinueWith(_ => reader.Dispose());
+        var two = reg.Add("Two", dir.Combine("two"));
+        release.Wait();
+
+        Assert.Contains(new CatalogRegistry(path).List(), c => c.Id == two.Id);
+    }
+
+    // --- The cross-process lock ---------------------------------------------------------------
+
+    [Fact]
+    public async Task Changes_WaitForTheCrossProcessLock()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = new Thread(() =>
+        {
+            using var mutex = new Mutex(false, reg.MutexName); // another Aperture window mid-change
+            mutex.WaitOne();
+            held.Set();
+            release.Wait();
+            mutex.ReleaseMutex();
+        });
+        holder.Start();
+        held.Wait();
+
+        var adding = Task.Run(() => reg.Add("One", dir.Combine("one")));
+        await Task.Delay(200);
+        Assert.False(adding.IsCompleted);
+
+        release.Set();
+        await adding;
+        holder.Join();
+        Assert.Single(reg.List());
+    }
+
+    [Fact]
+    public async Task Loading_WaitsForTheCrossProcessLock_SoItNeverReadsAHalfReplacedFile()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var first = new CatalogRegistry(path);
+        first.Add("One", dir.Combine("one"));
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = new Thread(() =>
+        {
+            using var mutex = new Mutex(false, first.MutexName); // another window is mid-change
+            mutex.WaitOne();
+            held.Set();
+            release.Wait();
+            mutex.ReleaseMutex();
+        });
+        holder.Start();
+        held.Wait();
+
+        var loading = Task.Run(() => new CatalogRegistry(path));
+        await Task.Delay(200);
+        Assert.False(loading.IsCompleted);
+
+        release.Set();
+        var loaded = await loading;
+        holder.Join();
+        Assert.Single(loaded.List());
+    }
+
+    [Fact]
+    public async Task Changes_GoAheadAfterTheLockTimeout_RatherThanHang()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromMilliseconds(150) };
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = new Thread(() =>
+        {
+            using var mutex = new Mutex(false, reg.MutexName);
+            mutex.WaitOne();
+            held.Set();
+            release.Wait();
+            mutex.ReleaseMutex();
+        });
+        holder.Start();
+        held.Wait();
+
+        var adding = Task.Run(() => reg.Add("One", dir.Combine("one")));
+        var finished = await Task.WhenAny(adding, Task.Delay(5000));
+
+        release.Set();
+        holder.Join();
+        Assert.Same(adding, finished);
+        Assert.Single(reg.List());
+    }
+
+    [Fact]
+    public void Changes_GoAheadWhenAnotherWindowDiedHoldingTheLock()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        var dead = new Thread(() => new Mutex(false, reg.MutexName).WaitOne()); // exits without releasing
+        dead.Start();
+        dead.Join();
+
+        reg.Add("One", dir.Combine("one"));
+
+        Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
+    }
+
+    // --- Which library opens next launch ------------------------------------------------------
+
+    [Fact]
+    public void ActivateForThisSessionOnly_DoesNotChangeWhichLibraryOpensNextLaunch()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var reg = new CatalogRegistry(path);
+        var usb = reg.Add("USB", dir.Combine("usb"));
+        var local = reg.Add("Local", dir.Combine("local"));
+        reg.SetActive(usb.Id);
+
+        reg.Activate(local, rememberForNextLaunch: false); // a launch fallback while the USB drive is away
+        reg.Rename(local.Id, "Here");                      // and a later save in the same session
+
+        Assert.Equal(local.Id, reg.Active!.Id);
+        Assert.Equal(usb.Id, new CatalogRegistry(path).Active!.Id);
+    }
+
+    [Fact]
+    public void Activate_ListsALibraryAgain_IfAnotherWindowRemovedIt()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        a.Add("One", dir.Combine("one"));
+        var two = a.Add("Two", dir.Combine("two"));
+        new CatalogRegistry(path).Remove(two.Id); // another window
+
+        a.Activate(two, rememberForNextLaunch: true); // this window switches to it from its (older) menu
+
+        Assert.Equal(two.Id, a.Active!.Id);
+        Assert.Contains(new CatalogRegistry(path).List(), c => c.Id == two.Id);
+    }
+
+    [Fact]
+    public void AnotherWindowsSwitch_IsWhatTheNextLaunchOpens_EvenAfterThisWindowSaves()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        var two = a.Add("Two", dir.Combine("two"));
+        var b = new CatalogRegistry(path);
+
+        b.SetActive(two.Id);       // the other window switched last…
+        a.Rename(one.Id, "First"); // …then this window saved an unrelated change
+
+        Assert.Equal(one.Id, a.Active!.Id);                         // this window still shows its own
+        Assert.Equal(two.Id, new CatalogRegistry(path).Active!.Id); // the latest switch wins next launch
+    }
+
+    [Fact]
+    public void AnotherWindow_ReAddingThisWindowsOpenFolderUnderANewId_KeepsItActiveHere()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        var two = a.Add("Two", dir.Combine("two"));
+        var b = new CatalogRegistry(path);
+        b.SetActive(two.Id);
+        b.Remove(one.Id);
+        var readded = b.Add("One again", dir.Combine("one")); // same folder, new id
+
+        a.Rename(two.Id, "Second"); // this window's next change re-reads the list
+
+        Assert.Equal(readded.Id, a.Active!.Id); // adopts the folder's new id instead of losing its open library
+        Assert.Single(a.List(), c => CatalogRegistry.SameDir(c.Dir, one.Dir));
+    }
+
+    [Fact]
+    public void Load_UnreadableFile_IsReportedAsQuarantined()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        File.WriteAllText(path, "{ broken");
+
+        var reg = new CatalogRegistry(path);
+
+        Assert.NotNull(reg.QuarantinedFile);
+        Assert.True(File.Exists(reg.QuarantinedFile));
+        Assert.Null(new CatalogRegistry(RegistryPath(dir)).QuarantinedFile); // nothing left to set aside
     }
 
     [Fact]

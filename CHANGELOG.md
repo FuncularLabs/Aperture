@@ -16,8 +16,9 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   - **Delete library files** deletes Aperture's own files for a library you aren't in — its
     index, thumbnail cache, and settings — and never your photos or anything else in its folder.
 - If the library you used last can't be opened (for example, it's on a drive that isn't
-  connected), Aperture opens another one — Default, if it's there — and tells you why, instead
-  of failing to start.
+  connected yet), Aperture opens another one for now — Default, if it's there — and tells you
+  why, instead of failing to start. It tries your library again at the next launch.
+- With Aperture open in two windows, neither can remove or delete a library the other has open.
 
 ### Changed
 - `APERTURE_DATA_DIR` now pins Aperture to that one data folder: the library list is ignored and

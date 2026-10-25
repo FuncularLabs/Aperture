@@ -53,13 +53,21 @@ internal sealed class CatalogRegistryState
 /// data — plain JSON, no FunkyORM.
 ///
 /// Safety rules: a missing, corrupt or hand-edited file never stops Aperture from starting, and the
-/// registry never deletes or overwrites anything that isn't Aperture's own — an unreadable file is kept
-/// as a <c>.bad-*</c> copy, and "delete files" removes only <see cref="CatalogFileNames"/>.
+/// registry never deletes or overwrites anything that isn't Aperture's own — a file that isn't a readable
+/// library list (corrupt, not JSON, or JSON without a <c>catalogs</c> list) is kept as a <c>.bad-*</c> copy
+/// and reported in <see cref="QuarantinedFile"/>, and "delete files" removes only <see cref="CatalogFileNames"/>.
 ///
-/// Several Aperture windows may share the file: every change re-reads it under a cross-process lock and
-/// merges, so one window can't drop another's additions. Reads (<see cref="List"/>, <see cref="Active"/>)
-/// use this instance's copy, and the active catalog is this instance's own — the file records the one
-/// most recently switched to, which the next launch opens.
+/// Every change is saved before it counts: <see cref="Add"/>, <see cref="Rename"/> and the removals report a
+/// list they couldn't save and leave nothing changed, so memory and disk never disagree for later changes
+/// to trip over. (<see cref="SetActive"/> and <see cref="Activate"/> keep this window's choice even if it
+/// can't be saved; only the next launch's choice is lost.)
+///
+/// Several Aperture windows may share the file: every change (and every read of the file) runs under a
+/// cross-process lock, and every change re-reads and merges first, so one window can't drop another's
+/// additions. Reads (<see cref="List"/>, <see cref="Active"/>) use this instance's copy; <see cref="Reload"/>
+/// refreshes it. The active catalog is this window's own; the file records the library the user most
+/// recently switched to in any window, which the next launch opens. A fallback chosen only for this launch
+/// (<see cref="Activate"/> with <c>rememberForNextLaunch: false</c>) is never written as that choice.
 /// </summary>
 public sealed class CatalogRegistry
 {
@@ -77,10 +85,10 @@ public sealed class CatalogRegistry
     };
 
     private readonly string _path;
-    private readonly string _mutexName;
     private readonly Lock _gate = new();
     private List<CatalogEntry> _catalogs = [];
-    private string? _activeId;
+    private string? _activeId;    // the library this window has open
+    private string? _preferredId; // the user's latest switch (any window) — what the next launch opens
     private bool _defaultSeeded;
 
     /// <summary><c>%LOCALAPPDATA%\Aperture Libraries\catalogs.json</c> — outside every catalog's folder.</summary>
@@ -107,9 +115,21 @@ public sealed class CatalogRegistry
     {
         _path = Path.GetFullPath(registryPath);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(_path.ToUpperInvariant()));
-        _mutexName = @"Local\Aperture.CatalogRegistry." + Convert.ToHexString(hash, 0, 16);
-        RefreshFromDisk(keepActive: false);
+        MutexName = @"Local\Aperture.CatalogRegistry." + Convert.ToHexString(hash, 0, 16);
+        Mutate(() => { RefreshFromDisk(keepActive: false); return true; }, refresh: false);
     }
+
+    /// <summary>
+    /// Set when this instance found the list file unreadable and moved it aside: the <c>.bad-*</c> copy's path,
+    /// for the host to tell the user about. Otherwise <c>null</c>.
+    /// </summary>
+    public string? QuarantinedFile { get; private set; }
+
+    /// <summary>The cross-process lock every Aperture window takes before reading or writing the file.</summary>
+    internal string MutexName { get; }
+
+    /// <summary>How long to wait for another window's change before going ahead without the lock.</summary>
+    internal TimeSpan LockTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>All registered catalogs, in registration order. Snapshots — mutating them does nothing.</summary>
     public IReadOnlyList<CatalogEntry> List()
@@ -133,7 +153,8 @@ public sealed class CatalogRegistry
     /// <summary>
     /// Registers <paramref name="dir"/> as a catalog and returns it. If the directory is already
     /// registered (path-normalized, case-insensitive) the existing entry is returned unchanged —
-    /// no duplicate. The first catalog registered becomes active.
+    /// no duplicate. The first catalog registered becomes active. Throws <see cref="IOException"/> if the
+    /// list can't be saved; then nothing was added.
     /// </summary>
     public CatalogEntry Add(string name, string dir)
     {
@@ -145,35 +166,83 @@ public sealed class CatalogRegistry
                 return Clone(existing);
 
             var entry = new CatalogEntry { Id = NewId(), Name = name, Dir = full };
+            var (previousActive, previousPreferred) = (_activeId, _preferredId);
             _catalogs.Add(entry);
             _activeId ??= entry.Id;
-            Save();
+            _preferredId ??= entry.Id;
+            if (!Save())
+            {
+                _catalogs.Remove(entry);
+                (_activeId, _preferredId) = (previousActive, previousPreferred);
+                throw new IOException($"Couldn't save the list of libraries ({_path}).");
+            }
             return Clone(entry);
         });
     }
 
-    /// <summary>Renames a catalog. Returns <c>false</c> if no catalog has that id.</summary>
+    /// <summary>
+    /// Renames a catalog. Returns <c>false</c> if no catalog has that id, or if the list couldn't be saved —
+    /// then the old name stands, here and on disk.
+    /// </summary>
     public bool Rename(string id, string name) => Mutate(() =>
     {
         var entry = _catalogs.FirstOrDefault(c => c.Id == id);
         if (entry is null)
             return false;
+        var previous = entry.Name;
         entry.Name = name;
-        Save();
-        return true;
+        if (Save())
+            return true;
+        entry.Name = previous;
+        return false;
     });
 
-    /// <summary>Makes a catalog active and records the open time. Returns <c>false</c> if no catalog has that id.</summary>
+    /// <summary>
+    /// The user switched to this catalog: it becomes this window's active catalog and the one the next launch
+    /// opens, and its open time is recorded. Returns <c>false</c> if no catalog has that id.
+    /// </summary>
     public bool SetActive(string id) => Mutate(() =>
     {
         var entry = _catalogs.FirstOrDefault(c => c.Id == id);
         if (entry is null)
             return false;
-        _activeId = id;
-        entry.LastOpenedTicks = DateTime.UtcNow.Ticks;
-        Save();
+        MakeActive(entry, rememberForNextLaunch: true);
         return true;
     });
+
+    /// <summary>
+    /// Makes <paramref name="entry"/> this window's active catalog — listing it again first if another window
+    /// removed it meanwhile (the user just opened it here), so the active catalog is always listed. With
+    /// <paramref name="rememberForNextLaunch"/> it also becomes what the next launch opens; without it (a launch
+    /// fallback) the user's own choice is kept for next time. Returns the entry as listed.
+    /// </summary>
+    internal CatalogEntry Activate(CatalogEntry entry, bool rememberForNextLaunch) => Mutate(() =>
+    {
+        var listed = _catalogs.FirstOrDefault(c => c.Id == entry.Id)
+                     ?? _catalogs.FirstOrDefault(c => SameDir(c.Dir, entry.Dir));
+        if (listed is null)
+        {
+            listed = Clone(entry);
+            _catalogs.Add(listed);
+        }
+        MakeActive(listed, rememberForNextLaunch);
+        return Clone(listed);
+    });
+
+    /// <summary>Re-reads the list file, so this instance sees changes made in other Aperture windows.</summary>
+    public void Reload() => Mutate(() => true);
+
+    // Caller holds _gate. Best-effort save: this window's choice stands even if it can't be written.
+    private void MakeActive(CatalogEntry entry, bool rememberForNextLaunch)
+    {
+        _activeId = entry.Id;
+        if (rememberForNextLaunch)
+        {
+            _preferredId = entry.Id;
+            entry.LastOpenedTicks = DateTime.UtcNow.Ticks;
+        }
+        Save();
+    }
 
     /// <summary>
     /// Forgets a catalog; its files stay on disk. Removing the active catalog promotes another (or leaves
@@ -221,7 +290,8 @@ public sealed class CatalogRegistry
                 _defaultSeeded = true;
             }
             _activeId ??= (_catalogs.FirstOrDefault(c => SameDir(c.Dir, full)) ?? _catalogs.FirstOrDefault())?.Id;
-            Save();
+            _preferredId ??= _activeId;
+            Save(); // best effort: at launch an unwritable list must not stop Aperture opening its library
             return true;
         });
     }
@@ -273,30 +343,34 @@ public sealed class CatalogRegistry
         if (index < 0)
             return null;
         var entry = _catalogs[index];
-        var previousActive = _activeId;
+        var (previousActive, previousPreferred) = (_activeId, _preferredId);
         _catalogs.RemoveAt(index);
         if (_activeId == id)
             _activeId = _catalogs.FirstOrDefault()?.Id;
+        if (_preferredId == id)
+            _preferredId = _activeId;
         if (Save())
             return entry;
 
         _catalogs.Insert(index, entry);
-        _activeId = previousActive;
+        (_activeId, _preferredId) = (previousActive, previousPreferred);
         return null;
     }
 
-    // Every change: this process's lock, then the cross-process one, then the latest file, then the change.
-    private T Mutate<T>(Func<T> change)
+    // Every change: this process's lock, then the cross-process one, then (unless told not to) the latest file,
+    // then the change. If another window holds the lock past LockTimeout it goes ahead anyway rather than hang.
+    private T Mutate<T>(Func<T> change, bool refresh = true)
     {
         lock (_gate)
         {
-            using var mutex = new Mutex(false, _mutexName);
+            using var mutex = new Mutex(false, MutexName);
             var owned = false;
             try
             {
-                try { owned = mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+                try { owned = mutex.WaitOne(LockTimeout); }
                 catch (AbandonedMutexException) { owned = true; } // the other window died mid-change; carry on
-                RefreshFromDisk(keepActive: true);
+                if (refresh)
+                    RefreshFromDisk(keepActive: true);
                 return change();
             }
             finally
@@ -329,16 +403,28 @@ public sealed class CatalogRegistry
             catalogs.Add(new CatalogEntry { Id = c.Id, Name = name, Dir = full, LastOpenedTicks = c.LastOpenedTicks });
         }
 
-        // The library this window has open stays listed even if another window removed it meanwhile:
-        // its entry is what ties this window's open library to the list.
+        // The library this window has open stays listed even if another window removed it meanwhile (its entry
+        // is what ties this window's open library to the list); if another window re-added its folder under a
+        // new id, this window adopts that id rather than losing track of what it has open.
+        var active = keepActive ? _activeId : disk.ActiveId;
         var ours = keepActive ? _catalogs.FirstOrDefault(c => c.Id == _activeId) : null;
-        if (ours is not null && !catalogs.Any(c => c.Id == ours.Id || SameDir(c.Dir, ours.Dir)))
-            catalogs.Add(ours);
+        if (ours is not null && catalogs.All(c => c.Id != ours.Id))
+        {
+            var sameFolder = catalogs.FirstOrDefault(c => SameDir(c.Dir, ours.Dir));
+            if (sameFolder is not null)
+                active = sameFolder.Id;
+            else
+                catalogs.Add(ours);
+        }
 
         _catalogs = catalogs;
         _defaultSeeded |= disk.DefaultSeeded;
-        var active = keepActive ? _activeId : disk.ActiveId;
         _activeId = catalogs.Any(c => c.Id == active) ? active : null;
+        // What the next launch opens is the user's latest switch in any window — the file's choice, while listed.
+        if (catalogs.Any(c => c.Id == disk.ActiveId))
+            _preferredId = disk.ActiveId;
+        else if (catalogs.All(c => c.Id != _preferredId))
+            _preferredId = _activeId;
     }
 
     private CatalogRegistryState? ReadDisk()
@@ -364,25 +450,45 @@ public sealed class CatalogRegistry
 
             try
             {
-                return JsonSerializer.Deserialize<CatalogRegistryState>(json, ReadOptions) ?? new CatalogRegistryState();
+                using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+                {
+                    CommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true,
+                });
+                // Valid JSON that isn't a library list (another program's file, a hand edit with a misspelled key)
+                // would read as an empty list and be overwritten by the next save, so it's set aside too.
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.EnumerateObject().Any(p => string.Equals(p.Name, "catalogs", StringComparison.OrdinalIgnoreCase)))
+                    return root.Deserialize<CatalogRegistryState>(ReadOptions) ?? new CatalogRegistryState();
             }
             catch (JsonException)
             {
-                QuarantineUnreadableFile();
-                return null;
+                // Not JSON at all (corrupt, truncated); set aside below.
             }
+            QuarantineUnreadableFile();
+            return null;
         }
     }
 
     // Not JSON we can read (corrupt, or another program's file with this name): set it aside, never overwrite it.
     private void QuarantineUnreadableFile()
     {
-        try { File.Move(_path, $"{_path}.bad-{DateTime.Now:yyyyMMdd-HHmmss-fff}"); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        var bad = $"{_path}.bad-{DateTime.Now:yyyyMMdd-HHmmss-fff}";
+        try
+        {
+            File.Move(_path, bad);
+            QuarantinedFile = bad;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Can't move it (no permission): then the save that would replace it fails the same way.
+        }
     }
 
     // Write-then-rename, flushed: a crash or power loss mid-write can never replace a good list with a torn
-    // one. Returns false if the list couldn't be saved (callers that delete files check this first).
+    // one. Returns false if the list couldn't be saved; callers undo their change (or, for a switch, keep it
+    // for this window only), so memory never holds a change the next re-read would silently drop.
     private bool Save()
     {
         var tmp = _path + ".tmp";
@@ -395,7 +501,7 @@ public sealed class CatalogRegistry
             var state = new CatalogRegistryState
             {
                 Catalogs = _catalogs.Select(c => (CatalogEntry?)Clone(c)).ToList(),
-                ActiveId = _activeId,
+                ActiveId = _preferredId ?? _activeId,
                 DefaultSeeded = _defaultSeeded,
             };
             using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -403,12 +509,24 @@ public sealed class CatalogRegistry
                 JsonSerializer.Serialize(stream, state, WriteOptions);
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(tmp, _path, overwrite: true);
-            return true;
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.Move(tmp, _path, overwrite: true);
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 5)
+                {
+                    // Something (antivirus, a backup tool) has the file open for a moment — replacing it then
+                    // fails with access denied. A genuinely read-only file fails the same way, just ~250 ms later.
+                    Thread.Sleep(50);
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A read-only or locked list file: nothing changed on disk; the next successful change rewrites it.
+            // A read-only, locked or unwritable list file: nothing changed on disk.
             try { if (File.Exists(tmp)) File.Delete(tmp); }
             catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
             return false;

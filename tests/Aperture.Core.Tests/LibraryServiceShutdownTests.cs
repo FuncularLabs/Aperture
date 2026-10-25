@@ -235,6 +235,37 @@ public class LibraryServiceShutdownTests
         Assert.Null(ex); // an escape here would end the app via the dispatcher's unhandled-exception handler
     }
 
+    // --- "Is this library open in some Aperture window?" ---------------------------------------
+
+    [Fact]
+    public async Task IsOpen_IsTrueWhileAnyServiceHasTheFolderOpen_WhateverTheSpelling()
+    {
+        using var outer = new TempDir();
+        var dir = outer.Combine("lib");
+        Assert.False(LibraryService.IsOpen(dir));
+
+        var service = new LibraryService(dir);
+        Assert.True(LibraryService.IsOpen(dir));
+        Assert.True(LibraryService.IsOpen(dir.ToUpperInvariant() + Path.DirectorySeparatorChar));
+
+        await service.ShutdownAsync();
+        Assert.False(LibraryService.IsOpen(dir));
+    }
+
+    [Fact]
+    public void IsOpen_IsFalseAfterDispose_AndAfterAFailedOpen()
+    {
+        using var dir = new TempDir();
+        new LibraryService(dir.Path).Dispose();
+        Assert.False(LibraryService.IsOpen(dir.Path));
+
+        var bad = dir.Combine("bad");
+        Directory.CreateDirectory(bad);
+        File.WriteAllText(Path.Combine(bad, ApertureDatabase.MetadataFileName), new string('x', 512));
+        Assert.ThrowsAny<Exception>(() => new LibraryService(bad));
+        Assert.False(LibraryService.IsOpen(bad));
+    }
+
     // --- The database ---------------------------------------------------------------------------
 
     [Fact]

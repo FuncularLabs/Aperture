@@ -2,7 +2,7 @@ using System.Windows;
 
 namespace Aperture.App;
 
-/// <summary>A small modal text-input prompt (WPF has no built-in input box). Used for renaming a library.</summary>
+/// <summary>A small modal text-input prompt (WPF has no built-in input box). Used to name a new library and to rename one.</summary>
 public partial class TextPromptDialog : Window
 {
     private TextPromptDialog()
