@@ -7,6 +7,9 @@ public sealed class SettingsService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    /// <summary>The settings file's name inside a library's data directory.</summary>
+    public const string FileName = "settings.json";
+
     private readonly string _path;
     private readonly Lock _gate = new();
     private ApertureSettings _current;
@@ -16,7 +19,7 @@ public sealed class SettingsService
 
     public SettingsService(string dataDir)
     {
-        _path = Path.Combine(dataDir, "settings.json");
+        _path = Path.Combine(dataDir, FileName);
         _current = Load();
     }
 

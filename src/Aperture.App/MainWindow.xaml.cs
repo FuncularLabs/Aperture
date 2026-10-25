@@ -17,9 +17,36 @@ public partial class MainWindow : Window
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Closing += OnClosing;
+        DataContextChanged += OnDataContextChanged;
     }
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;
+
+    /// <summary>
+    /// A catalog switch gives the window a new view model. Move the handlers <see cref="OnLoaded"/> attached
+    /// from the old view model to the new one, and forget remembered scroll positions — they're keyed by
+    /// per-library root ids, so one library's offsets would land on another library's folders.
+    /// </summary>
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.OldValue is MainViewModel old)
+        {
+            old.ViewApplying -= OnViewApplying;
+            old.ViewApplied -= OnViewApplied;
+            old.PropertyChanged -= OnViewModelPropertyChanged;
+        }
+        if (!IsLoaded || e.NewValue is not MainViewModel vm)
+            return; // the first view model is wired up in OnLoaded
+
+        _scrollByLocation.Clear();
+        _lastLocationKey = vm.LocationKey;
+        vm.ViewApplying += OnViewApplying;
+        vm.ViewApplied += OnViewApplied;
+        vm.PropertyChanged += OnViewModelPropertyChanged;
+        ConfigurePreviewLayout(vm.PreviewMode);
+        Dispatcher.BeginInvoke(new Action(FocusTreeWithoutChangingSelection),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 
     /// <summary>Restore window geometry before the window is shown, so there's no reposition flash.</summary>
     private void OnSourceInitialized(object? sender, EventArgs e)

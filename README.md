@@ -31,6 +31,10 @@ on your machine — it never uploads anything or phones home.
 
 - **Union across folders.** Add folders from anywhere on disk and browse them as one
   date-sorted view; per-folder include toggles and aliases.
+- **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
+  each other's folders, tags, or search results, and switch between them from the library
+  menu at the top of the folder pane. Each library has its own index, thumbnail cache, and
+  settings.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and
   square, center-cropped tiles.
 - **Collapsible date sections** that auto-collapse older buckets, so you land on ~2
@@ -82,9 +86,23 @@ pwsh ./publish.ps1 -SelfContained  # bundles the runtime (portable, larger)
 
 ## Data & privacy
 
-Everything is local. The index, thumbnail cache, and settings live in
-`%LOCALAPPDATA%\Aperture` (`aperture.db`, `thumbs.db`, `settings.json`). Delete that folder
-to reset from scratch. Set the `APERTURE_DATA_DIR` environment variable to relocate it.
+Everything is local. Each library keeps its index, thumbnail cache, and settings in a folder
+of its own (`aperture.db`, `thumbs.db`, `settings.json`):
+
+- Your first library, **Default**, lives in `%LOCALAPPDATA%\Aperture`.
+- **New library…** creates a library in a new folder wherever you choose (Aperture suggests
+  `%LOCALAPPDATA%\Aperture Libraries`). **Open library…** adds a library that already exists.
+- The list of your libraries is `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`.
+
+**Delete library files** (library menu) deletes only Aperture's own files for a library you
+aren't in — the index, thumbnail cache, and settings, which hold that library's tags and notes.
+It never deletes your photos or anything else in that folder. To reset Aperture completely,
+close it and delete `%LOCALAPPDATA%\Aperture`, `%LOCALAPPDATA%\Aperture Libraries`, and any
+library folders you created elsewhere.
+
+Set the `APERTURE_DATA_DIR` environment variable to run against one data folder instead (handy
+for testing): Aperture then uses only that folder, ignores the library list, and hides the
+library menu.
 
 > **Upgrading from the older "Reel" build?** On first launch Aperture moves an existing
 > `%LOCALAPPDATA%\Reel` store into the new location automatically — your index and tags

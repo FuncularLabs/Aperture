@@ -53,4 +53,40 @@ public class SettingsAndFormatsTests
         Assert.False(second.Current.IncludeVideos);
         Assert.Equal("{name}", second.Current.CaptionFormat);
     }
+
+    [Fact]
+    public void Settings_CorruptFile_FallsBackToDefaults()
+    {
+        using var dir = new TempDir();
+        File.WriteAllText(dir.Combine(SettingsService.FileName), "{ not json");
+
+        var settings = new SettingsService(dir.Path);
+
+        Assert.Equal(2, settings.Current.DefaultZoom);
+    }
+
+    [Fact]
+    public void Settings_UnwritableFile_UpdateKeepsTheChange_RaisesChanged_AndDoesNotThrow()
+    {
+        using var dir = new TempDir();
+        var path = dir.Combine(SettingsService.FileName);
+        var settings = new SettingsService(dir.Path);
+        settings.Update(s => s.DefaultZoom = 1);
+        var raised = false;
+        settings.Changed += (_, _) => raised = true;
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            settings.Update(s => s.DefaultZoom = 4);
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.True(raised);
+        Assert.Equal(4, settings.Current.DefaultZoom);                   // this session keeps it
+        Assert.Equal(1, new SettingsService(dir.Path).Current.DefaultZoom); // but it couldn't be saved
+    }
 }

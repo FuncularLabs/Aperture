@@ -5,6 +5,24 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ## [Unreleased]
 
+### Added
+- **Separate libraries.** Keep several independent libraries — say *Work* and *Personal* — and
+  switch between them from the library menu at the top of the folder pane. Each library has its
+  own folders, index, thumbnail cache, tags, notes, and settings, and never sees another's.
+  Your existing library becomes **Default**, with nothing to migrate.
+  - **New library…** creates a library in a new folder of its own, in a location you choose.
+  - **Open library…** adds a library that already exists (a folder holding `aperture.db`).
+  - **Remove from list** forgets a library you aren't in; its files stay where they are.
+  - **Delete library files** deletes Aperture's own files for a library you aren't in — its
+    index, thumbnail cache, and settings — and never your photos or anything else in its folder.
+- If the library you used last can't be opened (for example, it's on a drive that isn't
+  connected), Aperture opens another one — Default, if it's there — and tells you why, instead
+  of failing to start.
+
+### Changed
+- `APERTURE_DATA_DIR` now pins Aperture to that one data folder: the library list is ignored and
+  the library menu is hidden.
+
 ## [0.8.9] - 2026-10-23
 
 ### Changed

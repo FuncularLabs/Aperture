@@ -1,51 +1,63 @@
 using System.IO;
-using System.Windows;
 using System.Windows.Input;
 using Aperture.App.Mvvm;
+using Aperture.App.Services;
 using Aperture.Core.Library;
 using Aperture.Core.Storage;
-using Microsoft.Win32;
 
 namespace Aperture.App.ViewModels;
 
 /// <summary>
-/// The catalog switcher shown in the nav (Option B increment 4): the active catalog's name plus a menu to
-/// switch to another library, create or open one, rename, and remove it (optionally deleting its files).
+/// The library switcher in the nav: the open library's name, plus commands to switch to another library,
+/// create one (in a folder of its own), open an existing one, rename the open one, and remove or delete
+/// libraries you aren't in. Deleting removes only Aperture's own files for that library.
 ///
-/// Persists across view-model rebuilds — App injects the single instance into each <see cref="MainViewModel"/>
-/// and calls <see cref="Refresh"/> after a switch so the bar reflects the new active catalog. It is
-/// <c>null</c> on the view model when <c>APERTURE_DATA_DIR</c> pins a single catalog, and the switcher hides.
+/// One instance lives for the whole session: App injects it into each <see cref="MainViewModel"/> and calls
+/// <see cref="Refresh"/> after a switch. It is <c>null</c> on the view model when <c>APERTURE_DATA_DIR</c> pins a
+/// single library, and the switcher is hidden. Commands are disabled while one of them is running.
 /// </summary>
 public sealed class CatalogBarViewModel : ObservableObject
 {
     private readonly CatalogService _catalog;
-    private readonly Func<string, Task> _switchTo;        // App.SwitchCatalogAsync — runs the full orchestration
-    private readonly Func<string, string, Task> _create;  // App.CreateCatalogAsync
+    private readonly ICatalogDialogs _dialogs;
+    private readonly string _librariesDir; // where New library suggests creating the folder
+    private bool _isBusy;
 
-    public CatalogBarViewModel(CatalogService catalog, Func<string, Task> switchTo, Func<string, string, Task> create)
+    public CatalogBarViewModel(CatalogService catalog, ICatalogDialogs dialogs, string librariesDir)
     {
         _catalog = catalog;
-        _switchTo = switchTo;
-        _create = create;
+        _dialogs = dialogs;
+        _librariesDir = librariesDir;
 
-        SwitchCommand = new RelayCommand<string>(id => Run(() => _switchTo(id)));
-        NewLibraryCommand = new RelayCommand(() => PickAndOpen("Choose a folder for the new library"));
-        OpenLibraryCommand = new RelayCommand(() => PickAndOpen("Open an existing library folder"));
-        RenameCommand = new RelayCommand(Rename);
-        RemoveCommand = new RelayCommand(() => RemoveActive(deleteFiles: false), () => HasOthers);
-        DeleteFilesCommand = new RelayCommand(() => RemoveActive(deleteFiles: true), () => HasOthers);
+        SwitchCommand = new RelayCommand<string>(id => Start(() => _catalog.SwitchToAsync(id)), _ => !IsBusy);
+        NewLibraryCommand = new RelayCommand(() => Start(NewLibraryAsync), () => !IsBusy);
+        OpenLibraryCommand = new RelayCommand(() => Start(OpenLibraryAsync), () => !IsBusy);
+        RenameCommand = new RelayCommand(() => Start(RenameAsync), () => !IsBusy);
+        RemoveCommand = new RelayCommand<string>(id => Start(() => _catalog.RemoveAsync(id)), _ => !IsBusy);
+        DeleteFilesCommand = new RelayCommand<string>(id => Start(() => DeleteFilesAsync(id)), _ => !IsBusy);
 
         Refresh();
     }
 
-    /// <summary>The active catalog's display name, shown on the switcher.</summary>
+    /// <summary>The open library's name, shown on the switcher.</summary>
     public string ActiveName => _catalog.ActiveCatalog?.Name ?? "Library";
 
-    /// <summary>The catalogs other than the active one — the switch targets.</summary>
+    /// <summary>Every library except the open one, most recently opened first: switch, remove and delete targets.</summary>
     public IReadOnlyList<CatalogEntry> OtherCatalogs { get; private set; } = [];
 
-    /// <summary>True when there is at least one other catalog to switch to (and thus one to fall back on).</summary>
+    /// <summary>True when there is at least one library besides the open one.</summary>
     public bool HasOthers => OtherCatalogs.Count > 0;
+
+    /// <summary>True while a switcher command runs; every command is disabled meanwhile.</summary>
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            if (SetProperty(ref _isBusy, value))
+                CommandManager.InvalidateRequerySuggested();
+        }
+    }
 
     public ICommand SwitchCommand { get; }
     public ICommand NewLibraryCommand { get; }
@@ -54,89 +66,104 @@ public sealed class CatalogBarViewModel : ObservableObject
     public ICommand RemoveCommand { get; }
     public ICommand DeleteFilesCommand { get; }
 
-    /// <summary>Re-reads the registry so the bar reflects the current active catalog and the others.</summary>
+    /// <summary>The command that is running (or last ran). Tests await it; the app doesn't need to.</summary>
+    internal Task? PendingOperation { get; private set; }
+
+    /// <summary>Re-reads the library list so the switcher shows the open library and the others.</summary>
     public void Refresh()
     {
-        var active = _catalog.ActiveCatalog;
-        OtherCatalogs = _catalog.Registry.List().Where(c => c.Id != active?.Id).ToList();
+        var activeId = _catalog.ActiveCatalog?.Id;
+        OtherCatalogs = _catalog.Registry.List()
+            .Where(c => c.Id != activeId)
+            .OrderByDescending(c => c.LastOpenedTicks)
+            .ThenBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
         OnPropertyChanged(nameof(ActiveName));
         OnPropertyChanged(nameof(OtherCatalogs));
         OnPropertyChanged(nameof(HasOthers));
-        CommandManager.InvalidateRequerySuggested();
     }
 
-    private void PickAndOpen(string title)
+    private void Start(Func<Task> operation)
     {
-        var dialog = new OpenFolderDialog { Title = title };
-        if (dialog.ShowDialog() != true)
-            return;
-        var dir = dialog.FolderName;
-        Run(() => _create(DeriveName(dir), dir));
+        if (IsBusy)
+            return; // one at a time: a double-click must not start a second switch
+        PendingOperation = RunAsync(operation);
     }
 
-    private void Rename()
+    private async Task RunAsync(Func<Task> operation)
+    {
+        IsBusy = true;
+        try
+        {
+            await operation();
+        }
+        catch (CatalogException ex)
+        {
+            _dialogs.ShowMessage("Aperture", ex.Message, isError: true);
+        }
+        catch (Exception ex)
+        {
+            _dialogs.ShowMessage("Aperture", $"The library operation failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            IsBusy = false;
+            Refresh();
+        }
+    }
+
+    private async Task NewLibraryAsync()
+    {
+        var name = _dialogs.PromptText("New library", "Name for the new library:", "");
+        if (name is null)
+            return;
+        name = _catalog.CheckNewLibraryName(name); // say what's wrong with the name before asking where
+
+        Directory.CreateDirectory(_librariesDir); // so the folder picker can start there
+        var parent = _dialogs.PickFolder($"Choose where to create the \"{name}\" library folder", _librariesDir);
+        if (parent is null)
+            return;
+        await _catalog.CreateLibraryAsync(name, parent);
+    }
+
+    private async Task OpenLibraryAsync()
+    {
+        var dir = _dialogs.PickFolder("Open an existing Aperture library folder", _librariesDir);
+        if (dir is null)
+            return;
+        await _catalog.OpenLibraryAsync(dir);
+    }
+
+    private Task RenameAsync()
     {
         var active = _catalog.ActiveCatalog;
         if (active is null)
-            return;
-
-        var name = TextPromptDialog.Prompt("Rename library", "Library name:", active.Name);
-        if (string.IsNullOrWhiteSpace(name) || name.Trim() == active.Name)
-            return;
-
-        _catalog.Registry.Rename(active.Id, name.Trim());
-        Refresh();
+            return Task.CompletedTask;
+        var name = _dialogs.PromptText("Rename library", "Library name:", active.Name);
+        if (name is not null && name.Trim() != active.Name)
+            _catalog.Rename(active.Id, name);
+        return Task.CompletedTask;
     }
 
-    // Removing the library you're in means first moving to another one, then forgetting (or deleting) the
-    // one you left — you can't tear down the catalog that's currently open. Disabled when it's the only one.
-    private async void RemoveActive(bool deleteFiles)
+    private async Task DeleteFilesAsync(string id)
     {
-        var active = _catalog.ActiveCatalog;
-        var fallback = OtherCatalogs.FirstOrDefault();
-        if (active is null || fallback is null)
+        var entry = _catalog.Registry.List().FirstOrDefault(c => c.Id == id);
+        if (entry is null)
+            return;
+        if (!_dialogs.Confirm("Delete library files", DeleteWarning(entry)))
             return;
 
-        if (deleteFiles && !ConfirmDelete(active))
-            return;
-
-        var removedId = active.Id;
-        try
-        {
-            await _switchTo(fallback.Id); // leave the catalog (shuts its library down) before touching its files
-            _catalog.Registry.Remove(removedId, deleteFiles);
-            Refresh();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Could not remove the library: {ex.Message}", "Aperture",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        var result = await _catalog.DeleteFilesAsync(id);
+        if (result.Outcome == CatalogDeletionOutcome.PartiallyDeleted)
+            _dialogs.ShowMessage("Aperture",
+                $"\"{entry.Name}\" was removed from the list, but some of its files couldn't be deleted " +
+                $"(another program may be using them):\n\n{string.Join("\n", result.FilesLeft)}",
+                isError: true);
     }
 
-    private static bool ConfirmDelete(CatalogEntry catalog) =>
-        MessageBox.Show(
-            $"Delete the library \"{catalog.Name}\" and all of its files in:\n\n{catalog.Dir}\n\n" +
-            "Your original photos are not touched — only Aperture's index and thumbnail cache for this " +
-            "library are deleted. This cannot be undone.",
-            "Delete library files", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
-
-    private static string DeriveName(string dir)
-    {
-        var name = new DirectoryInfo(dir).Name;
-        return string.IsNullOrWhiteSpace(name) ? "Library" : name;
-    }
-
-    private static async void Run(Func<Task> action)
-    {
-        try
-        {
-            await action();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Catalog operation failed: {ex.Message}", "Aperture",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
+    private static string DeleteWarning(CatalogEntry entry) =>
+        $"Delete the library \"{entry.Name}\"?\n\n" +
+        $"This permanently deletes Aperture's index, thumbnail cache and settings for it from:\n\n{entry.Dir}\n\n" +
+        "The tags and notes you added in this library are deleted with it. Your photos and videos, and any " +
+        "other files in that folder, are not touched. This can't be undone.";
 }

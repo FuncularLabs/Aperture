@@ -1,13 +1,15 @@
 using Aperture.Core.Library;
+using Aperture.Core.Models;
+using Aperture.Core.Storage;
 using Aperture.Core.Tests.Support;
 
 namespace Aperture.Core.Tests;
 
 /// <summary>
 /// Teardown contract for a catalog switch (Option B increment 2). A switch must cancel any in-flight
-/// index, wait for it to settle, and release the database files before the next catalog opens — without
-/// leaving a torn write. The indexer commits in batches and rolls back only its in-flight batch on
-/// cancel, so the DB is always left consistent; these tests pin the service-level orchestration of that.
+/// index, wait for it to stop, and release the database files before the next catalog opens. The tests
+/// that matter hold an index mid-run (<see cref="BlockingProgress"/>) so they can tell "cancelled and
+/// awaited" apart from "it happened to finish first".
 /// </summary>
 public class LibraryServiceShutdownTests
 {
@@ -34,28 +36,63 @@ public class LibraryServiceShutdownTests
     }
 
     [Fact]
-    public async Task ShutdownAsync_AwaitsInFlightIndex_AndLeavesDbConsistent()
+    public async Task ShutdownAsync_CancelsAndWaitsFor_AnIndexHeldMidRun()
     {
         using var dataDir = new TempDir();
         using var lib = new TempDir();
-        WriteImages(lib.Path, 12);
+        WriteImages(lib.Path, 3);
+        var service = new LibraryService(dataDir.Path);
+        var held = new BlockingProgress();
+        var indexing = service.IndexRootAsync(service.AddRoot(lib.Path, "L"), held);
+        Assert.True(held.Entered.Wait(5000));
 
+        var shutdown = service.ShutdownAsync();
+        await Task.Delay(200);
+        Assert.False(shutdown.IsCompleted); // it waits for the running index before tearing down
+
+        held.Release();
+        await shutdown;
+
+        Assert.True(indexing.IsCompleted);
+        Assert.IsAssignableFrom<OperationCanceledException>(await Record.ExceptionAsync(() => indexing)); // cancelled, not finished
+    }
+
+    [Fact]
+    public async Task IndexRootAsync_DuringTheShutdownWindow_IsRefused()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        WriteImages(lib.Path, 1);
         var service = new LibraryService(dataDir.Path);
         var root = service.AddRoot(lib.Path, "L");
+        var held = new BlockingProgress();
+        var indexing = service.IndexRootAsync(root, held);
+        Assert.True(held.Entered.Wait(5000));
 
-        var indexTask = service.IndexRootAsync(root);
+        var shutdown = service.ShutdownAsync(); // waiting on the held index: not yet torn down
+        Assert.False(shutdown.IsCompleted);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => service.IndexRootAsync(root));
+
+        held.Release();
+        await shutdown;
+        await Record.ExceptionAsync(() => indexing);
+    }
+
+    [Fact]
+    public async Task ShutdownAsync_AfterAnIndex_LeavesADatabaseAFreshServiceCanRead()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        WriteImages(lib.Path, 4);
+        var service = new LibraryService(dataDir.Path);
+        var root = service.AddRoot(lib.Path, "L");
+        await service.IndexRootAsync(root);
+
         await service.ShutdownAsync();
 
-        // ShutdownAsync must not return while an index is still running.
-        Assert.True(indexTask.IsCompleted);
-
-        // The DB is readable and internally consistent from a fresh service on the same dir, whether the
-        // index finished or was cancelled mid-batch (committed batches persist; the in-flight batch rolled
-        // back — never a torn row).
         using var reopened = new LibraryService(dataDir.Path);
-        var rows = reopened.GetUnion();
-        Assert.InRange(rows.Count, 0, 12);
-        Assert.Equal(rows.Count, reopened.CountForRoot(root.Id));
+        Assert.Equal(4, reopened.GetUnion().Count);
+        Assert.Equal(4, reopened.CountForRoot(root.Id));
     }
 
     [Fact]
@@ -70,8 +107,6 @@ public class LibraryServiceShutdownTests
         await service.IndexRootAsync(service.AddRoot(lib.Path, "L"));
         await service.ShutdownAsync();
 
-        // No open handle lingers on aperture.db / thumbs.db (provider disposed + pool cleared), so a
-        // catalog switch — or an explicit "delete library files" — can remove the directory.
         Directory.Delete(dataDir, recursive: true);
         Assert.False(Directory.Exists(dataDir));
     }
@@ -97,8 +132,8 @@ public class LibraryServiceShutdownTests
         var service = new LibraryService(dataDir.Path);
 
         await service.ShutdownAsync();
-        await service.ShutdownAsync(); // second call is a no-op, not a throw
-        service.Dispose();             // disposing after an async shutdown is safe
+        await service.ShutdownAsync();
+        service.Dispose();
     }
 
     [Fact]
@@ -115,5 +150,118 @@ public class LibraryServiceShutdownTests
 
         Directory.Delete(dataDir, recursive: true);
         Assert.False(Directory.Exists(dataDir));
+    }
+
+    // --- Watchers -----------------------------------------------------------------------------
+
+    [Fact]
+    public void Watch_TracksOneWatcherPerExistingRoot_AndStopWatchingRemovesIt()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        using var service = new LibraryService(dataDir.Path);
+        var root = service.AddRoot(lib.Path, "L");
+        var missing = service.AddRoot(Path.Combine(lib.Path, "not-there"), "Missing");
+
+        service.Watch(root);
+        service.Watch(root);    // already watched
+        service.Watch(missing); // no folder, nothing to watch
+        Assert.Equal(1, service.WatcherCount);
+
+        service.StopWatching(root.Id);
+        Assert.Equal(0, service.WatcherCount);
+    }
+
+    [Fact]
+    public async Task ShutdownAsync_StopsEveryWatcher()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        var service = new LibraryService(dataDir.Path);
+        service.Watch(service.AddRoot(lib.Path, "L"));
+        Assert.Equal(1, service.WatcherCount);
+
+        await service.ShutdownAsync();
+
+        Assert.Equal(0, service.WatcherCount);
+    }
+
+    [Fact]
+    public async Task Watch_AfterShutdown_DoesNotArmANewWatcher()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        var service = new LibraryService(dataDir.Path);
+        var root = service.AddRoot(lib.Path, "L");
+        await service.ShutdownAsync();
+
+        service.Watch(root); // a late index completion re-arming its watcher
+
+        Assert.Equal(0, service.WatcherCount);
+    }
+
+    // --- Reads that race a switch -------------------------------------------------------------
+
+    [Fact]
+    public async Task GetOrCreateThumbnail_AfterShutdown_ReturnsNull_InsteadOfThrowing()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        TestImages.Write(Path.Combine(lib.Path, "a.jpg"), 64, 64);
+        var service = new LibraryService(dataDir.Path);
+        await service.IndexRootAsync(service.AddRoot(lib.Path, "L"));
+        var row = service.GetUnion().Single();
+
+        await service.ShutdownAsync(); // a catalog switch closed the library while a tile was queued
+
+        Assert.Null(service.GetOrCreateThumbnail(row.Item.Id, row.FullPath, ThumbSize.Large, row.Item.MTimeUtc.Ticks, isVideo: false));
+    }
+
+    [Fact]
+    public async Task TileThumbnailLoad_QueuedAcrossASwitch_CompletesWithoutThrowing()
+    {
+        using var dataDir = new TempDir();
+        using var lib = new TempDir();
+        TestImages.Write(Path.Combine(lib.Path, "a.jpg"), 64, 64);
+        var service = new LibraryService(dataDir.Path);
+        await service.IndexRootAsync(service.AddRoot(lib.Path, "L"));
+        var row = service.GetUnion().Single();
+        var thumbnails = new Aperture.App.Services.ThumbnailService(service); // what TileVm.BeginLoad (async void) awaits
+
+        await service.ShutdownAsync();
+
+        var ex = await Record.ExceptionAsync(() =>
+            thumbnails.LoadAsync(row.Item.Id, row.FullPath, false, ThumbSize.Large, row.Item.MTimeUtc.Ticks));
+        Assert.Null(ex); // an escape here would end the app via the dispatcher's unhandled-exception handler
+    }
+
+    // --- The database ---------------------------------------------------------------------------
+
+    [Fact]
+    public void Database_AfterDispose_RefusesUse_InsteadOfReopeningFiles()
+    {
+        using var dir = new TempDir();
+        var db = new ApertureDatabase(dir.Path);
+        db.Initialize();
+
+        db.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => db.OpenMetadata());
+        Assert.Throws<ObjectDisposedException>(() => db.OpenThumbnails());
+        Assert.Throws<ObjectDisposedException>(() => db.Provider);
+        db.Dispose(); // idempotent
+    }
+
+    [Fact]
+    public void Constructor_ThatCannotOpenTheDatabase_Throws_AndLetsGoOfTheFiles()
+    {
+        using var dir = new TempDir();
+        var db = Path.Combine(dir.Path, ApertureDatabase.MetadataFileName);
+        File.WriteAllText(db, new string('x', 512)); // not a SQLite database
+
+        Assert.ThrowsAny<Exception>(() => new LibraryService(dir.Path));
+
+        File.Delete(db); // nothing is left holding it open
+        Assert.False(File.Exists(db));
     }
 }

@@ -16,4 +16,8 @@
     <PackageReference Include="SkiaSharp" Version="4.148.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aperture.Core.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -578,10 +578,11 @@
             <Border Grid.Column="0" Background="{StaticResource CanvasPanel}" BorderBrush="{StaticResource CanvasLine}"
                     BorderThickness="0,0,1,0" KeyboardNavigation.TabNavigation="Once">
                 <DockPanel>
-                    <!-- Catalog switcher (Option B): the active library, with a menu to switch to another,
-                         create/open one, rename, or remove it. Hidden when APERTURE_DATA_DIR pins a single
-                         catalog (Catalog is null then). -->
-                    <Menu DockPanel.Dock="Top" Background="Transparent" Margin="8,10,8,0"
+                    <!-- Library switcher (Option B): the open library, with a menu to switch to another, create
+                         one in a folder of its own, open an existing one, rename the open one, and remove or
+                         delete libraries you aren't in. Hidden when APERTURE_DATA_DIR pins a single library
+                         (Catalog is null then). IsMainMenu="False" keeps Alt / F10 from moving keyboard focus here. -->
+                    <Menu DockPanel.Dock="Top" Background="Transparent" Margin="8,10,8,0" IsMainMenu="False"
                           Visibility="{Binding Catalog, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
                         <MenuItem Padding="6,4" Cursor="Hand"
                                   ToolTip="Switch or manage libraries">
@@ -595,23 +596,49 @@
                                 </StackPanel>
                             </MenuItem.Header>
 
-                            <MenuItem Header="Switch library" ItemsSource="{Binding Catalog.OtherCatalogs}"
+                            <MenuItem Header="Switch to" ItemsSource="{Binding Catalog.OtherCatalogs}"
                                       Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}">
                                 <MenuItem.ItemContainerStyle>
                                     <Style TargetType="MenuItem">
                                         <Setter Property="Header" Value="{Binding Name}" />
+                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
                                         <Setter Property="Command" Value="{Binding Data.Catalog.SwitchCommand, Source={StaticResource Vm}}" />
                                         <Setter Property="CommandParameter" Value="{Binding Id}" />
                                     </Style>
                                 </MenuItem.ItemContainerStyle>
                             </MenuItem>
                             <Separator Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}" />
-                            <MenuItem Header="New library…" Command="{Binding Catalog.NewLibraryCommand}" />
-                            <MenuItem Header="Open library…" Command="{Binding Catalog.OpenLibraryCommand}" />
+                            <MenuItem Header="New library…" Command="{Binding Catalog.NewLibraryCommand}"
+                                      ToolTip="Create a new, empty library in a folder of its own" />
+                            <MenuItem Header="Open library…" Command="{Binding Catalog.OpenLibraryCommand}"
+                                      ToolTip="Add a library that already exists (a folder holding aperture.db)" />
                             <Separator />
-                            <MenuItem Header="Rename…" Command="{Binding Catalog.RenameCommand}" />
-                            <MenuItem Header="Remove from list" Command="{Binding Catalog.RemoveCommand}" />
-                            <MenuItem Header="Delete library files…" Command="{Binding Catalog.DeleteFilesCommand}" />
+                            <MenuItem Header="Rename this library…" Command="{Binding Catalog.RenameCommand}" />
+                            <MenuItem Header="Remove from list" ItemsSource="{Binding Catalog.OtherCatalogs}"
+                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}"
+                                      ToolTip="Forget a library you aren't in. Its files stay; Open library… adds it back.">
+                                <MenuItem.ItemContainerStyle>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Header" Value="{Binding Name}" />
+                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
+                                        <Setter Property="Command" Value="{Binding Data.Catalog.RemoveCommand, Source={StaticResource Vm}}" />
+                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
+                                    </Style>
+                                </MenuItem.ItemContainerStyle>
+                            </MenuItem>
+                            <MenuItem Header="Delete library files" ItemsSource="{Binding Catalog.OtherCatalogs}"
+                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}"
+                                      ToolTip="Delete Aperture's index, thumbnails and settings for a library you aren't in. Your photos are not touched.">
+                                <MenuItem.ItemContainerStyle>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Header" Value="{Binding Name}" />
+                                        <Setter Property="HeaderStringFormat" Value="{}{0}…" />
+                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
+                                        <Setter Property="Command" Value="{Binding Data.Catalog.DeleteFilesCommand, Source={StaticResource Vm}}" />
+                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
+                                    </Style>
+                                </MenuItem.ItemContainerStyle>
+                            </MenuItem>
                         </MenuItem>
                     </Menu>
 

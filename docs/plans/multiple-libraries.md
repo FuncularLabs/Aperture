@@ -1,6 +1,10 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **proposed** · Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 2, after review round 1) ·
+Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
+Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
+logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
+untested WPF shells.
 
 ## Goal
 
@@ -16,9 +20,7 @@ favour of true isolation. It could still be layered on later *inside* a catalog.
 The data layer is already a clean seam:
 
 - `LibraryService(string dataDir)` constructs **everything** — `ApertureDatabase`, all stores, the
-  indexer, the watchers, and `SettingsService` — from one directory. It is `IDisposable`.
-- `App.xaml.cs` already resolves the directory (`APERTURE_DATA_DIR` env override, else
-  `AperturePaths.DefaultDataDir`) and builds `LibraryService` → `MainViewModel` once.
+  indexer, the watchers, and `SettingsService` — from one directory.
 - A "library" therefore == **a data directory** (`aperture.db` + `thumbs.db` + `settings.json`).
 
 So "multiple libraries" = *manage a set of data directories + swap the live `LibraryService` at runtime.*
@@ -27,101 +29,144 @@ teardown/re-init** of the service + view model.
 
 ## Design
 
-### 1. Catalog registry (where the list of libraries lives)
+### 1. Catalog registry — `Aperture.Core.Storage.CatalogRegistry`
 
-A small JSON file **outside** any single catalog, at `%LOCALAPPDATA%\catalogs.json` — i.e. in
-`%LOCALAPPDATA%` itself, the parent of the default data dir (`%LOCALAPPDATA%\Aperture`), **not** inside
-any catalog dir. (Putting it inside the Default catalog would mean "Delete library files…" on Default
-also wipes the registry.) It survives and is shared across catalogs:
+One JSON file, `%LOCALAPPDATA%\Aperture Libraries\catalogs.json` (`CatalogRegistry.DefaultPath`). It sits
+in a sibling of the Default catalog's folder (`%LOCALAPPDATA%\Aperture`), never inside any catalog, so a
+catalog's files and the list of every catalog never share a folder.
 
 ```jsonc
 {
   "catalogs": [
-    { "id": "…guid…", "name": "Personal", "dir": "C:\\Users\\me\\AppData\\Local\\Aperture",      "lastOpenedTicks": … },
-    { "id": "…guid…", "name": "Work",     "dir": "D:\\ApertureCatalogs\\Work",                    "lastOpenedTicks": … }
+    { "id": "…guid…", "name": "Default", "dir": "C:\\Users\\me\\AppData\\Local\\Aperture", "lastOpenedTicks": … },
+    { "id": "…guid…", "name": "Work",    "dir": "D:\\Aperture Libraries\\Work",          "lastOpenedTicks": … }
   ],
-  "activeId": "…guid…"
+  "activeId": "…guid…",
+  "defaultSeeded": true
 }
 ```
 
-- The **existing** `%LOCALAPPDATA%\Aperture` becomes the auto-registered **"Default"** catalog on first
-  run after upgrade (zero migration — it's already a valid catalog dir).
-- New class `Aperture.Core.Storage.CatalogRegistry` (plain JSON load/save; no FunkyORM — it's config,
-  like `SettingsService`): `List()`, `Add(name, dir)`, `Rename(id, name)`, `Remove(id, deleteFiles:false)`,
-  `SetActive(id)`, `Active`.
-- `Remove` only forgets the catalog by default; deleting its files is a separate, explicitly-confirmed action.
+- **First run** registers the existing `%LOCALAPPDATA%\Aperture` as **"Default"** (zero migration) and sets
+  `defaultSeeded`. After that a Default the user removed stays removed — unless no catalog at all is
+  registered, because there must always be one library to open.
+- **Tolerant load.** A missing file is an empty registry. Unreadable JSON (corrupt, or another program's
+  file) is renamed to `catalogs.json.bad-<timestamp>` and never overwritten. Entries without an id, with an
+  empty or relative `dir`, or duplicating another's id or folder are dropped; a dangling `activeId` is
+  cleared. Hand edits may use comments, trailing commas, and any property-name casing; the file is
+  written camelCase.
+- **Durable save.** Write `catalogs.json.tmp`, flush to disk, rename over the file: a crash mid-write can't
+  replace a good list with a torn one. `Save` reports failure.
+- **Several Aperture windows.** Every change re-reads the file under a cross-process mutex and merges, so
+  one window can't drop another's additions. Each window keeps its own active catalog in memory (another
+  window switching doesn't change what this one shows); the file records the most recently switched-to
+  catalog, which the next launch opens. A library a window has open stays listed even if another window
+  removes it.
+- **Remove vs. delete.** `Remove(id)` forgets a catalog; its files stay. `RemoveAndDeleteFiles(id)` forgets it,
+  *then* deletes only Aperture's own files (`CatalogFileNames`: `aperture.db`, `thumbs.db`, their
+  `-wal`/`-shm`/`-journal` files, `settings.json`) and the folder if that leaves it empty. Nothing else in the
+  folder — the user's photos, other files, a nested catalog — is ever deleted. If the forget can't be saved,
+  nothing is deleted; files that can't be deleted (in use) are reported, not swallowed.
 
-### 2. Runtime switch (the load-bearing part)
+### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
-The current app builds the service + VM once and never rebuilds. Switching catalogs means tearing the
-old one down and standing a new one up **without leaking watchers/indexers or corrupting the DB**.
+`CatalogService` owns the registry and the one live `LibraryService`. Invariant: `Current` always
+corresponds to `ActiveCatalog`.
 
-Add to `LibraryService` / `MainViewModel`:
+- **Open the target first.** `SwitchToAsync` opens the target library *before* touching the current one. If
+  that fails (unwritable folder, not a database, locked), the current library stays open and untouched and
+  no event is raised. Only then: `PreparingToSwitch` → `await current.ShutdownAsync()` → swap → `SetActive`
+  → `ActiveLibraryChanged`.
+- **One switch at a time.** A semaphore serializes switch, create, open, remove and delete; a second request
+  waits and then runs (the last request wins). Nothing can open a library and then lose it.
+- **Events on the caller's context.** The shutdown await deliberately has no `ConfigureAwait(false)`, so a
+  switch started on the UI thread raises both events on it — the host rebinds its window in
+  `ActiveLibraryChanged`. (`DisposeAsync` keeps `ConfigureAwait(false)`: `App.OnExit` blocks the UI thread on it.)
+- **Missing libraries aren't recreated.** Only the local Default may be created on the spot. Any other
+  registered library must still have its `aperture.db`; a missing one (deleted folder, drive not connected,
+  or a drive letter now pointing at another disk) is reported, not silently recreated empty.
+- **Launch never bricks.** `Open` tries the active catalog, then Default, then the others most recently
+  opened first, then re-registers Default; it reports which library failed and why in `OpenWarning`, which
+  App shows once the window is up.
+- **Teardown (`LibraryService.ShutdownAsync`).** Cancels in-flight indexes (tracked via `IndexRootAsync`,
+  linked to a shutdown token), waits for them to stop, stops the watchers (no watcher can start afterwards),
+  and disposes the database — the FunkyORM provider plus `SqliteConnection.ClearPool` for both files, so the
+  folder can be deleted. A library that fails to open releases its files too. Once shut down,
+  `GetOrCreateThumbnail` returns `null` instead of throwing, because queued tile loads and previews are
+  `async void` and an exception would end the app.
+- **Host (App + view model).** On `PreparingToSwitch`: `MainViewModel.PrepareForClose()` (stop new indexing,
+  cancel running ones, drop the library subscription; queued work finishes quietly) and disable the window.
+  On `ActiveLibraryChanged`: refresh the switcher, build a new view model, rebind `DataContext`, re-enable.
+  `MainWindow` moves its view-model event handlers to the new view model and forgets scroll positions,
+  which are keyed by per-library root ids.
+- **Deferred: shared window geometry.** Window placement and folder-pane width are still stored per library
+  (in each `settings.json`). Switching doesn't move the window — placement is restored only at launch — but
+  the next launch uses the last-open library's saved placement. Moving those keys to a shared settings file
+  is a follow-up, not part of this branch.
 
-- **Teardown (`LibraryService.Dispose` must be complete):** stop + dispose every `RootWatcher`
-  (already tracked in `_watchers`), **cancel any in-flight index** (the pause/cancel token registry
-  from 0.8.0 already exists — cancel-all on dispose), await those tasks settling, then dispose the DB
-  connections. Add a `DisposeAsync`/`ShutdownAsync` so the switch can await indexers rather than racing
-  a half-written transaction (retry/replay lens: a switch mid-index must not leave a torn write that the
-  next open treats as committed).
-- **Re-init:** the cleanest approach given WPF data-binding is to rebuild the VM and re-point the
-  window's `DataContext`:
-  1. `MainViewModel.PrepareForClose()` — cancel indexers, flush settings, drop event subscriptions.
-  2. `oldLibrary.Dispose()` (await teardown).
-  3. `new LibraryService(newDir)` → `new MainViewModel(...)`.
-  4. `MainWindow.DataContext = newVm` (or raise an app-level `ActiveCatalogChanged` the window handles),
-     then `newVm` runs its normal startup (load union off-thread, spinner, background reconcile).
-- App holds `_library`/`_viewModel` as swappable fields (already fields in `App.xaml.cs`), plus the
-  `CatalogRegistry`. A `SwitchCatalogAsync(id)` on `App` (or a dedicated `CatalogService`) owns the
-  sequence above and is the single entry point.
-- **Window state:** window placement/nav-width are per-catalog today (in each `settings.json`). Decide:
-  keep window geometry global (move those keys to `catalogs.json` or a top-level settings) so switching
-  doesn't jump the window. Low effort; do it.
+### 3. UI — the library switcher
 
-### 3. UI
+At the top of the folder pane: the open library's name with a menu (`CatalogBarViewModel`, dialogs behind
+`ICatalogDialogs` so the logic is testable):
 
-- **Title bar / command bar:** a catalog switcher — the active catalog name with a dropdown listing the
-  others + **New library…**, **Open library…** (folder picker to an existing catalog dir or a new empty
-  one), **Rename**, **Remove from list**, and (guarded) **Delete library files…**.
-- **New library** flow: ask name + location (defaults to `%LOCALAPPDATA%\Aperture\Catalogs\<name>`),
-  create the dir, register, switch to it (empty → first-run "Add folder").
-- **Open library** points at any existing catalog dir (must contain/accept `aperture.db`).
-- Show the active catalog name somewhere persistent (title or the nav header) so users always know which
-  catalog they're in — the #1 Lightroom footgun is editing the wrong catalog.
+- **Switch to ▸** the other libraries, most recently opened first.
+- **New library…** asks for a name (not empty, usable as a folder name, not already taken), then a location
+  (suggesting `%LOCALAPPDATA%\Aperture Libraries`), and creates the library in a new folder
+  `<location>\<name>`. A folder that already exists must be empty.
+- **Open library…** adds an existing library: the folder must already hold `aperture.db`. A folder already in
+  the list just switches; a name clash gets a numbered name ("Photos (2)").
+- **Rename this library…**, **Remove from list ▸**, **Delete library files ▸**. Remove and Delete list only the
+  libraries you aren't in; the delete confirmation says exactly what is deleted and that photos are not.
+- Commands are disabled while one runs. `Alt`/`F10` don't move focus to the menu (`IsMainMenu="False"`).
+- With `APERTURE_DATA_DIR` set, Aperture uses only that folder, ignores the registry, and hides the switcher.
 
 ### 4. Edge cases (the retry/replay + failure lens)
 
-- **Switch while indexing:** cancel + await before swapping (above). Never dispose the DB with an open
-  write transaction.
-- **Catalog dir missing / unwritable at open:** surface a clear error, keep the previous catalog active,
-  don't drop it from the registry.
-- **Same dir opened twice / two app instances on one catalog:** SQLite WAL + `busy_timeout` tolerates
-  reads; a second *writer* instance is already possible today — out of scope here, but note it.
-- **`APERTURE_DATA_DIR` set:** when the env override is present, honour it as a pinned single catalog and
-  hide the switcher (keeps the test/CI story unchanged).
-- **Legacy "Reel" migration:** unchanged — it targets the default dir, which is just the Default catalog.
+| Case | Behaviour |
+|---|---|
+| Switch while indexing | The index is cancelled and awaited before the database closes; the indexer rolls back only its in-flight batch. |
+| Target can't be opened | Opened first, so the current library is untouched; nothing is registered for a failed New/Open. |
+| Registered library missing at switch | Refused with the folder path in the message; not recreated. |
+| Active library missing at launch | Falls back (Default → most recent → re-register Default) with a message; the missing one stays listed. |
+| Two quick switches | Serialized; the last request wins; nothing leaks. |
+| Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*`; sanitized on load; Aperture starts. |
+| Two Aperture windows | Changes merge; neither drops the other's libraries. Two windows writing the *same* library's database is still possible and out of scope. |
+| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved. |
+| Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
-## Work breakdown (test-first)
+## Work breakdown and tests
 
-1. `CatalogRegistry` + JSON round-trip + "register existing default on first run" — **unit tests**
-   (add/rename/remove/setActive/load-missing-file/legacy-default). *Core, no UI.*
-2. `LibraryService.ShutdownAsync` (cancel indexers, stop watchers, dispose) — **unit test** that a
-   dispose mid-(simulated-)index cancels and leaves the DB consistent (open a fresh service on the same
-   dir, assert readable + counts sane).
-3. `App.SwitchCatalogAsync` orchestration + swappable `_library`/`_viewModel` + global window state.
-4. Switcher UI + New/Open/Rename/Remove/Delete dialogs.
-5. Manual verify: create a 2nd catalog, add a folder, switch back and forth, confirm tags/index are
-   isolated; switch mid-index; open a missing dir; `APERTURE_DATA_DIR` still pins.
+| # | Item | Tests (`tests/Aperture.Core.Tests`) |
+|---|---|---|
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (34) |
+| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase` | `LibraryServiceShutdownTests` (15) — the cancel/await tests hold an index mid-run with `BlockingProgress` |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (46) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
+| 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
-## Estimate / risk
+## Revision 2 — what changed after review round 1 (2026-10-25)
 
-- **Core (1–2):** ~1 focused session. Low risk; additive, no existing-DB migration.
-- **Switch orchestration + UI (3–4):** ~1–2 sessions. The *only* real risk is the teardown/re-init race
-  (indexers + watchers + DB), which item 2's async shutdown + test is built to cover.
-- No change to the on-disk schema; existing users' single catalog becomes the Default catalog untouched.
+Two independent reviews of revision 1 (`b60b370..418e5c1`) found 16 problems. The ones that changed this
+design:
+
+- **Delete removed the whole folder** the user picked, photos included (`Directory.Delete(dir, recursive)`).
+  Now only Aperture's own files are deleted, New makes a dedicated folder, Open requires an existing library,
+  and Remove/Delete act only on libraries you aren't in. Revision 1's suggested default location
+  `%LOCALAPPDATA%\Aperture\Catalogs\<name>` nested new libraries inside Default's folder; it's gone.
+- **Revision 1 tore down first and opened second**, so a target that couldn't open left the app on a closed
+  library; it raised `ActiveLibraryChanged` on a thread-pool thread whenever an index was running; it allowed
+  overlapping switches; and launch failed outright when the active library was missing. All four are fixed
+  as described in §2.
+- **The registry moved** from `%LOCALAPPDATA%\catalogs.json` (a generic name at the root of LocalAppData,
+  which another program could own) to `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`, and gained
+  `defaultSeeded`, `.bad-*` quarantine, sanitizing, the cross-process merge, and a save that reports failure.
+- **"Remove the open library by first switching away"** was replaced by acting only on libraries you aren't in.
+- **Tests now have teeth:** revision 1's shutdown tests passed with the cancel or the await deleted; the new
+  ones hold an index mid-run. Revision 1's claim that its tests pinned the indexer's rollback was not true and
+  isn't repeated — that behaviour belongs to the pre-existing `Indexer`.
 
 ## Out of scope (future)
 
 - Named saved views **within** a catalog (Option A) — complementary, can layer on later.
 - Moving/copying items *between* catalogs.
+- Shared window geometry across libraries (see §2).
 - A catalog-picker launch screen (vs. always opening the last-active catalog).

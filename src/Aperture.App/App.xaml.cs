@@ -19,12 +19,6 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private MainWindow? _window;
 
-    /// <summary>True when the user may switch catalogs (not pinned by APERTURE_DATA_DIR). Drives the switcher UI.</summary>
-    public bool CatalogSwitchingEnabled => _catalog is not null;
-
-    /// <summary>The catalog registry + active catalog, when switching is enabled; otherwise null.</summary>
-    public CatalogService? Catalogs => _catalog;
-
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -82,9 +76,9 @@ public partial class App : Application
             // Multi-catalog: the existing default dir auto-registers as the "Default" catalog, and the
             // user can switch between catalogs at runtime. The registry lives outside any catalog.
             _catalog = CatalogService.Open(CatalogRegistry.DefaultPath, AperturePaths.DefaultDataDir);
-            _catalog.PreparingToSwitch += (_, _) => _viewModel?.PrepareForClose();
+            _catalog.PreparingToSwitch += OnPreparingToSwitch;
             _catalog.ActiveLibraryChanged += OnActiveLibraryChanged;
-            _catalogBar = new CatalogBarViewModel(_catalog, SwitchCatalogAsync, CreateCatalogAsync);
+            _catalogBar = new CatalogBarViewModel(_catalog, new WpfCatalogDialogs(), AperturePaths.LibrariesDir);
             library = _catalog.Current;
         }
         else
@@ -98,6 +92,12 @@ public partial class App : Application
         _window = new MainWindow { DataContext = _viewModel };
         _window.Show();
 
+        // The last-used library couldn't be opened (an unplugged drive, a deleted folder), so another was
+        // opened instead. Say which and why, once the window is up.
+        if (_catalog?.OpenWarning is { } warning)
+            _window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+                MessageBox.Show(_window, warning, "Aperture", MessageBoxButton.OK, MessageBoxImage.Warning));
+
         // Cached rows are already visible; reconcile with disk in the background.
         _viewModel.StartBackgroundRefresh();
     }
@@ -106,26 +106,48 @@ public partial class App : Application
         new(library, new ThumbnailService(library), _catalogBar);
 
     /// <summary>
+    /// The target library has opened and the current one is about to close: stop the view model from
+    /// starting work against it, and disable the window so nothing can be clicked against a closing
+    /// library until <see cref="OnActiveLibraryChanged"/> rebinds it.
+    /// </summary>
+    private void OnPreparingToSwitch(object? sender, EventArgs e) => OnUiThread(() =>
+    {
+        _viewModel?.PrepareForClose();
+        if (_window is not null)
+            _window.IsEnabled = false;
+    });
+
+    /// <summary>
     /// After <see cref="CatalogService"/> has swapped in the new catalog's library, rebuild the view model
     /// over it and re-point the window. The old view model was already quiesced via
     /// <see cref="MainViewModel.PrepareForClose"/> (raised as PreparingToSwitch) and is discarded.
     /// </summary>
-    private void OnActiveLibraryChanged(object? sender, EventArgs e)
+    private void OnActiveLibraryChanged(object? sender, EventArgs e) => OnUiThread(() =>
     {
-        _catalogBar?.Refresh(); // reflect the new active catalog before the new view model binds to it
-        _viewModel = BuildViewModel(_catalog!.Current);
-        if (_window is not null)
-            _window.DataContext = _viewModel;
-        _viewModel.StartBackgroundRefresh();
+        try
+        {
+            _catalogBar?.Refresh(); // reflect the new active catalog before the new view model binds to it
+            _viewModel = BuildViewModel(_catalog!.Current);
+            if (_window is not null)
+                _window.DataContext = _viewModel;
+            _viewModel.StartBackgroundRefresh();
+        }
+        finally
+        {
+            if (_window is not null)
+                _window.IsEnabled = true;
+        }
+    });
+
+    // CatalogService raises its events on the caller's context, and the switcher calls it from the UI
+    // thread — so this normally runs inline. The marshal is a guard: a window can only be touched on its own thread.
+    private void OnUiThread(Action action)
+    {
+        if (Dispatcher.CheckAccess())
+            action();
+        else
+            Dispatcher.Invoke(action);
     }
-
-    /// <summary>Switches to a registered catalog. Entry point for the switcher UI (increment 4).</summary>
-    public Task SwitchCatalogAsync(string catalogId) =>
-        _catalog?.SwitchToAsync(catalogId) ?? Task.CompletedTask;
-
-    /// <summary>Creates a new catalog at <paramref name="dir"/> and switches to it.</summary>
-    public Task CreateCatalogAsync(string name, string dir) =>
-        _catalog?.CreateAndSwitchAsync(name, dir) ?? Task.CompletedTask;
 
     protected override void OnExit(ExitEventArgs e)
     {

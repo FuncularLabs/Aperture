@@ -31,8 +31,9 @@ public sealed class LibraryService : IDisposable
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly List<Task> _indexTasks = [];
     private readonly Lock _indexLock = new();
-    private bool _shuttingDown;
+    private volatile bool _shuttingDown; // read lock-free by GetOrCreateThumbnail; written under _indexLock
     private bool _tornDown;
+    private bool _watchersClosed; // guarded by _watchersLock: no watcher may start once teardown stopped them
 
     /// <summary>Raised (on a background thread) when a watched root's files change on disk. Argument is the root id.</summary>
     public event EventHandler<long>? RootChanged;
@@ -45,15 +46,25 @@ public sealed class LibraryService : IDisposable
     public LibraryService(string dataDir)
     {
         _db = new ApertureDatabase(dataDir);
-        _db.Initialize();
-        _roots = new RootStore(_db);
-        _items = new ItemStore(_db);
-        _thumbnails = new ThumbnailStore(_db);
-        _annotations = new AnnotationStore(_db);
-        _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
-        _transfer = new Annotations.AnnotationTransfer(_annotations, _roots);
-        _indexer = new Indexer(_db, _thumbnailGen, new MetadataReader());
-        Settings = new SettingsService(dataDir);
+        try
+        {
+            _db.Initialize();
+            _roots = new RootStore(_db);
+            _items = new ItemStore(_db);
+            _thumbnails = new ThumbnailStore(_db);
+            _annotations = new AnnotationStore(_db);
+            _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
+            _transfer = new Annotations.AnnotationTransfer(_annotations, _roots);
+            _indexer = new Indexer(_db, _thumbnailGen, new MetadataReader());
+            Settings = new SettingsService(dataDir);
+        }
+        catch
+        {
+            // A library that can't be opened (not a database, unwritable, locked) must not keep its
+            // files open: the user may want to fix, move or delete them while Aperture keeps running.
+            _db.Dispose();
+            throw;
+        }
     }
 
     // --- Roots ---------------------------------------------------------------
@@ -107,17 +118,27 @@ public sealed class LibraryService : IDisposable
     /// </summary>
     public byte[]? GetOrCreateThumbnail(long itemId, string path, ThumbSize size, long mtimeTicks, bool isVideo)
     {
-        var bytes = _thumbnails.Get(itemId, size, mtimeTicks);
-        if (bytes is { Length: > 0 })
-            return bytes;
+        try
+        {
+            var bytes = _thumbnails.Get(itemId, size, mtimeTicks);
+            if (bytes is { Length: > 0 })
+                return bytes;
 
-        if (!File.Exists(path))
+            if (!File.Exists(path))
+                return null;
+            var set = isVideo ? _thumbnailGen.GenerateVideo(path, ThumbSizes.All) : _thumbnailGen.Generate(path, ThumbSizes.All);
+            if (set is null)
+                return null;
+            _thumbnails.Put(itemId, mtimeTicks, set);
+            return set.Thumbs.TryGetValue(size, out var data) ? data.Bytes : null;
+        }
+        catch (ObjectDisposedException) when (_shuttingDown)
+        {
+            // A catalog switch closed this library while the request was queued (a tile scrolled into view,
+            // or a preview started, just before the switch). The view asking is going away; there is no
+            // thumbnail to give it. Tile loads and previews are async void, so a throw here would end the app.
             return null;
-        var set = isVideo ? _thumbnailGen.GenerateVideo(path, ThumbSizes.All) : _thumbnailGen.Generate(path, ThumbSizes.All);
-        if (set is null)
-            return null;
-        _thumbnails.Put(itemId, mtimeTicks, set);
-        return set.Thumbs.TryGetValue(size, out var data) ? data.Bytes : null;
+        }
     }
 
     /// <summary>
@@ -204,7 +225,9 @@ public sealed class LibraryService : IDisposable
 
         lock (_watchersLock)
         {
-            if (_watchers.ContainsKey(root.Id))
+            // After teardown a late caller (an index that finished just as the switch began) must not arm
+            // a live watcher on a closed library: it would keep raising RootChanged forever.
+            if (_watchersClosed || _watchers.ContainsKey(root.Id))
                 return;
 
             var watcher = new RootWatcher(root.Path, includeSubdirectories: root.Recursive);
@@ -300,9 +323,16 @@ public sealed class LibraryService : IDisposable
     {
         lock (_watchersLock)
         {
+            _watchersClosed = true;
             foreach (var watcher in _watchers.Values)
                 watcher.Dispose();
             _watchers.Clear();
         }
+    }
+
+    /// <summary>How many roots are being watched. For tests of the teardown contract.</summary>
+    internal int WatcherCount
+    {
+        get { lock (_watchersLock) return _watchers.Count; }
     }
 }

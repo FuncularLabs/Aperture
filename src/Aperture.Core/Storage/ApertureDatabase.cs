@@ -80,15 +80,24 @@ public sealed class ApertureDatabase : IDisposable
     private static SqliteConnection Open(string connectionString)
     {
         var connection = new SqliteConnection(connectionString);
-        connection.Open();
-        using var pragma = connection.CreateCommand();
-        pragma.CommandText =
-            "PRAGMA journal_mode=WAL;" +
-            "PRAGMA synchronous=NORMAL;" +
-            "PRAGMA foreign_keys=ON;" +
-            "PRAGMA busy_timeout=5000;";
-        pragma.ExecuteNonQuery();
-        return connection;
+        try
+        {
+            connection.Open();
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText =
+                "PRAGMA journal_mode=WAL;" +
+                "PRAGMA synchronous=NORMAL;" +
+                "PRAGMA foreign_keys=ON;" +
+                "PRAGMA busy_timeout=5000;";
+            pragma.ExecuteNonQuery();
+            return connection;
+        }
+        catch
+        {
+            // A file SQLite can't use (not a database, or locked) fails here; don't leave it open.
+            connection.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Creates the schema in both files if it does not already exist, then applies migrations.</summary>

@@ -170,7 +170,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var generation = ++_buildGeneration;
         IsLoadingView = true;
 
-        _allRows = await Task.Run(_library.GetUnion);
+        try
+        {
+            _allRows = await Task.Run(_library.GetUnion);
+        }
+        catch (Exception) when (_closing)
+        {
+            return; // switched away while the union was being read; this library is closing (async void: don't throw)
+        }
+        if (_closing)
+            return;
         OnPropertyChanged(nameof(TotalItemCount));
         if (generation != _buildGeneration)
             return; // a data-change rebuild already superseded startup
@@ -182,7 +191,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ViewBuild build;
         try { build = await Task.Run(() => ComputeView(inputs)); }
         catch (OperationCanceledException) { return; }
-        if (generation != _buildGeneration)
+        if (_closing || generation != _buildGeneration)
             return;
 
         ApplyView(build);
@@ -2587,8 +2596,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             });
 
             // Don't re-arm the watcher on a stopped run — a file event would restart the very
-            // indexing the user just paused.
-            if (watchAfter && !canceled)
+            // indexing the user just paused — nor on a library that's closing for a catalog switch.
+            if (watchAfter && !canceled && !_closing)
                 _library.Watch(root);
         }
     }
@@ -2755,8 +2764,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OnRootChanged(object? sender, long rootId)
     {
-        // Fired on a background thread by the watcher (already debounced).
-        var root = _library.GetRoots().FirstOrDefault(r => r.Id == rootId);
+        // Fired on a background thread by the watcher (already debounced). An exception on that timer
+        // thread would end the process, so a library closing for a catalog switch is a quiet no-op.
+        if (_closing)
+            return;
+        Root? root;
+        try
+        {
+            root = _library.GetRoots().FirstOrDefault(r => r.Id == rootId);
+        }
+        catch (Exception) when (_closing)
+        {
+            return;
+        }
         if (root is not null)
             RunOnUi(() => _ = IndexRootAsync(root, watchAfter: false));
     }
@@ -2799,10 +2819,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Quiesces this view model ahead of a catalog switch or app exit: stops new indexing, cancels the
-    /// in-flight ones, and drops the library subscription + background callbacks so nothing writes back to
-    /// a view model (or reads a library) that is going away. The library itself is torn down by its owner
-    /// (the <c>CatalogService</c> / App), not here — a switch awaits <c>LibraryService.ShutdownAsync</c>.
-    /// Idempotent.
+    /// in-flight ones, drops the library subscription, and cancels the debounced rebuild/search. Work already
+    /// queued finishes quietly instead of throwing once the library closes: the index finally, progress
+    /// updates, the startup union read, watcher callbacks and the deferred prune check <c>_closing</c>, and
+    /// thumbnail/preview loads get <c>null</c> from <c>LibraryService.GetOrCreateThumbnail</c>. The library
+    /// itself is torn down by its owner (the <c>CatalogService</c> / App), not here — a switch awaits
+    /// <c>LibraryService.ShutdownAsync</c>. Idempotent.
     /// </summary>
     public void PrepareForClose()
     {
