@@ -462,6 +462,64 @@ public class CatalogServiceTests
         Assert.Equal("Default", service.ActiveCatalog!.Name);
     }
 
+    // Another window's delete of the library in `dir`: it holds the library's lock now, and finishes (database gone,
+    // lock let go) a moment after this window has checked the library is there — so this window meets the delete
+    // while it waits for the lock, or just as it takes it.
+    private static Task DeleteFromAnotherWindowJustAfterTheCheck(CatalogService service, string dir)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deleting = new FileStream(Path.Combine(dir, ApertureDatabase.LockFileName),
+            FileMode.Open, FileAccess.Read, FileShare.None, 1, FileOptions.DeleteOnClose);
+        service.TouchingLibraryFolder = () =>
+        {
+            service.TouchingLibraryFolder = null;
+            new Thread(() =>
+            {
+                Thread.Sleep(20); // the check runs right after this hook; the lock wait lasts far longer
+                File.Delete(Path.Combine(dir, ApertureDatabase.MetadataFileName));
+                deleting.Dispose();
+                done.SetResult();
+            }).Start();
+        };
+        return done.Task;
+    }
+
+    [Fact]
+    public async Task SwitchToAsync_ALibraryDeletedWhileItWaited_FailsAndRecreatesNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        var deleted = DeleteFromAnotherWindowJustAfterTheCheck(service, work.Dir);
+
+        var ex = await Record.ExceptionAsync(() => service.SwitchToAsync(work.Id));
+        await deleted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var io = Assert.IsType<IOException>(ex); // found under the lock, not by the check before it
+        Assert.Contains("any more", io.Message);
+        Assert.False(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName))); // not recreated empty
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+    }
+
+    [Fact]
+    public async Task OpenLibraryAsync_ALibraryDeletedWhileItWaited_FailsAndRegistersNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var found = outer.Combine("found");
+        using (new LibraryService(found)) { }
+        var deleted = DeleteFromAnotherWindowJustAfterTheCheck(service, found);
+
+        var ex = await Record.ExceptionAsync(() => service.OpenLibraryAsync(found));
+        await deleted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var io = Assert.IsType<IOException>(ex);
+        Assert.Contains("any more", io.Message);
+        Assert.False(File.Exists(Path.Combine(found, ApertureDatabase.MetadataFileName)));
+        Assert.DoesNotContain(service.Registry.List(), c => CatalogRegistry.SameDir(c.Dir, found));
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+    }
+
     [Fact]
     public async Task SwitchToAsync_TargetIsAFile_IsRefused_AndKeepsCurrent()
     {
@@ -1086,6 +1144,21 @@ public class CatalogServiceTests
         Assert.Contains(service.Registry.List(), c => c.Id == usb.Id);
         Directory.Move(parked, usb.Dir);
         Assert.True(File.Exists(Path.Combine(usb.Dir, ApertureDatabase.MetadataFileName))); // tags and notes still there
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_OfALibraryAnotherWindowAlreadyDeleted_SaysItWasAlreadyRemoved()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        new CatalogRegistry(regPath).RemoveAndDeleteFiles(work.Id); // another window; its folder goes too
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(work.Id));
+
+        Assert.Contains("already removed", ex.Message); // not "can't reach": there's nothing left to reach
+        Assert.DoesNotContain(service.Registry.List(), c => c.Id == work.Id);
     }
 
     [Fact]

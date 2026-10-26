@@ -171,9 +171,9 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (66) |
-| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (27) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (80) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (70) |
+| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (28) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (83) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -243,8 +243,9 @@ good; Rename and Remove decide "already removed" from the same locked re-read th
 race instead of narrowing it); the last-resort Default is pinned as for-this-launch-only; and the reserved-name
 list is Microsoft's complete one.
 
-Accepted residual (cosmetic): an alias of an already-listed folder is registered as a second entry rather than
-recognised as the same library.
+Accepted residual: an alias of an already-listed folder is registered as a second entry rather than
+recognised as the same library. (Not only cosmetic: deleting the library through one entry leaves the other
+pointing at a library that's gone — opening it then says so, and Remove from list clears it. No data is lost.)
 
 ## Revision 5 — what changed after review round 4 (2026-10-25)
 
@@ -256,7 +257,8 @@ mutex made by an elevated window threw (now treated like a timeout); Rename chec
 stale list (now re-reads); Delete on an unreachable folder reported success (now refuses and keeps the entry);
 the "can't read the list" warning blamed another program in every case (now neutral, with the file's path).
 Tests now pin the "never save over an unread list" guard deterministically (it sits in `Save` itself, so every
-path that saves is covered; an internal hook releases the lock in the exact window for Add, Remove and EnsureDefault), a quarantine move that fails, an
+path that saves is covered; an internal hook releases the lock in the exact window for Add, Remove and EnsureDefault — and, since revision 6,
+Rename and switching too), a quarantine move that fails, an
 access-denied list, the read retry, the *unknown* state, and the lock being taken before any database file is
 opened. And a launch whose first read of the list failed but whose second succeeded now opens the user's own
 library rather than Default.
@@ -272,8 +274,16 @@ after the three-state open check were corrected. New tests pin Switch to, New, O
 stray-lock clean-up, "never creates the folder", and "lists the lock file only if there is one"; the brief-lock
 tests release from a dedicated thread so a busy thread pool can't fail them.
 
+Round 5's second review (of revision 5) also found that revision 5's "can't reach the folder" check read this
+window's copy of the list before re-reading the file, so deleting a library another window had already deleted
+said "can't reach" instead of "already removed"; it now re-reads first. Its probes became tests: a switch to, or
+an Open of, a library deleted while this window waited for its lock fails and recreates nothing; Rename and
+switching never save over a list that couldn't be read; a share that isn't there reads as not open; and the
+elevated-lock tests check that the lock really can't be opened, so they can't pass vacuously.
+
 Accepted residual: at launch, opening the last-used library still touches its folder on the UI thread (before the
-window appears), so a library on an unreachable share can delay startup until Windows gives up on it.
+window appears), so a library on an unreachable share can delay startup until Windows gives up on it (about 40 seconds
+measured), then Aperture opens Default for that launch.
 
 ## Out of scope (future)
 

@@ -18,7 +18,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - If the library you used last can't be opened (for example, it's on a drive that isn't
   connected yet), Aperture opens another one for now — Default, if it's there — and tells you
   why, instead of failing to start. It tries your library again at the next launch.
-- With Aperture open in two windows, neither can remove or delete a library the other has open.
+- With Aperture open in two windows, neither can delete a library the other has open, or remove it from the
+  list while it can tell the library is open.
 
 ### Changed
 - `APERTURE_DATA_DIR` now pins Aperture to that one data folder: the library list is ignored and

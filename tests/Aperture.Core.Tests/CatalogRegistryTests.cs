@@ -731,6 +731,57 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void Rename_AfterAFailedRead_NeverSavesOverTheList()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        a.BetweenReadAndChange = locker.Dispose;
+        Assert.False(a.Rename(one.Id, "Uno"));
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void SetActive_AfterAFailedRead_NeverSavesOverTheList()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        a.BetweenReadAndChange = locker.Dispose;
+        a.SetActive(one.Id); // the switch stands in this window; it just isn't written
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Activate_AfterAFailedRead_NeverSavesOverTheList()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        a.BetweenReadAndChange = locker.Dispose;
+        a.Activate(one, rememberForNextLaunch: false);
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
     public void AChange_WaitsOutABriefReadLock_AndMergesAsUsual()
     {
         using var dir = new TempDir();
@@ -806,13 +857,18 @@ public class CatalogRegistryTests
         Assert.Equal("{ broken", File.ReadAllText(path)); // the bytes it couldn't set aside are still there
     }
 
+    // A registry lock this (unelevated) process isn't allowed to open, as an elevated window's change makes it. The
+    // tests that use it prove nothing if it can be opened after all (say, run as SYSTEM), so that's checked here.
     private static Mutex ARegistryLockOnlyAdminsMayOpen(CatalogRegistry reg)
     {
-        var adminsOnly = new System.Security.AccessControl.MutexSecurity();
-        adminsOnly.AddAccessRule(new System.Security.AccessControl.MutexAccessRule(
+        var systemOnly = new System.Security.AccessControl.MutexSecurity();
+        systemOnly.AddAccessRule(new System.Security.AccessControl.MutexAccessRule(
             new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
             System.Security.AccessControl.MutexRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
-        return System.Threading.MutexAcl.Create(false, reg.MutexName, out _, adminsOnly); // as an elevated window's change makes it
+        var held = System.Threading.MutexAcl.Create(false, reg.MutexName, out var created, systemOnly);
+        Assert.True(created);
+        Assert.ThrowsAny<UnauthorizedAccessException>(() => new Mutex(false, reg.MutexName).Dispose());
+        return held;
     }
 
     [Fact]
@@ -912,6 +968,25 @@ public class CatalogRegistryTests
 
         Assert.Equal([catDir], left); // never empty: the caller would report an empty list as a clean delete
         Assert.True(Directory.Exists(catDir));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_OfALibraryAnotherWindowAlreadyDeleted_SaysItsGone_NotUnreachable()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var reg = new CatalogRegistry(path);
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("Work", catDir);
+        Assert.Equal(CatalogDeletionOutcome.Deleted, new CatalogRegistry(path).RemoveAndDeleteFiles(entry.Id).Outcome); // another window
+        Assert.False(Directory.Exists(catDir)); // its folder went with it
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id); // this window still lists it
+
+        Assert.Equal(CatalogDeletionOutcome.NotFound, result.Outcome);
+        Assert.DoesNotContain(reg.List(), c => c.Id == entry.Id);
     }
 
     [Fact]

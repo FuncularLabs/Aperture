@@ -258,7 +258,7 @@ public sealed class CatalogRegistry
     });
 
     /// <summary>Re-reads the list file, so this instance sees changes made in other Aperture windows.</summary>
-    public void Reload() => Mutate(() => true);
+    public void Reload() => Mutate(() => true, seam: false);
 
     // Caller holds _gate. Best-effort save: this window's choice stands even if it can't be written.
     private void MakeActive(CatalogEntry entry, bool rememberForNextLaunch)
@@ -286,10 +286,14 @@ public sealed class CatalogRegistry
     /// </summary>
     public CatalogDeletion RemoveAndDeleteFiles(string id)
     {
-        // A folder that can't be found or reached (an unplugged drive) has nothing to delete — and forgetting the
-        // library anyway would leave its tags and notes on that drive after the user confirmed deleting them.
-        var known = List().FirstOrDefault(c => c.Id == id);
-        if (known is not null && !Directory.Exists(known.Dir))
+        // Re-read first: another window may already have deleted it, folder and all — that's "already removed", not
+        // "can't reach". A folder that can't be found or reached (an unplugged drive) has nothing to delete, and
+        // forgetting the library anyway would leave its tags and notes on that drive after the user confirmed
+        // deleting them. The folder is checked outside the locks: an offline share can take tens of seconds.
+        var known = Mutate(() => _catalogs.FirstOrDefault(c => c.Id == id) is { } listed ? Clone(listed) : null, seam: false);
+        if (known is null)
+            return new CatalogDeletion(CatalogDeletionOutcome.NotFound, []);
+        if (!Directory.Exists(known.Dir))
             return new CatalogDeletion(CatalogDeletionOutcome.FolderNotFound, []);
 
         var outcome = Mutate(() =>
@@ -419,7 +423,8 @@ public sealed class CatalogRegistry
 
     // Every change: this process's lock, then the cross-process one, then (unless told not to) the latest file,
     // then the change. If another window holds the lock past LockTimeout it goes ahead anyway rather than hang.
-    private T Mutate<T>(Func<T> change, bool refresh = true)
+    // A locked read that changes nothing passes seam: false, so BetweenReadAndChange runs only for changes.
+    private T Mutate<T>(Func<T> change, bool refresh = true, bool seam = true)
     {
         lock (_gate)
         {
@@ -456,7 +461,8 @@ public sealed class CatalogRegistry
                 }
                 if (refresh)
                     RefreshFromDisk(keepActive: true);
-                BetweenReadAndChange?.Invoke();
+                if (seam)
+                    BetweenReadAndChange?.Invoke();
                 return change();
             }
             finally

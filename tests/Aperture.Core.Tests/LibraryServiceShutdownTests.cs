@@ -364,6 +364,13 @@ public class LibraryServiceShutdownTests
     }
 
     [Fact]
+    public void OpenState_IsNotOpen_ForAFolderThatCantBeReached()
+    {
+        // A share that isn't there fails with a network error, not "not found" — and nothing has it open from here.
+        Assert.Equal(LibraryOpenState.NotOpen, LibraryService.OpenState(@"\\localhost\aperture-no-such-share-7f3e\library"));
+    }
+
+    [Fact]
     public void Constructor_WhileTheLibraryIsBeingDeleted_CreatesNoDatabaseFiles()
     {
         using var dir = new TempDir();
