@@ -859,7 +859,7 @@ public class CatalogRegistryTests
 
     // A registry lock this (unelevated) process isn't allowed to open, as an elevated window's change makes it. The
     // tests that use it prove nothing if it can be opened after all (say, run as SYSTEM), so that's checked here.
-    private static Mutex ARegistryLockOnlyAdminsMayOpen(CatalogRegistry reg)
+    private static Mutex ARegistryLockOnlySystemMayOpen(CatalogRegistry reg)
     {
         var systemOnly = new System.Security.AccessControl.MutexSecurity();
         systemOnly.AddAccessRule(new System.Security.AccessControl.MutexAccessRule(
@@ -876,16 +876,33 @@ public class CatalogRegistryTests
     {
         using var dir = new TempDir();
         var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromSeconds(3) };
-        var elevatedWindowsChange = ARegistryLockOnlyAdminsMayOpen(reg);
+        var elevatedWindowsChange = ARegistryLockOnlySystemMayOpen(reg);
         var finishes = new Thread(() => { Thread.Sleep(300); elevatedWindowsChange.Dispose(); }); // its change ends
         finishes.Start();
+        var heldDuringTheChange = false;
+        reg.BetweenReadAndChange = () =>
+        {
+            var anotherWindow = new Thread(() =>
+            {
+                using var other = new Mutex(false, reg.MutexName);
+                var got = other.WaitOne(0);
+                if (got)
+                    other.ReleaseMutex();
+                heldDuringTheChange = !got;
+            });
+            anotherWindow.Start();
+            anotherWindow.Join();
+        };
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
         reg.Add("One", dir.Combine("one"));
         clock.Stop();
+        reg.BetweenReadAndChange = null;
         finishes.Join();
 
         Assert.True(clock.ElapsedMilliseconds >= 200, $"went ahead after {clock.ElapsedMilliseconds} ms instead of waiting");
+        Assert.True(clock.ElapsedMilliseconds < 2000, $"took {clock.ElapsedMilliseconds} ms: it should go on once the other change ends, not at the timeout");
+        Assert.True(heldDuringTheChange, "the change ran without the lock");
         Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
     }
 
@@ -894,7 +911,7 @@ public class CatalogRegistryTests
     {
         using var dir = new TempDir();
         var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromMilliseconds(150) };
-        using var neverEnds = ARegistryLockOnlyAdminsMayOpen(reg);
+        using var neverEnds = ARegistryLockOnlySystemMayOpen(reg);
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
         reg.Add("One", dir.Combine("one")); // goes ahead without the lock rather than hang or fail
@@ -918,8 +935,8 @@ public class CatalogRegistryTests
         var result = reg.RemoveAndDeleteFiles(entry.Id);
         reg.BetweenReadAndChange = null;
 
-        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
-        Assert.Equal([catDir], result.FilesLeft);
+        Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome); // not "some files were left"
+        Assert.Empty(result.FilesLeft);
         Assert.True(File.Exists(Path.Combine(dir.Combine("usb-unplugged"), ApertureDatabase.MetadataFileName)));
     }
 
@@ -950,13 +967,13 @@ public class CatalogRegistryTests
     }
 
     [Fact]
-    public void DeleteCatalogFiles_ThatCantTakeTheLock_WithNoFilesToName_NamesTheFolder()
+    public void DeleteCatalogFiles_ThatCantTakeTheLock_InAFolderWithNoApertureFiles_HasNothingLeft()
     {
         using var dir = new TempDir();
         var catDir = dir.Combine("bare");
         Directory.CreateDirectory(catDir);
-        Acl.DenyCreateFiles(catDir); // the lock can't be taken, and there's no Aperture file to name instead
-        IReadOnlyList<string> left;
+        Acl.DenyCreateFiles(catDir); // the lock can't be taken — but there's nothing of Aperture's to delete anyway
+        IReadOnlyList<string>? left;
         try
         {
             left = CatalogRegistry.DeleteCatalogFiles(catDir);
@@ -966,8 +983,16 @@ public class CatalogRegistryTests
             Acl.RestoreCreateFiles(catDir);
         }
 
-        Assert.Equal([catDir], left); // never empty: the caller would report an empty list as a clean delete
-        Assert.True(Directory.Exists(catDir));
+        Assert.NotNull(left); // the folder was there to look at
+        Assert.Empty(left);
+    }
+
+    [Fact]
+    public void DeleteCatalogFiles_OfAFolderThatIsGone_SaysItCouldntBeReached()
+    {
+        using var dir = new TempDir();
+
+        Assert.Null(CatalogRegistry.DeleteCatalogFiles(dir.Combine("unplugged")));
     }
 
     [Fact]

@@ -462,38 +462,25 @@ public class CatalogServiceTests
         Assert.Equal("Default", service.ActiveCatalog!.Name);
     }
 
-    // Another window's delete of the library in `dir`: it holds the library's lock now, and finishes (database gone,
-    // lock let go) a moment after this window has checked the library is there — so this window meets the delete
-    // while it waits for the lock, or just as it takes it.
-    private static Task DeleteFromAnotherWindowJustAfterTheCheck(CatalogService service, string dir)
-    {
-        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var deleting = new FileStream(Path.Combine(dir, ApertureDatabase.LockFileName),
-            FileMode.Open, FileAccess.Read, FileShare.None, 1, FileOptions.DeleteOnClose);
+    // Another window deletes the library in `dir` after this window has checked it's there and before this window
+    // takes its lock (the hook runs at exactly that point). LibraryServiceShutdownTests covers the same delete
+    // finishing while this window waits for the lock.
+    private static void DeleteFromAnotherWindowJustAfterTheCheck(CatalogService service, string dir) =>
         service.TouchingLibraryFolder = () =>
         {
             service.TouchingLibraryFolder = null;
-            new Thread(() =>
-            {
-                Thread.Sleep(20); // the check runs right after this hook; the lock wait lasts far longer
-                File.Delete(Path.Combine(dir, ApertureDatabase.MetadataFileName));
-                deleting.Dispose();
-                done.SetResult();
-            }).Start();
+            File.Delete(Path.Combine(dir, ApertureDatabase.MetadataFileName));
         };
-        return done.Task;
-    }
 
     [Fact]
-    public async Task SwitchToAsync_ALibraryDeletedWhileItWaited_FailsAndRecreatesNothing()
+    public async Task SwitchToAsync_ALibraryDeletedJustAfterItWasChecked_FailsAndRecreatesNothing()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         var work = AddLibrary(service, "Work", outer.Combine("work"));
-        var deleted = DeleteFromAnotherWindowJustAfterTheCheck(service, work.Dir);
+        DeleteFromAnotherWindowJustAfterTheCheck(service, work.Dir);
 
         var ex = await Record.ExceptionAsync(() => service.SwitchToAsync(work.Id));
-        await deleted.WaitAsync(TimeSpan.FromSeconds(10));
 
         var io = Assert.IsType<IOException>(ex); // found under the lock, not by the check before it
         Assert.Contains("any more", io.Message);
@@ -502,16 +489,15 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task OpenLibraryAsync_ALibraryDeletedWhileItWaited_FailsAndRegistersNothing()
+    public async Task OpenLibraryAsync_ALibraryDeletedJustAfterItWasChecked_FailsAndRegistersNothing()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         var found = outer.Combine("found");
         using (new LibraryService(found)) { }
-        var deleted = DeleteFromAnotherWindowJustAfterTheCheck(service, found);
+        DeleteFromAnotherWindowJustAfterTheCheck(service, found);
 
         var ex = await Record.ExceptionAsync(() => service.OpenLibraryAsync(found));
-        await deleted.WaitAsync(TimeSpan.FromSeconds(10));
 
         var io = Assert.IsType<IOException>(ex);
         Assert.Contains("any more", io.Message);
@@ -1113,15 +1099,18 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task SwitchNewAndOpen_TouchTheLibraryFolderOffTheCallersThread()
+    public async Task SwitchNewAndOpen_TouchLibraryFoldersOffTheCallersThread_AndNotifyOnIt()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         var one = AddLibrary(service, "One", outer.Combine("one"));
         var unlisted = outer.Combine("unlisted");
         using (new LibraryService(unlisted)) { }
-        var threads = new List<int>();
-        service.TouchingLibraryFolder = () => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+        var touches = new List<int>();
+        var notices = new List<int>();
+        service.TouchingLibraryFolder = () => { lock (touches) touches.Add(Environment.CurrentManagedThreadId); };
+        service.PreparingToSwitch += (_, _) => { lock (notices) notices.Add(Environment.CurrentManagedThreadId); };
+        service.ActiveLibraryChanged += (_, _) => { lock (notices) notices.Add(Environment.CurrentManagedThreadId); };
 
         using var ui = new SingleThreadContext();
         await ui.Run(() => service.SwitchToAsync(one.Id));                   // a listed library
@@ -1130,8 +1119,71 @@ public class CatalogServiceTests
         await ui.Run(() => service.OpenLibraryAsync(one.Dir));               // a listed one, by folder
         service.TouchingLibraryFolder = null;
 
-        Assert.Equal(4, threads.Count);
-        Assert.DoesNotContain(ui.ThreadId, threads);
+        Assert.Equal(8, touches.Count); // each opens the next library and closes the one it leaves
+        Assert.DoesNotContain(ui.ThreadId, touches);
+        Assert.Equal(8, notices.Count); // the host rebinds its window in these, so they must arrive on its thread
+        Assert.All(notices, id => Assert.Equal(ui.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task NewAndOpen_CleanUpAfterAFailedSave_OffTheCallersThread()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        var elsewhere = outer.Combine("Elsewhere");
+        using (new LibraryService(elsewhere)) { }
+        var touches = new List<int>();
+        service.TouchingLibraryFolder = () => { lock (touches) touches.Add(Environment.CurrentManagedThreadId); };
+
+        using var ui = new SingleThreadContext();
+        File.SetAttributes(regPath, FileAttributes.ReadOnly);
+        try
+        {
+            await Assert.ThrowsAsync<CatalogException>(() => ui.Run(() => service.CreateLibraryAsync("Work", outer.Path)));
+            await Assert.ThrowsAsync<CatalogException>(() => ui.Run(() => service.OpenLibraryAsync(elsewhere)));
+        }
+        finally
+        {
+            File.SetAttributes(regPath, FileAttributes.Normal);
+        }
+        service.TouchingLibraryFolder = null;
+
+        Assert.Equal(4, touches.Count); // each opened its library, then closed it again when the list couldn't be saved
+        Assert.DoesNotContain(ui.ThreadId, touches);
+        Assert.False(Directory.Exists(outer.Combine("Work")));
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_InAFolderLeftByAnInterruptedNew_UsesIt()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var dir = outer.Combine("Work");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, ApertureDatabase.LockFileName), []); // Aperture closed before it made the database
+
+        await service.CreateLibraryAsync("Work", outer.Path);
+
+        Assert.Equal("Work", service.ActiveCatalog!.Name);
+        Assert.True(File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_InAFolderWhoseOnlyFileIsALockInUse_IsRefused()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var dir = outer.Combine("Work");
+        Directory.CreateDirectory(dir);
+        using var creating = new FileStream(Path.Combine(dir, ApertureDatabase.LockFileName),
+            FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read); // another window is creating it right now
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+
+        Assert.Contains("already exists", ex.Message);
+        Assert.False(File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)));
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
     }
 
     [Fact]

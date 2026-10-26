@@ -337,6 +337,27 @@ public class CatalogBarViewModelTests
         Assert.Contains(settings, message);
     }
 
+    [Fact]
+    public async Task DeleteFiles_WhenTheFolderGoesAwayMidDelete_SaysNothingWasDeleted_AndHowToFinish()
+    {
+        await using var f = new Fixture();
+        var usb = f.AddLibrary("USB");
+        var unplugged = f.Outer.Combine("USB-unplugged");
+        f.Service.Registry.BetweenReadAndChange = () => Directory.Move(usb.Dir, unplugged); // the drive drops mid-delete
+        f.Dialogs.Confirms.Enqueue(true);
+
+        await f.Run(f.Bar.DeleteFilesCommand, usb.Id);
+        f.Service.Registry.BetweenReadAndChange = null;
+
+        var (message, isError) = Assert.Single(f.Dialogs.Messages);
+        Assert.True(isError);
+        Assert.Contains(usb.Dir, message);
+        Assert.Contains("none of its files were deleted", message);
+        Assert.Contains("Open library", message); // how to finish once the drive is back
+        Assert.DoesNotContain("another program", message);
+        Assert.True(File.Exists(Path.Combine(unplugged, ApertureDatabase.MetadataFileName)));
+    }
+
     // --- Busy / errors ----------------------------------------------------------------------------
 
     [Fact]

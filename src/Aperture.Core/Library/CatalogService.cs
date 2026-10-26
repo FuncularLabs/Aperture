@@ -55,8 +55,9 @@ public sealed class CatalogService : IAsyncDisposable
     public event EventHandler? ActiveLibraryChanged;
 
     /// <summary>
-    /// Test seam: runs wherever the service is about to touch a library's folder — opening it (Switch to, New library,
-    /// Open library) or checking whether it's open (Remove, Delete).
+    /// Test seam: runs on the thread where the service touches a library's folder — when opening one (after checking
+    /// it's there, just before taking its lock), closing one (the library a switch leaves, or one a New or Open whose
+    /// list couldn't be saved opened), and checking whether one is open (Remove, Delete).
     /// </summary>
     internal Action? TouchingLibraryFolder { get; set; }
 
@@ -172,13 +173,15 @@ public sealed class CatalogService : IAsyncDisposable
             // Off the caller's thread: the chosen location may be a slow or unreachable network share.
             var (existed, next) = await Task.Run(() =>
             {
-                TouchingLibraryFolder?.Invoke();
                 if (File.Exists(dir))
                     throw new CatalogException($"There's already a file called \"{trimmed}\" in {parentDir}. Choose another name.");
                 var existed = Directory.Exists(dir);
+                if (existed)
+                    RemoveLeftoverLock(dir);
                 if (existed && Directory.EnumerateFileSystemEntries(dir).Any())
                     throw new CatalogException(
                         $"The folder {dir} already exists and has files in it. A new library needs a folder of its own — choose another name or location.");
+                TouchingLibraryFolder?.Invoke();
                 try
                 {
                     return (existed, new LibraryService(dir));
@@ -198,8 +201,13 @@ public sealed class CatalogService : IAsyncDisposable
             }
             catch (IOException)
             {
-                next.Dispose();
-                CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed);
+                // Off the caller's thread, like the open: closing the library and removing its files touch its folder.
+                await Task.Run(() =>
+                {
+                    TouchingLibraryFolder?.Invoke();
+                    next.Dispose();
+                    CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed);
+                });
                 throw new CatalogException("Aperture couldn't save its list of libraries, so the new library wasn't created.");
             }
             await CommitSwitchAsync(entry, next);
@@ -234,9 +242,9 @@ public sealed class CatalogService : IAsyncDisposable
             // Off the caller's thread: the chosen folder may be on a slow or unreachable network share.
             var next = await Task.Run(() =>
             {
-                TouchingLibraryFolder?.Invoke();
                 if (!File.Exists(Path.Combine(full, ApertureDatabase.MetadataFileName)))
                     throw new CatalogException($"{full} doesn't contain an Aperture library. To start a new one, use New library….");
+                TouchingLibraryFolder?.Invoke();
                 return new LibraryService(full, mustExist: true);
             });
             var folderName = Path.GetFileName(full);
@@ -247,7 +255,11 @@ public sealed class CatalogService : IAsyncDisposable
             }
             catch (IOException)
             {
-                next.Dispose();
+                await Task.Run(() =>
+                {
+                    TouchingLibraryFolder?.Invoke();
+                    next.Dispose(); // off the caller's thread, like the open
+                });
                 throw new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't added.");
             }
             await CommitSwitchAsync(entry, next);
@@ -308,8 +320,8 @@ public sealed class CatalogService : IAsyncDisposable
     /// it (index, thumbnail cache, settings), never anything else in its folder. Throws
     /// <see cref="CatalogException"/>, deleting nothing, if it's open, if Aperture can't tell whether it's open
     /// (its lock file can't be read), if its folder can't be reached, if it was already removed, or if the list
-    /// couldn't be saved. The result lists any files that couldn't be deleted — or the folder itself, if it went
-    /// away mid-delete.
+    /// couldn't be saved. The result lists any files that couldn't be deleted, or says the folder went out of reach
+    /// mid-delete (<see cref="CatalogDeletionOutcome.FolderLostDuringDelete"/>: forgotten, but nothing deleted).
     /// </summary>
     public async Task<CatalogDeletion> DeleteFilesAsync(string catalogId)
     {
@@ -364,29 +376,45 @@ public sealed class CatalogService : IAsyncDisposable
         }
 
         var previous = _current;
-        await previous.ShutdownAsync();
+        // Off the caller's thread: closing a library touches its folder, which may be on a share that has gone away.
+        await Task.Run(() =>
+        {
+            TouchingLibraryFolder?.Invoke();
+            return previous.ShutdownAsync();
+        });
         _current = next;
         _registry.Activate(target, rememberForNextLaunch: true);
         ActiveLibraryChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private LibraryService OpenLibrary(string dir)
-    {
-        TouchingLibraryFolder?.Invoke();
-        return OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir));
-    }
+    private LibraryService OpenLibrary(string dir) =>
+        OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir), checkedFolder: TouchingLibraryFolder);
 
     // Only the local Default may be created on the spot (a fresh install, or its folder was deleted). Any
     // other library must still be there: a missing one is reported, not silently recreated empty — that's
     // what a disconnected drive, or a drive letter now pointing at a different disk, would otherwise do.
-    private static LibraryService OpenLibrary(string dir, bool allowCreate)
+    // `checkedFolder` is the test seam, run between that check and the open.
+    private static LibraryService OpenLibrary(string dir, bool allowCreate, Action? checkedFolder = null)
     {
         if (File.Exists(dir))
             throw new CatalogException($"{dir} is a file, not a library folder.");
         if (!allowCreate && !File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)))
             throw new CatalogException(
                 $"There's no Aperture library in {dir} any more. It may have been moved or deleted, or be on a drive that isn't connected.");
+        checkedFolder?.Invoke();
         return new LibraryService(dir, mustExist: !allowCreate); // checked again under the lock, in case it's deleted meanwhile
+    }
+
+    // A New library interrupted before it made its database (Aperture closed mid-create) leaves a folder holding only
+    // aperture.lock. That lock is nobody's — one that's held can't be deleted, so a folder another window is creating
+    // right now still counts as taken — and removing it lets New use the folder again.
+    private static void RemoveLeftoverLock(string dir)
+    {
+        var entries = Directory.EnumerateFileSystemEntries(dir).Take(2).ToList();
+        if (entries.Count != 1 || !string.Equals(Path.GetFileName(entries[0]), ApertureDatabase.LockFileName, StringComparison.OrdinalIgnoreCase))
+            return;
+        try { File.Delete(entries[0]); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     private CatalogEntry Find(string catalogId) =>

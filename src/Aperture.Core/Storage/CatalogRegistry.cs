@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -38,6 +39,12 @@ public enum CatalogDeletionOutcome
     /// deleted and it is still listed.
     /// </summary>
     FolderNotFound,
+
+    /// <summary>
+    /// The catalog was removed from the list, but its folder went out of reach during the delete (a drive unplugged,
+    /// a share dropped), so none of its files were deleted. FilesLeft is empty: the folder couldn't be read.
+    /// </summary>
+    FolderLostDuringDelete,
 }
 
 /// <summary>The result of removing a catalog and deleting its files.</summary>
@@ -308,10 +315,9 @@ public sealed class CatalogRegistry
 
         // The folder may have gone away since the check above (a drive unplugged mid-delete): then nothing could be
         // deleted, and the user must hear so rather than see a success while the tags and notes stay on that drive.
-        if (!Directory.Exists(outcome.Entry.Dir))
-            return new CatalogDeletion(CatalogDeletionOutcome.PartiallyDeleted, [outcome.Entry.Dir]);
-
         var left = DeleteCatalogFiles(outcome.Entry.Dir);
+        if (left is null)
+            return new CatalogDeletion(CatalogDeletionOutcome.FolderLostDuringDelete, []);
         return new CatalogDeletion(left.Count == 0 ? CatalogDeletionOutcome.Deleted : CatalogDeletionOutcome.PartiallyDeleted, left);
     }
 
@@ -347,13 +353,14 @@ public sealed class CatalogRegistry
     /// <summary>
     /// Deletes Aperture's files in <paramref name="dir"/>, then (if <paramref name="removeEmptyFolder"/>) the
     /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission) — all
-    /// of them, untouched, if the library is open in any Aperture window. Never deletes anything else.
+    /// of them, untouched, if the library is open in any Aperture window — or <c>null</c> if the folder can't be
+    /// found or reached, when nothing was deleted. Never deletes anything else.
     /// </summary>
-    internal static IReadOnlyList<string> DeleteCatalogFiles(string dir, bool removeEmptyFolder = true)
+    internal static IReadOnlyList<string>? DeleteCatalogFiles(string dir, bool removeEmptyFolder = true)
     {
         var left = new List<string>();
         if (!Directory.Exists(dir))
-            return left;
+            return null;
 
         // Hold the library's lock exclusively while deleting: if any Aperture window has the library open — by
         // any path to this folder, in any process — delete nothing at all; otherwise none can open it meanwhile.
@@ -367,10 +374,10 @@ public sealed class CatalogRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Nothing deleted. Name what's left — or, if the folder can't even be seen now, the folder itself, so the
-            // caller never mistakes this for a delete with nothing left over.
-            List<string> untouched = [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
-            return untouched.Count > 0 ? untouched : [dir];
+            // Nothing deleted: say the folder went out of reach if it did, else name Aperture's files that are left.
+            if (!Directory.Exists(dir))
+                return null;
+            return [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
         }
 
         using (exclusive)
@@ -432,13 +439,13 @@ public sealed class CatalogRegistry
             var owned = false;
             try
             {
-                var deadline = DateTime.UtcNow + LockTimeout;
+                var waited = Stopwatch.StartNew();
                 while (true)
                 {
                     try
                     {
                         mutex = new Mutex(false, MutexName);
-                        var left = deadline - DateTime.UtcNow;
+                        var left = LockTimeout - waited.Elapsed;
                         owned = mutex.WaitOne(left > TimeSpan.Zero ? left : TimeSpan.Zero);
                         break;
                     }
@@ -449,12 +456,13 @@ public sealed class CatalogRegistry
                     }
                     catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
                     {
-                        // An elevated Aperture window is mid-change: the lock exists only while it holds it, and this
-                        // window isn't allowed to open it. Wait for it to finish, as for any held lock — and after
-                        // LockTimeout go ahead without it, rather than hang or fail the change (or the launch).
+                        // The lock's name is taken by something this window can't open: an elevated Aperture window
+                        // mid-change (access denied — the lock exists only while it holds it), or an object that isn't
+                        // a mutex. Wait for it to go, as for any held lock — and after LockTimeout go ahead without
+                        // it, rather than hang or fail the change (or the launch).
                         mutex?.Dispose();
                         mutex = null;
-                        if (DateTime.UtcNow >= deadline)
+                        if (waited.Elapsed >= LockTimeout)
                             break;
                         Thread.Sleep(25);
                     }

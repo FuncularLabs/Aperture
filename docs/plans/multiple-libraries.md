@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 6, after review round 5) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 7, after review round 6) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -90,7 +90,8 @@ catalog's files and the list of every catalog never share a folder.
   any window has it open, and keeping any window from opening it meanwhile), and the lock file goes with the
   rest; a window that was waiting to open it (any library but the local Default) then re-checks for
   `aperture.db` and reports it gone instead of recreating it empty. A delete whose folder can't be reached deletes and forgets nothing, and says so; if the folder goes away
-  mid-delete, the user is told nothing could be deleted rather than shown a success.
+  mid-delete, the library has already been forgotten but nothing was deleted, and the user is told exactly that —
+  and how to finish once the drive is back (add it again with Open library…, then delete it).
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
@@ -160,7 +161,8 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*` and reported at launch; sanitized on load; Aperture starts. |
 | List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
 | Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be deleted from the other, nor removed while it's known to be open; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
-| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. |
+| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. If the folder goes out of reach mid-delete, the library is forgotten and the user is told nothing was deleted, and how to finish. |
+| Aperture closed while New library is creating | The folder left behind holds only Aperture's lock (or a new, empty database). New library with the same name uses a lock-only folder again (a lock another window holds still counts as taken); one with a database can be added with Open library…. |
 | The same folder registered twice through different paths (junction, mapped drive; an 8.3 short name is de-duplicated) | Two list entries for one folder. Safe while open: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. Once neither is open, "Delete library files" on one leaves the other listed but pointing at a deleted library — switching to it then says so. |
 | The list file can't be read at launch (locked by another program, or not accessible) | Opens Default for now, says so, and changes nothing on disk until the list can be read. If the first read fails but a second one succeeds, the user's own choice opens, not Default. A Default the user had removed can come back into the list if they keep working in it during such a launch (it's the library that window has open, and an open library is always listed). |
 | A library on a drive or share that's gone | Remove from list works (without freezing the window); Delete says it can't reach the folder and changes nothing. |
@@ -171,10 +173,10 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (70) |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (71) |
 | 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (28) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (83) — includes events on a `SingleThreadContext` stand-in for the UI thread |
-| 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (86) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -281,9 +283,40 @@ an Open of, a library deleted while this window waited for its lock fails and re
 switching never save over a list that couldn't be read; a share that isn't there reads as not open; and the
 elevated-lock tests check that the lock really can't be opened, so they can't pass vacuously.
 
-Accepted residual: at launch, opening the last-used library still touches its folder on the UI thread (before the
-window appears), so a library on an unreachable share can delay startup until Windows gives up on it (about 40 seconds
-measured), then Aperture opens Default for that launch.
+Accepted residual (see revision 7 for its full extent): at launch, opening the last-used library still touches its
+folder on the UI thread (before the window appears), so a library on an unreachable share can delay startup until
+Windows gives up on it.
+
+## Revision 7 — what changed after review round 6 (2026-10-25)
+
+Round 6 found no High or Medium defects. Fixed:
+
+- **The "folder lost mid-delete" message.** Revision 6 said the user was told nothing could be deleted; the
+  message actually said "some of its files couldn't be deleted (another program may be using them)" and named
+  the folder as a file. A delete now reports that case as its own outcome, and the user is told the library was
+  removed from the list but none of its files were deleted, and how to finish. Relatedly, a delete that can't
+  take the lock in a folder holding none of Aperture's files no longer reports the folder as "left".
+- **The last folder work on the UI thread during a switch.** Closing the library a switch leaves, and the
+  clean-up after a New or Open whose list couldn't be saved, now run off the UI thread too.
+- **An interrupted New.** Closing Aperture while New library was creating could leave a folder holding only
+  `aperture.lock`, which then blocked both New and Open with that folder. New now treats an unheld lone lock as
+  a leftover and uses the folder.
+- **Tests with no teeth.** The elevated-lock test now also proves the change ran *with* the lock and went on as
+  soon as the other change ended (not at the timeout); New and Open now pin their events to the caller's thread
+  like Switch; the "deleted just after the check" tests no longer depend on a 20 ms sleep.
+- Smaller: the lock wait measures elapsed time with a stopwatch, not the wall clock; a comment and a test
+  helper's name now say what they do.
+
+Not pinned, by design: the delete's second "already removed" check (another window removing the library between
+the re-read and the forget) is reachable only through that race; it's kept as a backstop and checked by reading.
+
+Accepted residual, **pending Paul's OK**: at launch the last-used library is still opened on the UI thread,
+before the window appears. On an unreachable share each unreachable host costs about 40 seconds (Windows
+remembers a host it gave up on, so two libraries on the same host cost about the same). Aperture then falls back
+for that launch: to Default if it's listed; if the user removed Default, it tries the other listed libraries
+first — opening the first reachable one, or after the last re-registering Default — so two libraries on two
+unreachable hosts took about 84 seconds. The alternative is to give up on a library after a few seconds, at the
+risk of skipping a slow NAS that is only waking up.
 
 ## Out of scope (future)
 
