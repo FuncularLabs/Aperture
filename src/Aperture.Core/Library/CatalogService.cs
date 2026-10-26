@@ -222,7 +222,7 @@ public sealed class CatalogService : IAsyncDisposable
             if (!File.Exists(Path.Combine(full, ApertureDatabase.MetadataFileName)))
                 throw new CatalogException($"{full} doesn't contain an Aperture library. To start a new one, use New library….");
 
-            var next = new LibraryService(full);
+            var next = new LibraryService(full, mustExist: true);
             var folderName = Path.GetFileName(full);
             CatalogEntry entry;
             try
@@ -250,6 +250,7 @@ public sealed class CatalogService : IAsyncDisposable
     public void Rename(string catalogId, string name)
     {
         var entry = Find(catalogId);
+        _registry.Reload(); // so the name is checked against libraries other windows added meanwhile, too
         if (!_registry.Rename(entry.Id, CheckName(name, entry.Id, forFolder: false)))
             throw StillListed(entry)
                 ? new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't renamed.")
@@ -266,7 +267,9 @@ public sealed class CatalogService : IAsyncDisposable
         try
         {
             var entry = Find(catalogId);
-            RefuseIfOpen(entry);
+            // Off the caller's thread: checking whether it's open touches the library's folder, which on a network
+            // share that has gone away can block for tens of seconds.
+            await Task.Run(() => RefuseIfOpen(entry, deleting: false));
             if (!_registry.Remove(entry.Id))
                 throw StillListed(entry)
                     ? new CatalogException("Aperture couldn't save its list of libraries, so nothing was removed.")
@@ -290,13 +293,20 @@ public sealed class CatalogService : IAsyncDisposable
         try
         {
             var entry = Find(catalogId);
-            RefuseIfOpen(entry);
-            var result = _registry.RemoveAndDeleteFiles(entry.Id);
+            // Off the caller's thread: it touches the library's folder (see RemoveAsync).
+            var result = await Task.Run(() =>
+            {
+                RefuseIfOpen(entry, deleting: true);
+                return _registry.RemoveAndDeleteFiles(entry.Id);
+            });
             return result.Outcome switch
             {
                 CatalogDeletionOutcome.NotForgotten => throw new CatalogException(
                     "Aperture couldn't save its list of libraries, so nothing was removed or deleted."),
                 CatalogDeletionOutcome.NotFound => throw AlreadyRemoved(entry),
+                CatalogDeletionOutcome.FolderNotFound => throw new CatalogException(
+                    $"Aperture can't reach {entry.Dir}, so nothing was deleted. If the library is gone for good, use " +
+                    "Remove from list instead."),
                 _ => result,
             };
         }
@@ -349,20 +359,30 @@ public sealed class CatalogService : IAsyncDisposable
         if (!allowCreate && !File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)))
             throw new CatalogException(
                 $"There's no Aperture library in {dir} any more. It may have been moved or deleted, or be on a drive that isn't connected.");
-        return new LibraryService(dir);
+        return new LibraryService(dir, mustExist: !allowCreate); // checked again under the lock, in case it's deleted meanwhile
     }
 
     private CatalogEntry Find(string catalogId) =>
         _registry.List().FirstOrDefault(c => c.Id == catalogId)
         ?? throw new ArgumentException($"No library has the id '{catalogId}'.", nameof(catalogId));
 
-    private void RefuseIfOpen(CatalogEntry entry)
+    // Removing only forgets a list entry, so it's allowed when Aperture can't tell whether the library is open;
+    // deleting files isn't (the delete's own exclusive lock would refuse anyway — this says why).
+    private void RefuseIfOpen(CatalogEntry entry, bool deleting)
     {
         if (entry.Id == _registry.Active?.Id)
             throw new CatalogException($"\"{entry.Name}\" is the library that's open. Switch to another library first.");
-        if (LibraryService.IsOpen(entry.Dir))
-            throw new CatalogException(
-                $"\"{entry.Name}\" is open in another Aperture window, or in this one under a different folder path. Close it there first.");
+        switch (LibraryService.OpenState(entry.Dir))
+        {
+            case LibraryOpenState.Open:
+                throw new CatalogException(
+                    $"\"{entry.Name}\" is open in another Aperture window, or in this one under a different folder path. " +
+                    $"Close it there first. (If it isn't, another program may have its {ApertureDatabase.LockFileName} open — try again shortly.)");
+            case LibraryOpenState.Unknown when deleting:
+                throw new CatalogException(
+                    $"Aperture can't tell whether \"{entry.Name}\" is open somewhere (it isn't allowed to read " +
+                    $"{Path.Combine(entry.Dir, ApertureDatabase.LockFileName)}), so nothing was deleted. Remove from list still works.");
+        }
     }
 
     // After a registry change reported failure: the change re-read the list under the cross-process lock, so if the
@@ -414,9 +434,10 @@ public sealed class CatalogService : IAsyncDisposable
     {
         var parts = new List<string>();
         if (registry.ReadFailed)
-            parts.Add($"Aperture couldn't read its list of libraries just now (another program had the file open), so " +
-                      $"it opened \"{opened.Name}\" and won't change the list until it can read it. Restart Aperture to " +
-                      "get your other libraries back.");
+            parts.Add($"Aperture couldn't read its list of libraries ({registry.FilePath}) — another program may have it " +
+                      $"open, or it may not be accessible — so it opened \"{opened.Name}\" for now and won't change the " +
+                      "list until it can read it. If your other libraries are missing, close whatever is using that file " +
+                      "and restart Aperture.");
         if (registry.QuarantinedFile is { } bad)
             parts.Add($"Aperture couldn't read its list of libraries, so it set the file aside as {bad} and started a " +
                       "new list. To get your other libraries back, use Open library… and choose each library's folder.");

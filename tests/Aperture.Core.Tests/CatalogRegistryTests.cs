@@ -696,6 +696,148 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void EnsureDefault_AfterAFailedRead_NeverSavesOverTheList()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        a.BetweenReadAndChange = locker.Dispose; // the read gives up, then the lock lifts before the save
+        a.EnsureDefault(dir.Combine("default"));
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Remove_AfterAFailedRead_NeverSavesOverTheList()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        a.BetweenReadAndChange = locker.Dispose;
+        Assert.False(a.Remove(one.Id));
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task AChange_WaitsOutABriefReadLock_AndMergesAsUsual()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two"));
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var release = Task.Delay(100).ContinueWith(_ => locker.Dispose());
+        a.Add("Three", dir.Combine("three")); // the read retries past the brief lock instead of refusing
+        await release;
+
+        Assert.Equal(["One", "Two", "Three"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void AListThisUserMayNotRead_IsTreatedAsUnreadable_NotAsMissing()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        new CatalogRegistry(path).Add("One", dir.Combine("one"));
+        Acl.DenyRead(path);
+        try
+        {
+            var reg = new CatalogRegistry(path);
+            Assert.True(reg.ReadFailed);
+            reg.EnsureDefault(dir.Combine("default")); // in memory only: nothing saved over a list it couldn't read
+        }
+        finally
+        {
+            Acl.Restore(path);
+        }
+
+        Assert.Equal(["One"], new CatalogRegistry(path).List().Select(c => c.Name));
+    }
+
+    [Fact]
+    public void ALoadThatCouldntRead_ThenARereadThatCan_OpensTheUsersLibrary_NotDefault()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var first = new CatalogRegistry(path);
+        first.EnsureDefault(dir.Combine("default"));
+        var work = first.Add("Work", dir.Combine("work"));
+        first.SetActive(work.Id);
+
+        CatalogRegistry launch;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            launch = new CatalogRegistry(path);      // the constructor's read fails…
+        launch.EnsureDefault(dir.Combine("default")); // …but the launch's next read succeeds
+
+        Assert.False(launch.ReadFailed);
+        Assert.Equal(work.Id, launch.Active!.Id);
+    }
+
+    [Fact]
+    public void AnUnreadableListThatCantBeSetAside_IsNeverSavedOver()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        File.WriteAllText(path, "{ broken");
+        var holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); // readable, but can't be moved
+
+        var reg = new CatalogRegistry(path);
+        Assert.True(reg.ReadFailed);
+        Assert.Null(reg.QuarantinedFile);
+        reg.BetweenReadAndChange = holder.Dispose; // movable and writable again just before the save
+        Assert.Throws<IOException>(() => reg.Add("One", dir.Combine("one")));
+        reg.BetweenReadAndChange = null;
+
+        Assert.Equal("{ broken", File.ReadAllText(path)); // the bytes it couldn't set aside are still there
+    }
+
+    [Fact]
+    public void ARegistryLockThisWindowIsDeniedAccessTo_IsTreatedLikeABusyLock_NotAnError()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        var adminsOnly = new System.Security.AccessControl.MutexSecurity();
+        adminsOnly.AddAccessRule(new System.Security.AccessControl.MutexAccessRule(
+            new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
+            System.Security.AccessControl.MutexRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+        using var elevatedWindows = System.Threading.MutexAcl.Create(false, reg.MutexName, out _, adminsOnly);
+
+        reg.Add("One", dir.Combine("one")); // goes ahead without the lock, as after a timeout
+
+        Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_WhenTheFolderCantBeReached_ForgetsNothing_AndSaysSo()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("usb");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("USB", catDir);
+        Directory.Move(catDir, dir.Combine("usb-unplugged"));
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+
+        Assert.Equal(CatalogDeletionOutcome.FolderNotFound, result.Outcome);
+        Assert.Contains(reg.List(), c => c.Id == entry.Id); // still listed: nothing was deleted, so nothing is forgotten
+    }
+
+    [Fact]
     public void WhileTheListCantBeRead_ChangesAreRefused_AndReadFailedSaysWhy()
     {
         using var dir = new TempDir();

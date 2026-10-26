@@ -312,6 +312,55 @@ public class LibraryServiceShutdownTests
     }
 
     [Fact]
+    public async Task OpeningALibraryThatWasDeletedWhileItWaited_FailsInsteadOfRecreatingItEmpty()
+    {
+        using var dir = new TempDir();
+        using (new LibraryService(dir.Path)) { }
+        var db = Path.Combine(dir.Path, ApertureDatabase.MetadataFileName);
+        var deleting = new FileStream(Path.Combine(dir.Path, ApertureDatabase.LockFileName),
+            FileMode.Open, FileAccess.Read, FileShare.None, 1, FileOptions.DeleteOnClose); // another window's delete…
+        File.Delete(db);
+        var release = Task.Delay(60).ContinueWith(_ => deleting.Dispose());                // …finishing while this one waits
+
+        Assert.ThrowsAny<IOException>(() => new LibraryService(dir.Path, mustExist: true));
+        await release;
+
+        Assert.False(File.Exists(db)); // not recreated as an empty library
+    }
+
+    [Fact]
+    public void OpenState_IsUnknown_WhenTheLockFileCantBeRead()
+    {
+        using var dir = new TempDir();
+        using (new LibraryService(dir.Path)) { }
+        var lockFile = Path.Combine(dir.Path, ApertureDatabase.LockFileName);
+        Acl.DenyRead(lockFile);
+        try
+        {
+            Assert.Equal(LibraryOpenState.Unknown, LibraryService.OpenState(dir.Path));
+            Assert.True(LibraryService.IsOpen(dir.Path)); // the conservative yes/no
+        }
+        finally
+        {
+            Acl.Restore(lockFile);
+        }
+        Assert.Equal(LibraryOpenState.NotOpen, LibraryService.OpenState(dir.Path));
+    }
+
+    [Fact]
+    public void Constructor_WhileTheLibraryIsBeingDeleted_CreatesNoDatabaseFiles()
+    {
+        using var dir = new TempDir();
+        using var deleting = new FileStream(Path.Combine(dir.Path, ApertureDatabase.LockFileName),
+            FileMode.OpenOrCreate, FileAccess.Read, FileShare.None, 1, FileOptions.DeleteOnClose);
+
+        Assert.ThrowsAny<IOException>(() => new LibraryService(dir.Path));
+
+        Assert.False(File.Exists(Path.Combine(dir.Path, ApertureDatabase.MetadataFileName))); // the lock comes first
+        Assert.False(File.Exists(Path.Combine(dir.Path, ApertureDatabase.ThumbnailFileName)));
+    }
+
+    [Fact]
     public void Constructor_WhileTheLibraryIsBeingDeleted_Fails()
     {
         using var dir = new TempDir();

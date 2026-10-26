@@ -32,6 +32,12 @@ public enum CatalogDeletionOutcome
 
     /// <summary>The catalog was removed from the list, but some of its files couldn't be deleted (see FilesLeft).</summary>
     PartiallyDeleted,
+
+    /// <summary>
+    /// The catalog's folder couldn't be found or reached (say, a drive that isn't connected), so nothing was
+    /// deleted and it is still listed.
+    /// </summary>
+    FolderNotFound,
 }
 
 /// <summary>The result of removing a catalog and deleting its files.</summary>
@@ -128,15 +134,18 @@ public sealed class CatalogRegistry
     public string? QuarantinedFile { get; private set; }
 
     /// <summary>
-    /// True when the list file exists but this instance couldn't read it the last time it looked (another
-    /// program had it locked for longer than a moment, or access was denied). Until it can be read again nothing
-    /// is saved over it: changes are refused, as for a read-only file, so a list this window couldn't see is
-    /// never replaced by what it has in memory.
+    /// True when the list file exists but this instance couldn't read it the last time it looked: another program
+    /// had it locked for longer than a moment, access was denied, or it isn't a library list and couldn't be set
+    /// aside. Until it can be read again nothing is saved over it: changes are refused, as for a read-only file,
+    /// so a list this window couldn't see is never replaced by what it has in memory.
     /// </summary>
     public bool ReadFailed
     {
         get { lock (_gate) return _readFailed; }
     }
+
+    /// <summary>The list file's full path.</summary>
+    public string FilePath => _path;
 
     /// <summary>The cross-process lock every Aperture window takes before reading or writing the file.</summary>
     internal string MutexName { get; }
@@ -277,6 +286,12 @@ public sealed class CatalogRegistry
     /// </summary>
     public CatalogDeletion RemoveAndDeleteFiles(string id)
     {
+        // A folder that can't be found or reached (an unplugged drive) has nothing to delete — and forgetting the
+        // library anyway would leave its tags and notes on that drive after the user confirmed deleting them.
+        var known = List().FirstOrDefault(c => c.Id == id);
+        if (known is not null && !Directory.Exists(known.Dir))
+            return new CatalogDeletion(CatalogDeletionOutcome.FolderNotFound, []);
+
         var outcome = Mutate(() =>
         {
             if (_catalogs.All(c => c.Id != id))
@@ -343,7 +358,7 @@ public sealed class CatalogRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return [.. CatalogFileNames.Select(n => Path.Combine(dir, n)).Where(File.Exists), lockFile];
+            return [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
         }
 
         using (exclusive)
@@ -400,12 +415,24 @@ public sealed class CatalogRegistry
     {
         lock (_gate)
         {
-            using var mutex = new Mutex(false, MutexName);
+            Mutex? mutex = null;
             var owned = false;
             try
             {
-                try { owned = mutex.WaitOne(LockTimeout); }
-                catch (AbandonedMutexException) { owned = true; } // the other window died mid-change; carry on
+                try
+                {
+                    mutex = new Mutex(false, MutexName);
+                    owned = mutex.WaitOne(LockTimeout);
+                }
+                catch (AbandonedMutexException)
+                {
+                    owned = true; // the other window died mid-change; carry on
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
+                {
+                    // An elevated Aperture window made the lock and this one isn't allowed to open it: go ahead
+                    // without it, as after a timeout, rather than fail every change (or the launch).
+                }
                 if (refresh)
                     RefreshFromDisk(keepActive: true);
                 BetweenReadAndChange?.Invoke();
@@ -414,7 +441,8 @@ public sealed class CatalogRegistry
             finally
             {
                 if (owned)
-                    mutex.ReleaseMutex();
+                    mutex!.ReleaseMutex();
+                mutex?.Dispose();
             }
         }
     }
@@ -445,7 +473,8 @@ public sealed class CatalogRegistry
         // The library this window has open stays listed even if another window removed it meanwhile (its entry
         // is what ties this window's open library to the list); if another window re-added its folder under a
         // new id, this window adopts that id rather than losing track of what it has open.
-        var active = keepActive ? _activeId : disk.ActiveId;
+        // (A window with no active library yet — its first read failed — takes the file's choice, not Default.)
+        var active = keepActive && _activeId is not null ? _activeId : disk.ActiveId;
         var ours = keepActive ? _catalogs.FirstOrDefault(c => c.Id == _activeId) : null;
         if (ours is not null && catalogs.All(c => c.Id != ours.Id))
         {

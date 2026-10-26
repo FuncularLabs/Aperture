@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 4, after review round 3) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 5, after review round 4) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -66,7 +66,8 @@ catalog's files and the list of every catalog never share a folder.
   that means Aperture opens Default for now and says so, rather than replacing the list with what little it
   has in memory.
 - **Several Aperture windows.** Every read of the file and every change runs under a cross-process mutex
-  (5 s timeout, then it goes ahead rather than hang), and every change re-reads and merges first, so one
+  (5 s timeout — or a mutex an elevated window made that this one may not open — then it goes ahead rather
+  than hang or fail), and every change re-reads and merges first, so one
   window can't drop another's additions. Each window keeps its own active catalog in memory (another window
   switching doesn't change what this one shows). The file records the library the user most recently
   switched to in *any* window, which the next launch opens. The library a window has open always stays
@@ -80,11 +81,15 @@ catalog's files and the list of every catalog never share a folder.
 - **Open in any window.** Every open `LibraryService` holds its folder's lock file, `aperture.lock`, for as
   long as it's open (shared, so two windows may open one library). A file lock belongs to the physical file,
   so every path to the folder — a junction, a mapped drive, an 8.3 name — and every process, elevated or not,
-  sees it, and Windows releases it if the window crashes. `LibraryService.IsOpen(dir)` asks for the lock
-  exclusively and reports "open" on a sharing violation, so a library open anywhere can't be removed or
-  deleted. As a backstop, deleting a library's files holds its lock exclusively for the whole delete
-  (deleting nothing if any window has it open, and keeping any window from opening it meanwhile), and the
-  lock file goes with the rest.
+  sees it, and Windows releases it if the window crashes. `LibraryService.OpenState(dir)` asks for the lock
+  exclusively: a sharing violation means *open*; a lock file it isn't allowed to read means *unknown* (say, a
+  folder copied from another PC); a missing or unreachable folder means *not open*. Remove refuses only
+  *open* (it just forgets a list entry); Delete refuses *open* and *unknown*. Both check off the UI thread —
+  the check touches the folder, and an offline network share can take tens of seconds to answer. As a
+  backstop, deleting a library's files holds its lock exclusively for the whole delete (deleting nothing if
+  any window has it open, and keeping any window from opening it meanwhile), and the lock file goes with the
+  rest; a window that was waiting to open it then re-checks for `aperture.db` and reports it gone instead of
+  recreating it empty. A delete whose folder can't be reached deletes and forgets nothing, and says so.
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
@@ -155,16 +160,19 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
 | Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be removed or deleted from the other; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
 | Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. |
-| The same folder registered twice through different paths (junction, mapped drive) | Two list entries for one folder (cosmetic). Safe: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. |
+| The same folder registered twice through different paths (junction, mapped drive; an 8.3 short name is de-duplicated) | Two list entries for one folder. Safe while open: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. Once neither is open, "Delete library files" on one leaves the other listed but pointing at a deleted library — switching to it then says so. |
+| The list file can't be read at launch (locked by another program, or not accessible) | Opens Default for now, says so, and changes nothing on disk until the list can be read. If the first read fails but a second one succeeds, the user's own choice opens, not Default. A Default the user had removed can come back into the list if they keep working in it during such a launch (it's the library that window has open, and an open library is always listed). |
+| A library on a drive or share that's gone | Remove from list works (without freezing the window); Delete says it can't reach the folder and changes nothing. |
+| A library whose `aperture.lock` this user can't read | Remove from list works; Delete refuses, saying Aperture can't tell whether it's open. |
 | Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
 ## Work breakdown and tests
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (53) |
-| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (23) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (75) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (62) |
+| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (26) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (78) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -236,6 +244,21 @@ list is Microsoft's complete one.
 
 Accepted residual (cosmetic): an alias of an already-listed folder is registered as a second entry rather than
 recognised as the same library.
+
+## Revision 5 — what changed after review round 4 (2026-10-25)
+
+Round 4 found no new High or Medium defects in the revision-4 design, only edge cases and test gaps:
+"Remove from list" froze the window on an offline network library (the open check now runs off the UI
+thread); a lock file the user can't read blocked Remove forever (now *unknown*: Remove allowed, Delete refused
+honestly); a window waiting out a delete recreated the library empty (now re-checks under the lock); a registry
+mutex made by an elevated window threw (now treated like a timeout); Rename checked duplicate names against a
+stale list (now re-reads); Delete on an unreachable folder reported success (now refuses and keeps the entry);
+the "can't read the list" warning blamed another program in every case (now neutral, with the file's path).
+Tests now pin the "never save over an unread list" guard deterministically on every path that saves (an internal
+hook releases the lock in the exact window: Add, Remove, EnsureDefault), a quarantine move that fails, an
+access-denied list, the read retry, the *unknown* state, and the lock being taken before any database file is
+opened. And a launch whose first read of the list failed but whose second succeeded now opens the user's own
+library rather than Default.
 
 ## Out of scope (future)
 

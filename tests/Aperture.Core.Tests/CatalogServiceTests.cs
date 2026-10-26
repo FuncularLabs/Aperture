@@ -1006,6 +1006,61 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task ALibraryWhoseLockCantBeRead_CanBeRemovedFromTheList_ButNotDeleted()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var copied = AddLibrary(service, "Copied", outer.Combine("copied")); // say, a folder copied from another PC
+        var lockFile = Path.Combine(copied.Dir, ApertureDatabase.LockFileName);
+        Acl.DenyRead(lockFile);
+        try
+        {
+            Assert.Equal(LibraryOpenState.Unknown, LibraryService.OpenState(copied.Dir));
+
+            var refused = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(copied.Id));
+            Assert.Contains("can't tell", refused.Message);
+            Assert.True(File.Exists(Path.Combine(copied.Dir, ApertureDatabase.MetadataFileName)));
+
+            await service.RemoveAsync(copied.Id); // forgetting a list entry is safe even if it might be open
+            Assert.DoesNotContain(service.Registry.List(), c => c.Id == copied.Id);
+        }
+        finally
+        {
+            Acl.Restore(lockFile);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_OfALibraryWhoseFolderCantBeReached_SaysNothingWasDeleted()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var usb = AddLibrary(service, "USB", outer.Combine("usb"));
+        var parked = outer.Combine("usb-unplugged");
+        Directory.Move(usb.Dir, parked);
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(usb.Id));
+
+        Assert.Contains("nothing was deleted", ex.Message);
+        Assert.Contains(service.Registry.List(), c => c.Id == usb.Id);
+        Directory.Move(parked, usb.Dir);
+        Assert.True(File.Exists(Path.Combine(usb.Dir, ApertureDatabase.MetadataFileName))); // tags and notes still there
+    }
+
+    [Fact]
+    public async Task Rename_ToANameAnotherWindowJustGaveALibrary_IsRefused()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        new CatalogRegistry(regPath).Add("Travel", outer.Combine("travel")); // after this window's list was read
+
+        Assert.Throws<CatalogException>(() => service.Rename(service.ActiveCatalog!.Id, "Travel"));
+
+        Assert.Single(new CatalogRegistry(regPath).List(), c => c.Name == "Travel");
+    }
+
+    [Fact]
     public async Task RemoveAsync_AlreadyRemovedInAnotherWindow_SaysSo()
     {
         using var outer = new TempDir();

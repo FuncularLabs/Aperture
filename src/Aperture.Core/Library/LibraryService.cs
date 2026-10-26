@@ -7,6 +7,19 @@ using Aperture.Core.Watching;
 
 namespace Aperture.Core.Library;
 
+/// <summary>Whether some Aperture window has a library open (see <see cref="LibraryService.OpenState"/>).</summary>
+public enum LibraryOpenState
+{
+    /// <summary>No Aperture window has it open (or its folder can't be reached).</summary>
+    NotOpen,
+
+    /// <summary>An Aperture window has it open.</summary>
+    Open,
+
+    /// <summary>Can't tell: its lock file exists but can't be read.</summary>
+    Unknown,
+}
+
 /// <summary>
 /// The single entry point the UI talks to. Wraps the stores, the indexer and the
 /// per-root watchers so a view model depends on one object, not six. All methods
@@ -49,14 +62,31 @@ public sealed class LibraryService : IDisposable
 
     public LibraryService() : this(AperturePaths.DefaultDataDir) { }
 
-    public LibraryService(string dataDir)
+    public LibraryService(string dataDir) : this(dataDir, mustExist: false) { }
+
+    /// <param name="dataDir">The library's folder.</param>
+    /// <param name="mustExist">
+    /// The library must already be there (true for every library but the local Default). Checked again once its
+    /// lock is held, so a library another window deleted while this one waited for the lock is reported, not
+    /// recreated empty; and the folder is never created.
+    /// </param>
+    internal LibraryService(string dataDir, bool mustExist)
     {
         ApertureDatabase? db = null;
         FileStream? openLock = null;
         try
         {
-            db = new ApertureDatabase(dataDir); // creates the folder
-            openLock = HoldOpenLock(dataDir);   // before any database file is opened
+            if (!mustExist)
+                Directory.CreateDirectory(dataDir);
+            openLock = HoldOpenLock(dataDir); // before any database file is opened; fails if the folder is gone
+            if (mustExist && !File.Exists(Path.Combine(dataDir, ApertureDatabase.MetadataFileName)))
+            {
+                openLock.Dispose();
+                openLock = null;
+                TryDeleteStrayLock(dataDir);
+                throw new IOException($"There's no Aperture library in {dataDir} any more.");
+            }
+            db = new ApertureDatabase(dataDir);
             db.Initialize();
             _db = db;
             _openLock = openLock;
@@ -80,35 +110,50 @@ public sealed class LibraryService : IDisposable
     }
 
     /// <summary>
-    /// True if any Aperture window has the library in <paramref name="dataDir"/> open — this process or another,
+    /// Whether any Aperture window has the library in <paramref name="dataDir"/> open — this process or another,
     /// elevated or not, and whatever path it used to reach the folder (case, trailing separator, a junction, a
-    /// mapped drive, an 8.3 name). False for a folder that doesn't exist or can't be reached. If the answer can't
-    /// be determined (access denied), it says open, so nothing gets deleted on a guess.
+    /// mapped drive, an 8.3 name). <see cref="LibraryOpenState.NotOpen"/> also for a folder that doesn't exist or
+    /// can't be reached; <see cref="LibraryOpenState.Unknown"/> when its lock file exists but can't be read
+    /// (access denied — say, a folder copied from another PC). This touches the folder, which on a network share
+    /// that has gone away can take tens of seconds: don't call it on the UI thread.
     /// </summary>
-    public static bool IsOpen(string dataDir)
+    public static LibraryOpenState OpenState(string dataDir)
     {
         try
         {
             using var probe = new FileStream(Path.Combine(dataDir, ApertureDatabase.LockFileName),
                 FileMode.Open, FileAccess.Read, FileShare.None);
-            return false; // nobody holds it
+            return LibraryOpenState.NotOpen; // nobody holds it
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            return false;
+            return LibraryOpenState.NotOpen;
         }
         catch (IOException ex) when (IsSharingViolation(ex))
         {
-            return true;
+            return LibraryOpenState.Open;
         }
         catch (UnauthorizedAccessException)
         {
-            return true;
+            return LibraryOpenState.Unknown;
         }
         catch (IOException)
         {
-            return false; // the folder can't be reached (drive not ready): nothing has it open from here
+            return LibraryOpenState.NotOpen; // the folder can't be reached (drive not ready): nothing has it open from here
         }
+    }
+
+    /// <summary>
+    /// The conservative yes/no of <see cref="OpenState"/>: true unless the library is known not to be open, so
+    /// nothing is ever deleted on a guess.
+    /// </summary>
+    public static bool IsOpen(string dataDir) => OpenState(dataDir) != LibraryOpenState.NotOpen;
+
+    // A lock file left by a failed open of a library that turned out to be gone: not anyone's, safe to remove.
+    private static void TryDeleteStrayLock(string dataDir)
+    {
+        try { File.Delete(Path.Combine(dataDir, ApertureDatabase.LockFileName)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     private static FileStream HoldOpenLock(string dataDir)
@@ -126,7 +171,8 @@ public sealed class LibraryService : IDisposable
             }
             catch (IOException ex) when (IsSharingViolation(ex))
             {
-                throw new IOException($"The library in {dataDir} is being deleted, so it can't be opened.", ex);
+                throw new IOException(
+                    $"The library in {dataDir} can't be opened right now: it's being deleted, or another program has its {ApertureDatabase.LockFileName} open.", ex);
             }
         }
     }
