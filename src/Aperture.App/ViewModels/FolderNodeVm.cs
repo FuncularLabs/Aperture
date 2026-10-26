@@ -14,18 +14,22 @@ public sealed class FolderNodeVm : ObservableObject
 
     private readonly Func<long, string, List<FolderNodeVm>>? _loadChildren;
     private readonly Action<FolderNodeVm, bool>? _onExpandedChanged;
+    private readonly Action<FolderNodeVm, bool>? _onShownChanged;
     private bool _loaded;
     private bool _isExpanded;
     private bool _isSelected;
+    private bool _isShown = true;
 
     private FolderNodeVm() { } // placeholder only
 
     public FolderNodeVm(
         long rootId, string relDir, string name, bool isRoot, bool hasChildren,
         RootVm? root, int count, Func<long, string, List<FolderNodeVm>> loadChildren,
-        Action<FolderNodeVm, bool>? onExpandedChanged = null)
+        Action<FolderNodeVm, bool>? onExpandedChanged = null,
+        bool isShown = true, Action<FolderNodeVm, bool>? onShownChanged = null)
     {
         _onExpandedChanged = onExpandedChanged;
+        _onShownChanged = onShownChanged;
         RootId = rootId;
         RelDir = relDir;
         Name = name;
@@ -33,6 +37,7 @@ public sealed class FolderNodeVm : ObservableObject
         HasChildren = hasChildren;
         Root = root;
         Count = count;
+        _isShown = isShown;
         _loadChildren = loadChildren;
 
         if (hasChildren)
@@ -51,6 +56,20 @@ public sealed class FolderNodeVm : ObservableObject
 
     /// <summary>Non-null on root nodes — carries the include checkbox / rename / remove.</summary>
     public RootVm? Root { get; }
+
+    /// <summary>
+    /// A subfolder's show/hide checkbox (a root's is <see cref="RootVm.IsIncluded"/>): unticking hides the folder and
+    /// everything inside it. A change is reported once, to the callback the tree gave this node.
+    /// </summary>
+    public bool IsShown
+    {
+        get => _isShown;
+        set
+        {
+            if (SetProperty(ref _isShown, value))
+                _onShownChanged?.Invoke(this, value);
+        }
+    }
 
     public ObservableCollection<FolderNodeVm> Children { get; } = [];
 

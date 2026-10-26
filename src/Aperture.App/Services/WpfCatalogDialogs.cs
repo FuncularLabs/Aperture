@@ -15,6 +15,12 @@ public sealed class WpfCatalogDialogs : ICatalogDialogs
         return dialog.ShowDialog(Application.Current.MainWindow) == true ? dialog.FolderName : null;
     }
 
+    public bool? AskIncludeSubfolders(string folder)
+    {
+        var dialog = new AddFolderDialog([folder]) { Owner = Application.Current.MainWindow };
+        return dialog.ShowDialog() == true ? dialog.IncludeSubfolders : null;
+    }
+
     public bool Confirm(string title, string message) =>
         MessageBox.Show(Application.Current.MainWindow, message, title, MessageBoxButton.OKCancel,
             MessageBoxImage.Warning, MessageBoxResult.Cancel) == MessageBoxResult.OK;

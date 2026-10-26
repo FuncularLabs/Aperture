@@ -30,11 +30,11 @@ on your machine — it never uploads anything or phones home.
 ## Highlights
 
 - **Union across folders.** Add folders from anywhere on disk and browse them as one
-  date-sorted view; per-folder include toggles and aliases.
+  date-sorted view; aliases, and a show/hide checkbox on every folder and subfolder.
 - **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
-  each other's folders, tags, or search results, and switch between them from the library
-  menu at the top of the folder pane. Each library has its own index, thumbnail cache, and
-  settings.
+  each other's folders, tags, or search results. They're listed under **LIBRARIES** in the
+  folder pane: click one to switch to it. Each library has its own index, thumbnail cache,
+  and settings.
 - **One window.** Starting Aperture while it's already open brings the open window to the
   front (restored if it was minimized) instead of opening a second one.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and
@@ -94,19 +94,21 @@ any other copy of Aperture — on this PC or another, for a library on a shared 
 library is open):
 
 - Your first library, **Default**, lives in `%LOCALAPPDATA%\Aperture`.
-- **New library…** creates a library in a new folder wherever you choose (Aperture suggests
-  `%LOCALAPPDATA%\Aperture Libraries`). **Open library…** adds a library that already exists.
+- **New library…** (the **+** beside LIBRARIES) asks for a name and a folder of photos and
+  videos to put in it, and keeps the new library's own files in
+  `%LOCALAPPDATA%\Aperture Libraries\<name>`. **Open library…** adds a library that already
+  exists, wherever it is.
 - The list of your libraries is `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`.
 
-**Delete library files** (library menu) deletes only Aperture's own files for a library you
-aren't in — the index, thumbnail cache, and settings, which hold that library's tags and notes.
+**Delete library files** (right-click a library you aren't in) deletes only Aperture's own files
+for it — the index, thumbnail cache, and settings, which hold that library's tags and notes.
 It never deletes your photos or anything else in that folder. To reset Aperture completely,
-close it and delete `%LOCALAPPDATA%\Aperture`, `%LOCALAPPDATA%\Aperture Libraries`, and any
-library folders you created elsewhere.
+close it and delete `%LOCALAPPDATA%\Aperture`, `%LOCALAPPDATA%\Aperture Libraries`, and the
+folders of any libraries you added from elsewhere.
 
 Set the `APERTURE_DATA_DIR` environment variable to run against one data folder instead (handy
-for testing): Aperture then uses only that folder, ignores the library list, and hides the
-library menu.
+for testing): Aperture then uses only that folder, ignores the library list, and shows no
+libraries in the folder pane.
 
 > **Upgrading from the older "Reel" build?** On first launch Aperture moves an existing
 > `%LOCALAPPDATA%\Reel` store into the new location automatically — your index and tags

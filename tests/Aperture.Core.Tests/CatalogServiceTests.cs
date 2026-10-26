@@ -627,31 +627,36 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task CreateLibraryAsync_ExistingFolderWithFilesInIt_IsRefused_AndLeftUntouched()
+    public async Task CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         var photos = outer.Combine("Photos");
         Directory.CreateDirectory(photos);
         File.WriteAllText(Path.Combine(photos, "IMG_0001.jpg"), "a photo");
+        Directory.CreateDirectory(outer.Combine("Photos (2)"));
+        File.WriteAllText(Path.Combine(outer.Combine("Photos (2)"), "notes.txt"), "someone else's");
 
-        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Photos", outer.Path));
+        var entry = await service.CreateLibraryAsync("Photos", outer.Path);
 
-        Assert.Contains(photos, ex.Message);
-        Assert.Single(service.Registry.List());
+        Assert.Equal("Photos", entry.Name); // the library keeps the name it was given; only its folder differs
+        Assert.Equal(outer.Combine("Photos (3)"), entry.Dir);
+        Assert.Equal(entry.Id, service.ActiveCatalog!.Id);
         Assert.Equal(["IMG_0001.jpg"], Directory.GetFiles(photos).Select(Path.GetFileName));
+        Assert.Equal(["notes.txt"], Directory.GetFiles(outer.Combine("Photos (2)")).Select(Path.GetFileName));
     }
 
     [Fact]
-    public async Task CreateLibraryAsync_NameTakenByAFile_IsRefused()
+    public async Task CreateLibraryAsync_WhereAFileHasTheName_UsesTheNextFreeFolder()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         File.WriteAllText(outer.Combine("Work"), "a file, not a folder");
 
-        await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+        var entry = await service.CreateLibraryAsync("Work", outer.Path);
 
-        Assert.Single(service.Registry.List());
+        Assert.Equal(outer.Combine("Work (2)"), entry.Dir);
+        Assert.Equal("a file, not a folder", File.ReadAllText(outer.Combine("Work")));
     }
 
     [Theory]
@@ -1198,7 +1203,7 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task CreateLibraryAsync_InTheFolderOfAListedLibrary_IsRefused()
+    public async Task CreateLibraryAsync_PassesOverTheFolderOfAListedLibrary()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
@@ -1206,11 +1211,12 @@ public class CatalogServiceTests
         foreach (var file in Directory.GetFiles(photos.Dir).Where(f => Path.GetFileName(f) != ApertureDatabase.LockFileName))
             File.Delete(file); // its files deleted by hand: only the lock is left
 
-        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+        var entry = await service.CreateLibraryAsync("Work", outer.Path);
 
-        Assert.Contains("Photos", ex.Message);
-        Assert.Equal("Default", service.ActiveCatalog!.Name);
+        Assert.Equal(outer.Combine("Work (2)"), entry.Dir);
         Assert.Equal("Photos", service.Registry.List().Single(c => c.Id == photos.Id).Name);
+        Assert.Equal(photos.Dir, service.Registry.List().Single(c => c.Id == photos.Id).Dir);
+        Assert.False(File.Exists(Path.Combine(photos.Dir, ApertureDatabase.MetadataFileName)));
     }
 
     [Fact]
@@ -1228,7 +1234,7 @@ public class CatalogServiceTests
     }
 
     [Fact]
-    public async Task CreateLibraryAsync_InAFolderAnotherWindowJustListed_IsRefused()
+    public async Task CreateLibraryAsync_PassesOverAFolderAnotherWindowJustListed()
     {
         using var outer = new TempDir();
         var regPath = RegistryPath(outer);
@@ -1236,14 +1242,14 @@ public class CatalogServiceTests
         Directory.CreateDirectory(outer.Combine("Work"));
         new CatalogRegistry(regPath).Add("Photos", outer.Combine("Work")); // another window, unseen by this one
 
-        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+        var entry = await service.CreateLibraryAsync("Work", outer.Path);
 
-        Assert.Contains("Photos", ex.Message);
-        Assert.Equal("Default", service.ActiveCatalog!.Name);
+        Assert.Equal(outer.Combine("Work (2)"), entry.Dir);
+        Assert.False(File.Exists(Path.Combine(outer.Combine("Work"), ApertureDatabase.MetadataFileName)));
     }
 
     [Fact]
-    public async Task CreateLibraryAsync_InAFolderWhoseOnlyFileIsALockInUse_IsRefused()
+    public async Task CreateLibraryAsync_PassesOverAFolderWhoseOnlyFileIsALockInUse()
     {
         using var outer = new TempDir();
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
@@ -1252,11 +1258,10 @@ public class CatalogServiceTests
         using var creating = new FileStream(Path.Combine(dir, ApertureDatabase.LockFileName),
             FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read); // another window is creating it right now
 
-        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+        var entry = await service.CreateLibraryAsync("Work", outer.Path);
 
-        Assert.Contains("already exists", ex.Message);
+        Assert.Equal(outer.Combine("Work (2)"), entry.Dir);
         Assert.False(File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)));
-        Assert.Equal("Default", service.ActiveCatalog!.Name);
     }
 
     [Fact]

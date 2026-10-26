@@ -100,6 +100,8 @@ public partial class App : Application
             _catalog.PreparingToSwitch += OnPreparingToSwitch;
             _catalog.ActiveLibraryChanged += OnActiveLibraryChanged;
             _catalogBar = new CatalogBarViewModel(_catalog, new WpfCatalogDialogs(), AperturePaths.LibrariesDir);
+            // New library has switched to the new library (so _viewModel is its view model): add and index the folder.
+            _catalogBar.NewLibraryFolderChosen += (_, folder) => _viewModel?.AddFolder(folder.Path, folder.IncludeSubfolders);
             library = _catalog.Current;
         }
         else

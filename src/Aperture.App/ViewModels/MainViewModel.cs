@@ -76,6 +76,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private List<TileVm> _mediaTiles = [];
     private IReadOnlyList<TileVm> _selectedTiles = [];
     private List<LibraryRow> _allRows = [];
+    private IReadOnlyList<HiddenFolder> _hiddenFolders = []; // subfolders hidden with their checkbox (out of _allRows)
 
     // The current view's tiles, keyed by item id. A rebuild that keeps the same items (streaming index,
     // background reconcile, watcher, filter/sort) reuses these instances instead of allocating new ones —
@@ -172,7 +173,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            _allRows = await Task.Run(_library.GetUnion);
+            (_allRows, _hiddenFolders) = await Task.Run(_library.GetContents);
         }
         catch (Exception) when (_closing)
         {
@@ -718,26 +719,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         System.Windows.MessageBox.Show(text, "Aperture",
             System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
 
-    private string _windowTitle = "Aperture Image Browser";
+    private string _locationTitle = "";
 
-    /// <summary>Window title — shows the current folder's full path.</summary>
-    public string WindowTitle
+    /// <summary>
+    /// The full path of the folder being shown, or "" for everything in the library. The title bar shows it after
+    /// the product and the library's name (<see cref="Mvvm.WindowTitleConverter"/>).
+    /// </summary>
+    public string LocationTitle
     {
-        get => _windowTitle;
-        private set => SetProperty(ref _windowTitle, value);
+        get => _locationTitle;
+        private set => SetProperty(ref _locationTitle, value);
     }
 
     private void UpdateWindowTitle()
     {
-        if (_location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root)
-        {
-            var full = _location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir);
-            WindowTitle = $"{ProductTitle}  —  {full}";
-        }
-        else
-        {
-            WindowTitle = ProductTitle;
-        }
+        LocationTitle = _location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root
+            ? (_location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir))
+            : "";
     }
 
     public ObservableCollection<RootVm> Roots { get; } = [];
@@ -1723,10 +1721,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ShowFirstRun = true;
     }
 
+    private bool _firstRunIncludeSubfolders = true;
+
+    /// <summary>The first-run panel's "Include subfolders" box: ticked unless the user unticks it.</summary>
+    public bool FirstRunIncludeSubfolders
+    {
+        get => _firstRunIncludeSubfolders;
+        set => SetProperty(ref _firstRunIncludeSubfolders, value);
+    }
+
     private void AddChosenFolders()
     {
-        foreach (var candidate in FirstRunCandidates.Where(c => c.IsChosen))
-            AddRootPath(candidate.Path, candidate.Alias);
+        foreach (var candidate in FirstRunCandidates.Where(c => c.IsChosen).ToList())
+            AddRootPath(candidate.Path, candidate.Alias, FirstRunIncludeSubfolders);
         FinishFirstRun();
     }
 
@@ -1906,35 +1913,50 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void AddRoot()
     {
         var dialog = new OpenFolderDialog { Title = "Add a folder to Aperture" };
-        if (dialog.ShowDialog() != true)
-            return;
-
-        var path = dialog.FolderName;
-        if (Roots.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
-            return; // already added
-
-        // The OS folder picker can't host extra controls, so the subfolder choice is a second step.
-        var confirm = new AddFolderDialog(path) { Owner = System.Windows.Application.Current.MainWindow };
-        if (confirm.ShowDialog() != true)
-            return;
-
-        AddRootPath(path, DeriveAlias(path), confirm.IncludeSubfolders);
+        if (dialog.ShowDialog() == true)
+            AddFolders([dialog.FolderName]);
     }
 
-    /// <summary>Adds dropped folders as watched roots (skips duplicates). Used by drag-and-drop.</summary>
+    /// <summary>
+    /// Adds folders as watched roots — the Add folder button and drag-and-drop. Folders already added, or gone, are
+    /// skipped; for the rest the user is asked once whether to include subfolders (the OS folder picker can't host
+    /// that choice itself).
+    /// </summary>
     public void AddFolders(IEnumerable<string> paths)
     {
-        foreach (var path in paths)
-        {
-            var full = Path.GetFullPath(path);
-            if (!System.IO.Directory.Exists(full)
-                || Roots.Any(r => string.Equals(r.Path, full, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            AddRootPath(full, DeriveAlias(full));
-        }
+        var additions = FolderAdditions.Plan(paths, Roots.Select(r => r.Path), AskIncludeSubfolders);
+        if (additions.Count > 0)
+            FinishFirstRunIfShowing();
+        foreach (var folder in additions)
+            AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
     }
 
-    private void AddRootPath(string path, string alias, bool recursive = true)
+    /// <summary>
+    /// Adds the folder New library was given (the user has already said whether to include its subfolders) and
+    /// starts indexing it. Nothing happens if it's already a root.
+    /// </summary>
+    public void AddFolder(string path, bool includeSubfolders)
+    {
+        var additions = FolderAdditions.Plan([path], Roots.Select(r => r.Path), _ => includeSubfolders);
+        if (additions.Count > 0)
+            FinishFirstRunIfShowing(); // the new library already has its folder: don't offer Pictures etc. as well
+        foreach (var folder in additions)
+            AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
+    }
+
+    private static bool? AskIncludeSubfolders(IReadOnlyList<string> folders)
+    {
+        var dialog = new AddFolderDialog(folders) { Owner = System.Windows.Application.Current.MainWindow };
+        return dialog.ShowDialog() == true ? dialog.IncludeSubfolders : null;
+    }
+
+    private void FinishFirstRunIfShowing()
+    {
+        if (ShowFirstRun)
+            FinishFirstRun();
+    }
+
+    private void AddRootPath(string path, string alias, bool recursive)
     {
         var root = _library.AddRoot(path, alias, recursive);
         var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged);
@@ -1978,12 +2000,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ = IndexRootAsync(rootVm.Model, watchAfter: true);
     }
 
-    private static string DeriveAlias(string path)
-    {
-        var name = new DirectoryInfo(path).Name;
-        return string.IsNullOrWhiteSpace(name) ? path : name;
-    }
-
     // --- Union / sections / status ------------------------------------------
 
     private const int BuildDebounceMs = 140;
@@ -2001,7 +2017,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Re-reads the union of included items. Call only when the underlying data changed.</summary>
     private void LoadRows()
     {
-        _allRows = _library.GetUnion();
+        (_allRows, _hiddenFolders) = _library.GetContents();
         OnPropertyChanged(nameof(TotalItemCount));
     }
 
@@ -2210,7 +2226,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         FolderTree.Clear();
         foreach (var rootVm in Roots)
         {
-            var subs = GetSubfolders(rootVm.Id, "");
+            var subs = Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootVm.Id, "");
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
                 rootVm, rootVm.Count, LoadChildNodes, OnNodeExpandedChanged));
@@ -2267,37 +2283,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private List<FolderNodeVm> LoadChildNodes(long rootId, string relDir) =>
-        GetSubfolders(rootId, relDir)
+        Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootId, relDir)
             .Select(s => new FolderNodeVm(
                 rootId, s.RelDir, s.Name, isRoot: false, s.HasChildren, null, s.Count,
-                LoadChildNodes, OnNodeExpandedChanged))
+                LoadChildNodes, OnNodeExpandedChanged, s.IsShown, OnFolderShownChanged))
             .ToList();
 
-    /// <summary>Immediate subfolders of (rootId, relDir): name, path, recursive count, and whether it nests further.</summary>
-    private List<(string Name, string RelDir, int Count, bool HasChildren)> GetSubfolders(long rootId, string relDir)
+    /// <summary>
+    /// A subfolder's checkbox: remember it with the library, then — once the checkbox has finished updating — reload
+    /// the rows without (or with) that folder and rebuild the tree and the grid around it.
+    /// </summary>
+    private void OnFolderShownChanged(FolderNodeVm node, bool shown)
     {
-        var acc = new Dictionary<string, (string RelDir, int Count, bool HasChild)>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in _allRows)
+        _library.SetFolderShown(node.RootId, node.RelDir, shown);
+        _ui.Post(_ =>
         {
-            if (r.Item.RootId != rootId)
-                continue;
-            var dir = GetDir(r.Item.RelPath);
-            if (!IsUnder(dir, relDir) || string.Equals(dir, relDir, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (FirstSegmentUnder(r.Item.RelPath, relDir) is not { } child)
-                continue;
-
-            var childRel = relDir.Length == 0 ? child : Path.Combine(relDir, child);
-            var deeper = !string.Equals(dir, childRel, StringComparison.OrdinalIgnoreCase);
-            if (acc.TryGetValue(child, out var v))
-                acc[child] = (childRel, v.Count + 1, v.HasChild || deeper);
-            else
-                acc[child] = (childRel, 1, deeper);
-        }
-
-        return acc.OrderByDescending(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(kv => (kv.Key, kv.Value.RelDir, kv.Value.Count, kv.Value.HasChild))
-            .ToList();
+            if (_closing)
+                return;
+            LoadRows();
+            BuildTree();
+            SelectPath(_location.RootId, _location.RelDir);
+            RequestBuildView();
+        }, null);
     }
 
     /// <summary>
@@ -2372,16 +2379,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         relDir.Length == 0
         || dir.Equals(relDir, StringComparison.OrdinalIgnoreCase)
         || dir.StartsWith(relDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-
-    private static string? FirstSegmentUnder(string relPath, string relDir)
-    {
-        var start = relDir.Length == 0 ? 0 : relDir.Length + 1;
-        if (start >= relPath.Length)
-            return null;
-        var rest = relPath[start..];
-        var sep = rest.IndexOf(Path.DirectorySeparatorChar);
-        return sep < 0 ? null : rest[..sep];
-    }
 
     private void BuildBreadcrumb()
     {

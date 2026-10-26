@@ -62,6 +62,15 @@ public class TagStatRow
     [Column("use_count")] public int UseCount { get; set; }
 }
 
+/// <summary>The <c>hidden_folders</c> table: a subfolder hidden with its checkbox.</summary>
+[Table("hidden_folders")]
+public class HiddenFolderRow
+{
+    public long Id { get; set; }
+    [Column("root_id")] public long RootId { get; set; }
+    [Column("rel_dir")] public string RelDir { get; set; } = "";   // relative to the root, OS separators, no trailing one
+}
+
 /// <summary>
 /// Detail entity for the grid's union query: items plus their root's alias/color/path, filtered to
 /// included roots. The <c>[RemoteProperty]</c> attributes let FunkyORM pull the joined columns

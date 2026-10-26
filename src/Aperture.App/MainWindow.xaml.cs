@@ -815,6 +815,25 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// The grid has one tile menu. It opens on a tile — the one under the pointer, or the focused one for the menu
+    /// key or Shift+F10 — and acts on it: the tile becomes the menu's DataContext. Not on empty canvas or a section
+    /// header.
+    /// </summary>
+    private void OnGridContextMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        if (ContainerFrom(e.OriginalSource as DependencyObject)?.DataContext is not TileVm tile)
+        {
+            e.Handled = true;
+            return;
+        }
+        ItemsList.ContextMenu.DataContext = tile;
+    }
+
+    /// <summary>Lets go of the tile once the menu has closed, so it doesn't outlive a library switch.</summary>
+    private void OnGridContextMenuClosed(object sender, RoutedEventArgs e) =>
+        ItemsList.ContextMenu.DataContext = null;
+
     private static System.Windows.Controls.ListBoxItem? ContainerFrom(DependencyObject? source)
     {
         while (source is not null and not System.Windows.Controls.ListBoxItem)

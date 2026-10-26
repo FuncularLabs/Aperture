@@ -6,15 +6,23 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 ## [Unreleased]
 
 ### Added
-- **Separate libraries.** Keep several independent libraries — say *Work* and *Personal* — and
-  switch between them from the library menu at the top of the folder pane. Each library has its
-  own folders, index, thumbnail cache, tags, notes, and settings, and never sees another's.
-  Your existing library becomes **Default**, with nothing to migrate.
-  - **New library…** creates a library in a new folder of its own, in a location you choose.
+- **Separate libraries.** Keep several independent libraries — say *Work* and *Personal*. They're
+  listed under **LIBRARIES** in the folder pane: click one to switch to it, or the open one to see
+  everything in it; the header collapses the list. Each library has its own folders, index,
+  thumbnail cache, tags, notes, and settings, and never sees another's. Your existing library
+  becomes **Default**, with nothing to migrate.
+  - **New library…** (the **+** beside LIBRARIES) asks for a name and a folder of photos and
+    videos, adds that folder to the new library and starts indexing it. The library's own files
+    go in `%LOCALAPPDATA%\Aperture Libraries`.
   - **Open library…** adds a library that already exists (a folder holding `aperture.db`).
-  - **Remove from list** forgets a library you aren't in; its files stay where they are.
-  - **Delete library files** deletes Aperture's own files for a library you aren't in — its
-    index, thumbnail cache, and settings — and never your photos or anything else in its folder.
+  - Right-click a library to **Rename** it. **Remove from list** forgets a library you aren't in;
+    its files stay where they are. **Delete library files** deletes Aperture's own files for a
+    library you aren't in — its index, thumbnail cache, and settings — and never your photos or
+    anything else in its folder.
+- **Show or hide subfolders.** Every subfolder in the folder tree has a checkbox, like the
+  top-level folders: untick it to hide that folder, and everything inside it, from the library.
+- Adding folders — with Add folder, by dropping them on the window, or from the first-run
+  panel — asks whether to include their subfolders (Yes unless you say otherwise).
 - If the library you used last can't be opened (for example, it's on a drive that isn't
   connected yet), Aperture opens another one for now — Default, if it's there — and tells you
   why, instead of failing to start. It tries your library again at the next launch.
@@ -26,7 +34,10 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ### Changed
 - `APERTURE_DATA_DIR` now pins Aperture to that one data folder: the library list is ignored and
-  the library menu is hidden.
+  no libraries are shown.
+- The title bar shows the library's name before the folder's.
+- A large library opens several times faster, at launch and when you switch to it, and switching
+  back and forth no longer gets slower each time.
 
 ## [0.8.9] - 2026-10-23
 

@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows.Input;
 using Aperture.App.Mvvm;
 using Aperture.App.Services;
@@ -7,48 +6,62 @@ using Aperture.Core.Storage;
 
 namespace Aperture.App.ViewModels;
 
+/// <summary>A library as the nav lists it.</summary>
+public sealed record LibraryListItem(string Id, string Name, string Dir, bool IsActive);
+
+/// <summary>The folder New library was asked to put in the new library, and whether with its subfolders.</summary>
+public sealed record NewLibraryFolder(string Path, bool IncludeSubfolders);
+
 /// <summary>
-/// The library switcher in the nav: the open library's name, plus commands to switch to another library,
-/// create one (in a folder of its own), open an existing one, rename the open one, and remove or delete
-/// libraries you aren't in. Deleting removes only Aperture's own files for that library.
+/// The libraries in the nav: every library, the open one marked, with commands to switch, create one (with a
+/// folder of photos to put in it), open an existing one, rename one, and remove or delete libraries you aren't in.
+/// Deleting removes only Aperture's own files for that library.
 ///
 /// One instance lives for the whole session: App injects it into each <see cref="MainViewModel"/> and calls
 /// <see cref="Refresh"/> after a switch. It is <c>null</c> on the view model when <c>APERTURE_DATA_DIR</c> pins a
-/// single library, and the switcher is hidden. Commands are disabled while one of them is running.
+/// single library, and the list isn't shown. Commands are disabled while one of them is running.
 /// </summary>
 public sealed class CatalogBarViewModel : ObservableObject
 {
     private readonly CatalogService _catalog;
     private readonly ICatalogDialogs _dialogs;
-    private readonly string _librariesDir; // where New library suggests creating the folder
+    private readonly string _librariesDir; // where a new library's own files go
+    private readonly string _picturesDir;  // where New library starts looking for photos
     private bool _isBusy;
+    private bool _isExpanded = true;
 
-    public CatalogBarViewModel(CatalogService catalog, ICatalogDialogs dialogs, string librariesDir)
+    public CatalogBarViewModel(CatalogService catalog, ICatalogDialogs dialogs, string librariesDir, string? picturesDir = null)
     {
         _catalog = catalog;
         _dialogs = dialogs;
         _librariesDir = librariesDir;
+        _picturesDir = picturesDir ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
 
         SwitchCommand = new RelayCommand<string>(id => Start(() => _catalog.SwitchToAsync(id)), _ => !IsBusy);
         NewLibraryCommand = new RelayCommand(() => Start(NewLibraryAsync), () => !IsBusy);
         OpenLibraryCommand = new RelayCommand(() => Start(OpenLibraryAsync), () => !IsBusy);
-        RenameCommand = new RelayCommand(() => Start(RenameAsync), () => !IsBusy);
-        RemoveCommand = new RelayCommand<string>(id => Start(() => _catalog.RemoveAsync(id)), _ => !IsBusy);
-        DeleteFilesCommand = new RelayCommand<string>(id => Start(() => DeleteFilesAsync(id)), _ => !IsBusy);
+        RenameCommand = new RelayCommand<string>(id => Start(() => RenameAsync(id)), _ => !IsBusy);
+        RemoveCommand = new RelayCommand<string>(id => Start(() => _catalog.RemoveAsync(id)), id => !IsBusy && !IsOpen(id));
+        DeleteFilesCommand = new RelayCommand<string>(id => Start(() => DeleteFilesAsync(id)), id => !IsBusy && !IsOpen(id));
+        ToggleExpandedCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
 
         Refresh();
     }
 
-    /// <summary>The open library's name, shown on the switcher.</summary>
+    /// <summary>The open library's name (the title bar shows it).</summary>
     public string ActiveName => _catalog.ActiveCatalog?.Name ?? "Library";
 
-    /// <summary>Every library except the open one, most recently opened first: switch, remove and delete targets.</summary>
-    public IReadOnlyList<CatalogEntry> OtherCatalogs { get; private set; } = [];
+    /// <summary>Every library, by name; the open one has <see cref="LibraryListItem.IsActive"/>.</summary>
+    public IReadOnlyList<LibraryListItem> Libraries { get; private set; } = [];
 
-    /// <summary>True when there is at least one library besides the open one.</summary>
-    public bool HasOthers => OtherCatalogs.Count > 0;
+    /// <summary>Whether the nav shows the list (the LIBRARIES header collapses it). For this session.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        private set => SetProperty(ref _isExpanded, value);
+    }
 
-    /// <summary>True while a switcher command runs; every command is disabled meanwhile.</summary>
+    /// <summary>True while a library command runs; every command is disabled meanwhile.</summary>
     public bool IsBusy
     {
         get => _isBusy;
@@ -62,26 +75,36 @@ public sealed class CatalogBarViewModel : ObservableObject
     public ICommand SwitchCommand { get; }
     public ICommand NewLibraryCommand { get; }
     public ICommand OpenLibraryCommand { get; }
+
+    /// <summary>Renames the library whose id is the parameter.</summary>
     public ICommand RenameCommand { get; }
     public ICommand RemoveCommand { get; }
     public ICommand DeleteFilesCommand { get; }
+    public ICommand ToggleExpandedCommand { get; }
+
+    /// <summary>
+    /// Raised once New library has created the library and switched to it, with the folder the user chose to put in
+    /// it: App hands it to the new library's view model, which adds and indexes it.
+    /// </summary>
+    public event EventHandler<NewLibraryFolder>? NewLibraryFolderChosen;
 
     /// <summary>The command that is running (or last ran). Tests await it; the app doesn't need to.</summary>
     internal Task? PendingOperation { get; private set; }
 
-    /// <summary>Re-reads the library list so the switcher shows the open library and the others.</summary>
+    /// <summary>Re-reads the library list, so the nav shows every library and which one is open.</summary>
     public void Refresh()
     {
         var activeId = _catalog.ActiveCatalog?.Id;
-        OtherCatalogs = _catalog.Registry.List()
-            .Where(c => c.Id != activeId)
-            .OrderByDescending(c => c.LastOpenedTicks)
-            .ThenBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
+        Libraries = _catalog.Registry.List()
+            .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(c => new LibraryListItem(c.Id, c.Name, c.Dir, c.Id == activeId))
             .ToList();
         OnPropertyChanged(nameof(ActiveName));
-        OnPropertyChanged(nameof(OtherCatalogs));
-        OnPropertyChanged(nameof(HasOthers));
+        OnPropertyChanged(nameof(Libraries));
+        CommandManager.InvalidateRequerySuggested(); // Remove/Delete follow which library is open
     }
+
+    private bool IsOpen(string? id) => id is not null && id == _catalog.ActiveCatalog?.Id;
 
     private void Start(Func<Task> operation)
     {
@@ -112,18 +135,22 @@ public sealed class CatalogBarViewModel : ObservableObject
         }
     }
 
+    // Asks what goes in the library — never where Aperture keeps its own files, which is the libraries folder.
     private async Task NewLibraryAsync()
     {
         var name = _dialogs.PromptText("New library", "Name for the new library:", "");
         if (name is null)
             return;
-        name = _catalog.CheckNewLibraryName(name); // say what's wrong with the name before asking where
+        name = _catalog.CheckNewLibraryName(name); // say what's wrong with the name before asking anything else
 
-        Directory.CreateDirectory(_librariesDir); // so the folder picker can start there
-        var parent = _dialogs.PickFolder($"Choose where to create the \"{name}\" library folder", _librariesDir);
-        if (parent is null)
+        var folder = _dialogs.PickFolder($"Choose a folder of photos and videos for \"{name}\"", _picturesDir);
+        if (folder is null)
             return;
-        await _catalog.CreateLibraryAsync(name, parent);
+        if (_dialogs.AskIncludeSubfolders(folder) is not { } includeSubfolders)
+            return;
+
+        await _catalog.CreateLibraryAsync(name, _librariesDir);
+        NewLibraryFolderChosen?.Invoke(this, new NewLibraryFolder(folder, includeSubfolders));
     }
 
     private async Task OpenLibraryAsync()
@@ -134,14 +161,14 @@ public sealed class CatalogBarViewModel : ObservableObject
         await _catalog.OpenLibraryAsync(dir);
     }
 
-    private Task RenameAsync()
+    private Task RenameAsync(string id)
     {
-        var active = _catalog.ActiveCatalog;
-        if (active is null)
+        var entry = _catalog.Registry.List().FirstOrDefault(c => c.Id == id);
+        if (entry is null)
             return Task.CompletedTask;
-        var name = _dialogs.PromptText("Rename library", "Library name:", active.Name);
-        if (name is not null && name.Trim() != active.Name)
-            _catalog.Rename(active.Id, name);
+        var name = _dialogs.PromptText("Rename library", "Library name:", entry.Name);
+        if (name is not null && name.Trim() != entry.Name)
+            _catalog.Rename(entry.Id, name);
         return Task.CompletedTask;
     }
 

@@ -160,37 +160,28 @@ public sealed class CatalogService : IAsyncDisposable
     public string CheckNewLibraryName(string name) => CheckName(name, exceptId: null, forFolder: true);
 
     /// <summary>
-    /// Creates a new library in its own folder, <paramref name="parentDir"/>\<paramref name="name"/>, registers
-    /// it and switches to it. The folder must not be a listed library's, and must not exist yet or be empty — a new
-    /// library never moves into a folder that already holds files (a lone, unheld <c>aperture.lock</c> left by an
-    /// interrupted New doesn't count). Nothing is registered unless the library opens.
+    /// Creates a new library in a folder of its own under <paramref name="parentDir"/>, registers it and switches to
+    /// it. The folder is <paramref name="name"/>, or the first free <c>name (2)</c>, <c>name (3)</c>… if that one is
+    /// taken: a listed library's folder, a file, or a folder that already holds files (a lone, unheld
+    /// <c>aperture.lock</c> left by an interrupted New doesn't count) is passed over and left as it is. The library
+    /// keeps the name it was given. Nothing is registered unless the library opens.
     /// </summary>
     public async Task<CatalogEntry> CreateLibraryAsync(string name, string parentDir)
     {
         await _gate.WaitAsync();
         try
         {
-            _registry.Reload(); // another window may have used this name, or registered this folder, meanwhile
+            _registry.Reload(); // another window may have used this name, or registered a folder, meanwhile
             var trimmed = CheckNewLibraryName(name);
-            var dir = CatalogRegistry.NormalizeDir(Path.Combine(parentDir, trimmed));
-            if (_registry.List().FirstOrDefault(c => CatalogRegistry.SameDir(c.Dir, dir)) is { } listed)
-                throw new CatalogException(
-                    $"{dir} is already the library \"{listed.Name}\". Choose another name or location for the new one.");
-            // Off the caller's thread: the chosen location may be a slow or unreachable network share.
-            var (existed, next) = await Task.Run(() =>
+            var listedDirs = _registry.List().Select(c => c.Dir).ToList();
+            // Off the caller's thread: the folders are looked at, and the location may be a slow network share.
+            var (dir, existed, next) = await Task.Run(() =>
             {
-                if (File.Exists(dir))
-                    throw new CatalogException($"There's already a file called \"{trimmed}\" in {parentDir}. Choose another name.");
-                var existed = Directory.Exists(dir);
-                if (existed)
-                    RemoveLeftoverLock(dir);
-                if (existed && Directory.EnumerateFileSystemEntries(dir).Any())
-                    throw new CatalogException(
-                        $"The folder {dir} already exists and has files in it. A new library needs a folder of its own — choose another name or location.");
+                var (dir, existed) = FreeFolder(parentDir, trimmed, listedDirs);
                 TouchingLibraryFolder?.Invoke();
                 try
                 {
-                    return (existed, Watched(new LibraryService(dir)));
+                    return (dir, existed, Watched(new LibraryService(dir)));
                 }
                 catch
                 {
@@ -412,6 +403,27 @@ public sealed class CatalogService : IAsyncDisposable
         checkedFolder?.Invoke();
         return new LibraryService(dir, mustExist: !allowCreate); // checked again under the lock, in case it's deleted meanwhile
     }
+
+    // The folder a new library goes in: parent\name, else the first of parent\name (2), (3)… that isn't a listed
+    // library's folder or a file, and doesn't hold files. Returns it and whether it already existed (empty).
+    private static (string Dir, bool Existed) FreeFolder(string parentDir, string name, IReadOnlyList<string> listedDirs)
+    {
+        for (var n = 1; n <= MaxFolderAttempts; n++)
+        {
+            var dir = CatalogRegistry.NormalizeDir(Path.Combine(parentDir, n == 1 ? name : $"{name} ({n})"));
+            if (listedDirs.Any(listed => CatalogRegistry.SameDir(listed, dir)) || File.Exists(dir))
+                continue;
+            var existed = Directory.Exists(dir);
+            if (existed)
+                RemoveLeftoverLock(dir);
+            if (existed && Directory.EnumerateFileSystemEntries(dir).Any())
+                continue;
+            return (dir, existed);
+        }
+        throw new CatalogException($"Aperture couldn't find a free folder for \"{name}\" in {parentDir}. Choose another name.");
+    }
+
+    private const int MaxFolderAttempts = 1000;
 
     // A New library interrupted before it made its database (Aperture closed mid-create) leaves a folder holding only
     // aperture.lock. That lock is nobody's — one that's held can't be deleted, so a folder another window is creating

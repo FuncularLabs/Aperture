@@ -8,10 +8,10 @@ using Aperture.Core.Tests.Support;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// The nav's library switcher, driven against a real <see cref="CatalogService"/> on temp folders with
-/// scripted dialogs. Pins Paul's 2026-10-25 rulings: New makes a dedicated folder, Open needs an existing
-/// library, Remove/Delete act only on libraries you aren't in, and Delete never touches anything but
-/// Aperture's own files.
+/// The libraries in the nav, driven against a real <see cref="CatalogService"/> on temp folders with scripted
+/// dialogs. Pins Paul's 2026-10-25 rulings (New makes a dedicated folder, Open needs an existing library,
+/// Remove/Delete act only on libraries you aren't in, Delete never touches anything but Aperture's own files) and
+/// his 2026-10-26 trial: every library listed in the pane, and New library asks for the folder to put in it.
 /// </summary>
 public class CatalogBarViewModelTests
 {
@@ -20,19 +20,24 @@ public class CatalogBarViewModelTests
         public Queue<string?> Prompts { get; } = new();
         public Queue<string?> Folders { get; } = new();
         public Queue<bool> Confirms { get; } = new();
+        public Queue<bool?> Subfolders { get; } = new();
+        public List<string> SubfolderQuestions { get; } = [];
         public List<string> PromptInitials { get; } = [];
         public List<string> FolderInitialDirs { get; } = [];
+        public List<string> Asked { get; } = []; // every question, in order
         public List<string> ConfirmMessages { get; } = [];
         public List<(string Message, bool IsError)> Messages { get; } = [];
 
         public string? PromptText(string title, string label, string initial)
         {
+            Asked.Add("name");
             PromptInitials.Add(initial);
             return Prompts.Count > 0 ? Prompts.Dequeue() : null;
         }
 
         public string? PickFolder(string title, string initialDirectory)
         {
+            Asked.Add("folder");
             FolderInitialDirs.Add(initialDirectory);
             return Folders.Count > 0 ? Folders.Dequeue() : null;
         }
@@ -41,6 +46,13 @@ public class CatalogBarViewModelTests
         {
             ConfirmMessages.Add(message);
             return Confirms.Count > 0 && Confirms.Dequeue();
+        }
+
+        public bool? AskIncludeSubfolders(string folder)
+        {
+            Asked.Add("subfolders");
+            SubfolderQuestions.Add(folder);
+            return Subfolders.Count > 0 ? Subfolders.Dequeue() : null;
         }
 
         public void ShowMessage(string title, string message, bool isError) => Messages.Add((message, isError));
@@ -53,11 +65,19 @@ public class CatalogBarViewModelTests
         public CatalogService Service { get; }
         public CatalogBarViewModel Bar { get; }
         public string LibrariesDir => Outer.Combine("Aperture Libraries");
+        public string PicturesDir => Outer.Combine("Pictures");
+        public List<NewLibraryFolder> HandedOver { get; } = [];
+        public List<string?> ActiveWhenHandedOver { get; } = [];
 
         public Fixture()
         {
             Service = CatalogService.Open(Outer.Combine("catalogs.json"), Outer.Combine("default"));
-            Bar = new CatalogBarViewModel(Service, Dialogs, LibrariesDir);
+            Bar = new CatalogBarViewModel(Service, Dialogs, LibrariesDir, PicturesDir);
+            Bar.NewLibraryFolderChosen += (_, folder) =>
+            {
+                HandedOver.Add(folder);
+                ActiveWhenHandedOver.Add(Service.ActiveCatalog?.Name);
+            };
         }
 
         public CatalogEntry AddLibrary(string name)
@@ -83,62 +103,98 @@ public class CatalogBarViewModelTests
         }
     }
 
+    private static string Listed(CatalogBarViewModel bar) =>
+        string.Join(", ", bar.Libraries.Select(l => l.IsActive ? $"[{l.Name}]" : l.Name));
+
     [Fact]
-    public async Task Refresh_ShowsTheActiveName_AndTheOtherLibraries_MostRecentlyOpenedFirst()
+    public async Task Libraries_ListEveryLibraryByName_MarkingTheOpenOne()
     {
         await using var f = new Fixture();
-        var older = f.AddLibrary("Older");
-        var recent = f.AddLibrary("Recent");
-        var defaultId = f.Service.ActiveCatalog!.Id;
-        await f.Service.SwitchToAsync(older.Id);
-        await f.Service.SwitchToAsync(recent.Id);
-        await f.Service.SwitchToAsync(defaultId);
+        var zoo = f.AddLibrary("zoo");
+        f.AddLibrary("Apple");
 
-        f.Bar.Refresh();
-
+        Assert.Equal("Apple, [Default], zoo", Listed(f.Bar));
         Assert.Equal("Default", f.Bar.ActiveName);
-        Assert.Equal(["Recent", "Older"], f.Bar.OtherCatalogs.Select(c => c.Name));
-        Assert.True(f.Bar.HasOthers);
+        Assert.Equal(zoo.Dir, f.Bar.Libraries.Single(l => l.Name == "zoo").Dir);
+        Assert.Equal(zoo.Id, f.Bar.Libraries.Single(l => l.Name == "zoo").Id);
     }
 
     [Fact]
-    public async Task Refresh_WithOneLibrary_HasNoOthers()
+    public async Task Libraries_WithOneLibrary_ListJustIt()
     {
         await using var f = new Fixture();
 
-        Assert.Equal("Default", f.Bar.ActiveName);
-        Assert.Empty(f.Bar.OtherCatalogs);
-        Assert.False(f.Bar.HasOthers);
+        Assert.Equal("[Default]", Listed(f.Bar));
     }
 
     [Fact]
-    public async Task Switch_ChangesTheActiveLibrary_AndRefreshes()
+    public async Task Libraries_FollowASwitch()
     {
         await using var f = new Fixture();
         var work = f.AddLibrary("Work");
+        var changes = new List<string?>();
+        f.Bar.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
 
         await f.Run(f.Bar.SwitchCommand, work.Id);
 
         Assert.Equal("Work", f.Bar.ActiveName);
-        Assert.Equal(["Default"], f.Bar.OtherCatalogs.Select(c => c.Name));
+        Assert.Equal("Default, [Work]", Listed(f.Bar));
+        Assert.Contains(nameof(CatalogBarViewModel.Libraries), changes);
+        Assert.Contains(nameof(CatalogBarViewModel.ActiveName), changes);
+    }
+
+    [Fact]
+    public async Task IsExpanded_StartsOpen_AndToggles()
+    {
+        await using var f = new Fixture();
+        var changes = new List<string?>();
+        f.Bar.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+
+        Assert.True(f.Bar.IsExpanded);
+        f.Bar.ToggleExpandedCommand.Execute(null);
+        Assert.False(f.Bar.IsExpanded);
+        f.Bar.ToggleExpandedCommand.Execute(null);
+        Assert.True(f.Bar.IsExpanded);
+        Assert.Equal([nameof(CatalogBarViewModel.IsExpanded), nameof(CatalogBarViewModel.IsExpanded)], changes);
     }
 
     // --- New library ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task NewLibrary_CreatesItsOwnFolder_InTheChosenLocation_AndSwitches()
+    public async Task NewLibrary_AsksForANameThenAFolderThenSubfolders_CreatesItUnderTheLibrariesFolder_AndHandsOverTheFolder()
+    {
+        await using var f = new Fixture();
+        var photos = f.Outer.Combine("My photos");
+        Directory.CreateDirectory(photos);
+        f.Dialogs.Prompts.Enqueue("Travel");
+        f.Dialogs.Folders.Enqueue(photos);
+        f.Dialogs.Subfolders.Enqueue(true);
+
+        await f.Run(f.Bar.NewLibraryCommand);
+
+        Assert.Equal(["name", "folder", "subfolders"], f.Dialogs.Asked);
+        Assert.Equal([f.PicturesDir], f.Dialogs.FolderInitialDirs); // a folder of photos — not where Aperture keeps its files
+        Assert.Equal([photos], f.Dialogs.SubfolderQuestions);
+        Assert.Equal("Travel", f.Bar.ActiveName);
+        Assert.Equal(Path.Combine(f.LibrariesDir, "Travel"), f.Service.ActiveCatalog!.Dir);
+        Assert.True(File.Exists(Path.Combine(f.LibrariesDir, "Travel", ApertureDatabase.MetadataFileName)));
+        Assert.False(File.Exists(Path.Combine(photos, ApertureDatabase.MetadataFileName))); // the photos folder holds only photos
+        Assert.Equal([new NewLibraryFolder(photos, IncludeSubfolders: true)], f.HandedOver);
+        Assert.Equal(["Travel"], f.ActiveWhenHandedOver); // handed to the new library, once it's the open one
+        Assert.Empty(f.Dialogs.Messages);
+    }
+
+    [Fact]
+    public async Task NewLibrary_WithoutSubfolders_HandsOverTheFolderWithoutThem()
     {
         await using var f = new Fixture();
         f.Dialogs.Prompts.Enqueue("Travel");
         f.Dialogs.Folders.Enqueue(f.Outer.Path);
+        f.Dialogs.Subfolders.Enqueue(false);
 
         await f.Run(f.Bar.NewLibraryCommand);
 
-        Assert.Equal("Travel", f.Bar.ActiveName);
-        Assert.True(File.Exists(Path.Combine(f.Outer.Path, "Travel", ApertureDatabase.MetadataFileName)));
-        Assert.Equal([f.LibrariesDir], f.Dialogs.FolderInitialDirs); // suggests the libraries folder…
-        Assert.True(Directory.Exists(f.LibrariesDir));                // …which exists so the picker can open it
-        Assert.Empty(f.Dialogs.Messages);
+        Assert.Equal([new NewLibraryFolder(f.Outer.Path, IncludeSubfolders: false)], f.HandedOver);
     }
 
     [Fact]
@@ -148,19 +204,26 @@ public class CatalogBarViewModelTests
 
         await f.Run(f.Bar.NewLibraryCommand);
 
-        Assert.Empty(f.Dialogs.FolderInitialDirs);
+        Assert.Equal(["name"], f.Dialogs.Asked);
         Assert.Single(f.Service.Registry.List());
     }
 
-    [Fact]
-    public async Task NewLibrary_CancelledAtTheFolder_CreatesNothing()
+    [Theory]
+    [InlineData(false)] // cancelled at the folder
+    [InlineData(true)]  // cancelled at the subfolder question
+    public async Task NewLibrary_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing(bool pickAFolder)
     {
         await using var f = new Fixture();
         f.Dialogs.Prompts.Enqueue("Travel");
+        if (pickAFolder)
+            f.Dialogs.Folders.Enqueue(f.Outer.Path);
 
         await f.Run(f.Bar.NewLibraryCommand);
 
+        Assert.Equal(pickAFolder ? ["name", "folder", "subfolders"] : ["name", "folder"], f.Dialogs.Asked);
         Assert.Single(f.Service.Registry.List());
+        Assert.False(Directory.Exists(Path.Combine(f.LibrariesDir, "Travel")));
+        Assert.Empty(f.HandedOver);
         Assert.Empty(f.Dialogs.Messages);
     }
 
@@ -179,20 +242,19 @@ public class CatalogBarViewModelTests
     }
 
     [Fact]
-    public async Task NewLibrary_FolderAlreadyInUse_SaysWhy_AndLeavesItAlone()
+    public async Task NewLibrary_ThatFails_HandsOverNothing()
     {
         await using var f = new Fixture();
-        var photos = f.Outer.Combine("Photos");
-        Directory.CreateDirectory(photos);
-        File.WriteAllText(Path.Combine(photos, "IMG_0001.jpg"), "a photo");
-        f.Dialogs.Prompts.Enqueue("Photos");
+        File.WriteAllText(f.LibrariesDir, "a file where the libraries folder should be"); // nothing can be created under it
+        f.Dialogs.Prompts.Enqueue("Travel");
         f.Dialogs.Folders.Enqueue(f.Outer.Path);
+        f.Dialogs.Subfolders.Enqueue(true);
 
         await f.Run(f.Bar.NewLibraryCommand);
 
-        Assert.Contains(photos, Assert.Single(f.Dialogs.Messages).Message);
+        Assert.True(Assert.Single(f.Dialogs.Messages).IsError);
         Assert.Equal("Default", f.Bar.ActiveName);
-        Assert.Equal(["IMG_0001.jpg"], Directory.GetFiles(photos).Select(Path.GetFileName));
+        Assert.Empty(f.HandedOver);
     }
 
     // --- Open library ---------------------------------------------------------------------------
@@ -243,19 +305,34 @@ public class CatalogBarViewModelTests
         await using var f = new Fixture();
         f.Dialogs.Prompts.Enqueue("Home");
 
-        await f.Run(f.Bar.RenameCommand);
+        await f.Run(f.Bar.RenameCommand, f.Service.ActiveCatalog!.Id);
 
         Assert.Equal(["Default"], f.Dialogs.PromptInitials); // prefilled with the current name
         Assert.Equal("Home", f.Bar.ActiveName);
     }
 
     [Fact]
+    public async Task Rename_RenamesTheLibraryItIsGiven()
+    {
+        await using var f = new Fixture();
+        var work = f.AddLibrary("Work");
+        f.Dialogs.Prompts.Enqueue("Office");
+
+        await f.Run(f.Bar.RenameCommand, work.Id);
+
+        Assert.Equal(["Work"], f.Dialogs.PromptInitials);
+        Assert.Equal("Default", f.Bar.ActiveName);
+        Assert.Equal("[Default], Office", Listed(f.Bar));
+    }
+
+    [Fact]
     public async Task Rename_CancelledOrUnchanged_DoesNothing()
     {
         await using var f = new Fixture();
-        await f.Run(f.Bar.RenameCommand); // cancelled
+        var open = f.Service.ActiveCatalog!.Id;
+        await f.Run(f.Bar.RenameCommand, open); // cancelled
         f.Dialogs.Prompts.Enqueue("Default");
-        await f.Run(f.Bar.RenameCommand); // unchanged
+        await f.Run(f.Bar.RenameCommand, open); // unchanged
 
         Assert.Equal("Default", f.Bar.ActiveName);
         Assert.Empty(f.Dialogs.Messages);
@@ -268,7 +345,7 @@ public class CatalogBarViewModelTests
         f.AddLibrary("Work");
         f.Dialogs.Prompts.Enqueue("work");
 
-        await f.Run(f.Bar.RenameCommand);
+        await f.Run(f.Bar.RenameCommand, f.Service.ActiveCatalog!.Id);
 
         Assert.Equal("Default", f.Bar.ActiveName);
         Assert.True(Assert.Single(f.Dialogs.Messages).IsError);
@@ -284,8 +361,22 @@ public class CatalogBarViewModelTests
 
         await f.Run(f.Bar.RemoveCommand, work.Id);
 
-        Assert.Empty(f.Bar.OtherCatalogs);
+        Assert.Equal("[Default]", Listed(f.Bar));
         Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task RemoveAndDelete_AreDisabledForTheOpenLibrary()
+    {
+        await using var f = new Fixture();
+        var work = f.AddLibrary("Work");
+        var open = f.Service.ActiveCatalog!.Id;
+
+        Assert.False(f.Bar.RemoveCommand.CanExecute(open));
+        Assert.False(f.Bar.DeleteFilesCommand.CanExecute(open));
+        Assert.True(f.Bar.RemoveCommand.CanExecute(work.Id));
+        Assert.True(f.Bar.DeleteFilesCommand.CanExecute(work.Id));
+        Assert.True(f.Bar.RenameCommand.CanExecute(open));
     }
 
     [Fact]
@@ -297,7 +388,7 @@ public class CatalogBarViewModelTests
 
         await f.Run(f.Bar.DeleteFilesCommand, work.Id);
 
-        Assert.Single(f.Bar.OtherCatalogs);
+        Assert.Equal("[Default], Work", Listed(f.Bar));
         Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
     }
 
@@ -314,7 +405,7 @@ public class CatalogBarViewModelTests
         var warning = Assert.Single(f.Dialogs.ConfirmMessages);
         Assert.Contains(work.Dir, warning);
         Assert.Contains("not touched", warning);
-        Assert.Empty(f.Bar.OtherCatalogs);
+        Assert.Equal("[Default]", Listed(f.Bar));
         Assert.False(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
         Assert.True(File.Exists(Path.Combine(work.Dir, "keep.txt")));
         Assert.Empty(f.Dialogs.Messages);
@@ -380,7 +471,7 @@ public class CatalogBarViewModelTests
         Assert.False(f.Bar.SwitchCommand.CanExecute(work.Id));
         Assert.False(f.Bar.NewLibraryCommand.CanExecute(null));
         Assert.False(f.Bar.DeleteFilesCommand.CanExecute(work.Id));
-        f.Bar.RenameCommand.Execute(null); // ignored, so no prompt is shown
+        f.Bar.RenameCommand.Execute(work.Id); // ignored, so no prompt is shown
         Assert.Same(switching, f.Bar.PendingOperation);
 
         held.Release();

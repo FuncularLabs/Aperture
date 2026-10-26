@@ -33,6 +33,7 @@ public sealed class LibraryService : IDisposable
     private readonly ItemStore _items;
     private readonly ThumbnailStore _thumbnails;
     private readonly AnnotationStore _annotations;
+    private readonly HiddenFolderStore _hidden;
     private readonly Annotations.AnnotationTransfer _transfer;
     private readonly Indexer _indexer;
     private readonly ThumbnailGenerator _thumbnailGen = new();
@@ -95,6 +96,7 @@ public sealed class LibraryService : IDisposable
             _items = new ItemStore(_db);
             _thumbnails = new ThumbnailStore(_db);
             _annotations = new AnnotationStore(_db);
+            _hidden = new HiddenFolderStore(_db);
             _annotations.EnsureHyphenated(); // migrate legacy "multi word" tags to "multi-word"
             _transfer = new Annotations.AnnotationTransfer(_annotations, _roots);
             _indexer = new Indexer(_db, _thumbnailGen, new MetadataReader());
@@ -201,6 +203,24 @@ public sealed class LibraryService : IDisposable
 
     public void SetAlias(long rootId, string alias) => _roots.SetAlias(rootId, alias);
 
+    /// <summary>
+    /// Shows or hides a subfolder of a root — its checkbox in the folder tree. A hidden folder, and every folder
+    /// inside it, is left out of <see cref="GetContents"/> (and <see cref="GetUnion"/>) the way an unticked root is;
+    /// it is still indexed. <paramref name="relDir"/> is relative to the root; case and separators don't matter.
+    /// A root's own folder is shown or hidden with <see cref="SetIncluded"/>, not here.
+    /// </summary>
+    public void SetFolderShown(long rootId, string relDir, bool shown)
+    {
+        var folder = (relDir ?? "").Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .Trim(Path.DirectorySeparatorChar);
+        if (folder.Length == 0)
+            throw new ArgumentException("That is the folder itself: show or hide it with SetIncluded.", nameof(relDir));
+        if (shown)
+            _hidden.Show(rootId, folder);
+        else
+            _hidden.Hide(rootId, folder);
+    }
+
     /// <summary>Removes a root, its items (cascade) and its cached thumbnails (cross-DB).</summary>
     public void RemoveRoot(long rootId)
     {
@@ -212,7 +232,47 @@ public sealed class LibraryService : IDisposable
 
     // --- Items / thumbnails --------------------------------------------------
 
-    public List<LibraryRow> GetUnion() => _items.GetIncludedUnion();
+    /// <summary>The items the library shows: those in included roots, outside any hidden subfolder.</summary>
+    public List<LibraryRow> GetUnion() => GetContents().Rows;
+
+    /// <summary>
+    /// What the library shows — the items of included roots, newest first, less those inside a hidden subfolder —
+    /// and the hidden subfolders, each with how many items it holds (counting items inside nested hidden folders
+    /// for each of them).
+    /// </summary>
+    public LibraryContents GetContents()
+    {
+        var rows = _items.GetIncludedUnion();
+        var hidden = _hidden.GetAll();
+        if (hidden.Count == 0)
+            return new LibraryContents(rows, []);
+
+        var counts = new int[hidden.Count];
+        var shown = new List<LibraryRow>(rows.Count);
+        foreach (var row in rows)
+        {
+            var dir = Path.GetDirectoryName(row.Item.RelPath) ?? "";
+            var inHidden = false;
+            for (var i = 0; i < hidden.Count; i++)
+            {
+                if (hidden[i].RootId != row.Item.RootId || !IsInside(dir, hidden[i].RelDir))
+                    continue;
+                counts[i]++;
+                inHidden = true;
+            }
+            if (!inHidden)
+                shown.Add(row);
+        }
+        return new LibraryContents(shown,
+            [.. hidden.Select((h, i) => new HiddenFolder(h.RootId, h.RelDir, counts[i]))
+                .OrderBy(h => h.RootId).ThenBy(h => h.RelDir, StringComparer.OrdinalIgnoreCase)]);
+    }
+
+    // The folder itself, or one inside it — not a sibling whose name merely starts the same ("Trip 2" isn't in "Trip").
+    private static bool IsInside(string dir, string folder) =>
+        dir.Equals(folder, StringComparison.OrdinalIgnoreCase)
+        || (dir.Length > folder.Length && dir[folder.Length] == Path.DirectorySeparatorChar
+            && dir.StartsWith(folder, StringComparison.OrdinalIgnoreCase));
 
     public int CountForRoot(long rootId) => _items.CountForRoot(rootId);
 

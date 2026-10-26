@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 14, after review round 14 of the single window) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 15, Paul's first trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -135,21 +135,26 @@ corresponds to `ActiveCatalog`.
   the next launch uses the last-open library's saved placement. Moving those keys to a shared settings file
   is a follow-up, not part of this branch.
 
-### 3. UI — the library switcher
+### 3. UI — libraries in the folder pane (revision 15)
 
-At the top of the folder pane: the open library's name with a menu (`CatalogBarViewModel`, dialogs behind
-`ICatalogDialogs` so the logic is testable):
+The folder pane lists the libraries under a **LIBRARIES** header (`CatalogBarViewModel`, dialogs behind
+`ICatalogDialogs` so the logic is testable), above **FOLDERS**, which lists the open library's folders:
 
-- **Switch to ▸** the other libraries, most recently opened first.
-- **New library…** asks for a name (not empty, usable as a folder name, not already taken), then a location
-  (suggesting `%LOCALAPPDATA%\Aperture Libraries`), and creates the library in a new folder
-  `<location>\<name>`. A folder that already exists must be empty.
+- The header collapses and expands the list (for this session). Its **+** menu has **New library…** and
+  **Open library…**.
+- Every library is listed by name. The open one is marked and shows its item count; clicking it shows
+  everything in it (what "Everything" did). Clicking another library switches to it.
+- Right-click a library: **Rename…**, **Remove from list**, **Delete library files…**. Remove and Delete are
+  disabled on the open library; the delete confirmation says exactly what is deleted and that photos are not.
+- **New library…** asks for a name (not empty, usable as a folder name, not already taken), then for the
+  folder of photos and videos to put in it, then whether to include that folder's subfolders (Yes is the
+  default). It keeps the new library's own files in `%LOCALAPPDATA%\Aperture Libraries\<name>` — or
+  `<name> (2)`, and so on, if that folder is taken — switches to it, adds the folder, and starts indexing it.
 - **Open library…** adds an existing library: the folder must already hold `aperture.db`. A folder already in
   the list just switches; a name clash gets a numbered name ("Photos (2)").
-- **Rename this library…**, **Remove from list ▸**, **Delete library files ▸**. Remove and Delete list only the
-  libraries you aren't in; the delete confirmation says exactly what is deleted and that photos are not.
-- Commands are disabled while one runs. `Alt`/`F10` don't move focus to the menu (`IsMainMenu="False"`).
-- With `APERTURE_DATA_DIR` set, Aperture uses only that folder, ignores the registry, and hides the switcher.
+- Commands are disabled while one runs.
+- With `APERTURE_DATA_DIR` set, Aperture uses only that folder, ignores the registry, and the pane shows
+  "Everything" instead of a library list.
 
 ### 4. Edge cases (the retry/replay + failure lens)
 
@@ -164,11 +169,11 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
 | Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be deleted from the other, nor removed while it's known to be open; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
 | Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. If the folder goes out of reach mid-delete, the library is forgotten and the user is told not all of its files were deleted, and how to finish (the database is deleted last, so the folder still has it and can be added back). A folder this user may not list is refused with its own message (nothing deleted, nothing forgotten; Remove from list still works). |
-| Aperture closed while New library is creating | The folder left behind holds only Aperture's lock (or a new, empty database). New library with the same name uses a lock-only folder again (a lock another window holds still counts as taken); one with a database can be added with Open library…. |
+| Aperture closed while New library is creating | The folder left behind holds only Aperture's lock (or a new, empty database). New library with the same name uses a lock-only folder again (a lock another window holds still counts as taken); one with a database is passed over for `<name> (2)` (revision 15), and can be added with Open library…. |
 | The same folder registered twice through different paths (junction, mapped drive; an 8.3 short name is de-duplicated) | Two list entries for one folder. Safe while open: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. Once neither is open, "Delete library files" on one leaves the other listed but pointing at a deleted library — switching to it then says so. |
 | The list file can't be read at launch (locked by another program, or not accessible) | Opens Default for now, says so, and changes nothing on disk until the list can be read. If the first read fails but a second one succeeds, the user's own choice opens, not Default. A Default the user had removed can come back into the list if they keep working in it during such a launch (it's the library that window has open, and an open library is always listed). |
 | A library on a drive or share that's gone | Remove from list works (without freezing the window); Delete says it can't reach the folder and changes nothing — also when the library is reached through a junction or link whose drive is gone. |
-| New library in the folder of a listed library | Refused, naming that library. |
+| New library whose folder is a listed library's, or already holds files | Passed over for the next free folder, `<name> (2)` and so on (revision 15; before that, when the user chose the location, refused). |
 | A library whose `aperture.lock` this user can't read | Remove from list works; Delete refuses, saying Aperture can't tell whether it's open. |
 | Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
@@ -181,6 +186,7 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 4b | One window (revision 11) | `SingleInstanceTests` (13), `RelaunchTests` (16) — real kernel objects and real child processes |
+| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (10), `FolderTreeTests` (7), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (2), `AddFolderDialogTests` (2), `TileLayoutTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -489,12 +495,13 @@ Accepted (one window, as ruled):
   launch again.
 - "Run as administrator" while Aperture runs normally brings the normal window forward instead of starting an
   elevated one; a newer exe started by hand while this one runs brings the running window forward.
-- **From when an update's old copy starts closing until its new copy claims** — the old copy's close, a few
-  seconds — a launch by hand becomes the window, and the new copy exits. The update is on disk either way. After
+- **From when an update's old copy starts closing until its new copy claims** — the old copy's close (measured:
+  well under a second, even mid-index) plus the new copy's start — a launch by hand becomes the window, and the
+  new copy exits. The update is on disk either way. After
   an in-place update the hand launch runs the new version (harmless). After the installer's move the downloaded
   exe isn't deleted (delete it by hand). After a portable update a shortcut to the old exe runs the old version
-  until the new exe is started. *(Revision 13: wider than "an instant" since the window is given up at close;
-  pending Paul's re-acceptance.)*
+  until the new exe is started. *(Revision 13: wider than "an instant" since the window is given up at close.
+  Accepted by Paul, 2026-10-26.)*
 - Pre-existing, from the two-window days: `settings.json` is written in place, and a read that fails counts as no
   settings. A launch whose settings load overlapped the closing copy's save (only on a slow library drive) would
   start with default settings.
@@ -509,6 +516,80 @@ launches during each close opened). Fixed: the relaunch test now has the closing
 "claim first, then wait" fails it; the live check is described as the smoke test it is (revision 14: it can't catch
 a slow close, because measured closes are fast); comments and this plan no longer say the claim lasts the whole
 run; the update-gap residual above states its real extent.
+
+### Revision 14 — what changed after review round 14
+
+Round 14 found the code and tests sound, but the live check could not fail, as worded. It is now described as a smoke
+test, and SW10 rests on reading and on round 13's probe. The millisecond race (a launch that asks just before a
+close starts) is recorded with the accepted residuals above. Round 15 was CLEAN at 3d13e9d.
+
+## Revision 15 — Paul's first trial (2026-10-26)
+
+Paul tried the build from 3d13e9d. He accepted the update-gap residual, and reported six things:
+
+1. **Bug:** a new library "with one directory" didn't show the directory or index it. The library was created
+   at `D:\func\Funcular` with no folders. New library's second question, "Choose where to create the library
+   folder", reads as "choose the folder for this library", so the folder of photos was taken as the place for
+   Aperture's own files.
+2. The dropdown at the top of the pane is unintuitive: libraries belong under the LIBRARIES header, which should
+   collapse, with the selected library's folders shown below.
+3. **Bug:** switching back to Default is unexpectedly slow.
+4. Adding a folder for the first time should ask whether to include subfolders (Yes by default).
+5. The title bar should show the library's name before the folder's.
+6. Subfolders should have show/hide checkboxes, like the top-level folders.
+
+**Item 3, measured.** A harness drove the real `MainWindow` and view model, switching as App does, against a copy
+of Paul's Default library (45,914 items, its 2 GB thumbnail cache). Launch to all visible thumbnails took 4.9 s;
+switching back took 7 s and grew with every switch, and switching to an *empty* library took 3.3 s. The cause:
+each tile's template bound its size four times through the window's view model (`RelativeSource
+AncestorType=Window`) and carried its own context menu with a dozen bindings through the view-model proxy. A
+library switch gives the window a new view model, so WPF re-evaluated every one of those bindings — about 1,000
+tiles per load, including tiles already discarded but not yet collected (19,000–30,000 bindings after a few
+switches). The ancestor lookups also made each tile's size unknown at creation, so the grid built roughly 1,000
+tiles to show 153. With the size inherited from the grid (`TileLayout.Size`) and one tile menu on the grid:
+launch 1.2 s, switching back 0.8 s and flat, switching away 0.06 s, managed heap 85 MB instead of 380 MB.
+
+Design:
+
+- **F1** — New library asks for the folder to put in the library, not where to keep Aperture's files: name →
+  folder → "Include subfolders?" (Yes by default) → the library's own files go in `%LOCALAPPDATA%\Aperture
+  Libraries\<name>`, or the next free `<name> (n)` → switch → the folder is added and indexed at once, as Add
+  folder does. Cancelling at any step creates nothing. (Choosing where a new library's files go is gone; Open
+  library… still adds a library from anywhere.)
+- **F2** — libraries are listed in the pane (§3). The collapsed state lasts the session. Only the open library
+  shows a count: counting another would mean opening it.
+- **F3** — tiles take their size from `TileLayout.Size` (an inherited value set on the grid) and the grid has one
+  tile menu, which `OnGridContextMenuOpening` points at the tile it opens on (the one under the pointer, or the
+  focused one for the menu key or Shift+F10; none on empty canvas or a section header).
+- **F4** — every way of adding a folder asks once about subfolders, Yes by default: Add folder, dropping
+  folders on the window (one question per drop), New library, and the first-run panel (a checkbox, ticked).
+- **F5** — title: `Aperture Image Browser vX — <library> — <folder>`, or `— <library>` at the top of a library;
+  with `APERTURE_DATA_DIR` there's no library name.
+- **F6** — a subfolder's checkbox hides it, exactly as a top-level folder's checkbox does: its photos and
+  videos, and those of every folder inside it, leave Everything, the grid and the counts above it; the folder
+  stays listed, unticked, with its own count, so it can be shown again. Hidden folders are kept per library in a
+  new `hidden_folders` table (created on open, so an existing library just gets an empty one; a version
+  without it ignores it). They are still indexed. A hidden folder whose items have all gone (renamed or deleted
+  on disk) isn't listed.
+
+| AC | Behaviour | Tests | Mutation each must kill |
+|---|---|---|---|
+| F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne` | ask for the location again; raise the hand-over before the switch; drop the free-folder search |
+| F2 | Every library listed by name, the open one marked; a switch moves the mark; Remove/Delete disabled on the open one; Rename works on any library; the list collapses | `CatalogBarViewModelTests.Libraries_ListEveryLibraryByName_MarkingTheOpenOne`, `…_FollowASwitch`, `RemoveAndDelete_AreDisabledForTheOpenLibrary`, `Rename_RenamesTheLibraryItIsGiven`, `IsExpanded_StartsOpen_AndToggles` | list only the others; enable Remove on the open one; rename the open one regardless |
+| F3 | No tile binding goes through the window or the view-model proxy; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; drop `Inherits` |
+| F4 | One question per add, for new folders only; Yes by default; cancel adds nothing; folders already added or gone are skipped without asking | `FolderAdditionsTests` (4), `AddFolderDialogTests` (2) | ask per folder; ask when nothing is new; default to No |
+| F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4) | drop the library; swap the order |
+| F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; the node reports a tick or untick once | `HiddenFoldersTests` (10), `FolderTreeTests` (7), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; report a non-change |
+
+`MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` remain exempt from the coverage floor (ruling of
+2026-10-25): the wiring there — the checkbox calling `SetFolderShown`, App handing New library's folder to the
+new view model, the drop and first-run questions — is checked by reading and by Paul's live check.
+
+Live check (Paul): create a library with New library… and one folder — it's listed under LIBRARIES, the folder
+appears under FOLDERS and its thumbnails stream in; click between libraries several times (each switch about as
+quick as the first); collapse LIBRARIES; right-click the open library (Remove and Delete are greyed out); the
+title shows the library's name; untick a subfolder — its photos leave Everything — and tick it again; drop a
+folder on the window — it asks about subfolders.
 
 ## Out of scope (future)
 

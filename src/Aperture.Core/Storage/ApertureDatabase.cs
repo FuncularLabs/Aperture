@@ -220,6 +220,15 @@ public sealed class ApertureDatabase : IDisposable
             last_used_ticks INTEGER NOT NULL,
             use_count       INTEGER NOT NULL
         );
+
+        -- Subfolders the user hid with their checkbox (a root's own folder is hidden with roots.included).
+        -- Created on open like the rest, so a library made by an earlier version just gets an empty table.
+        CREATE TABLE IF NOT EXISTS hidden_folders (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+            rel_dir TEXT    NOT NULL COLLATE NOCASE,
+            UNIQUE(root_id, rel_dir)
+        );
         """;
 
     // Thumbnails cannot reference items across DB files, so cascade deletes are

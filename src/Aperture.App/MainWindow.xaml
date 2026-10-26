@@ -4,7 +4,7 @@
         xmlns:vwp="clr-namespace:WpfToolkit.Controls;assembly=VirtualizingWrapPanel"
         xmlns:vm="clr-namespace:Aperture.App.ViewModels"
         xmlns:mvvm="clr-namespace:Aperture.App.Mvvm"
-        Title="{Binding WindowTitle}" Height="820" Width="1280"
+        Height="820" Width="1280"
         Icon="Assets/aperture.ico"
         Background="#F5F6F8"
         AllowDrop="True" DragOver="OnWindowDragOver" Drop="OnWindowDrop"
@@ -15,6 +15,7 @@
         <mvvm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
         <mvvm:NullToVisibilityConverter x:Key="NullToVis" />
         <mvvm:PreviewModeConverter x:Key="PreviewMode" />
+        <mvvm:WindowTitleConverter x:Key="WindowTitle" />
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
 
@@ -281,6 +282,15 @@
             </Style.Triggers>
         </Style>
     </Window.Resources>
+
+    <!-- "Aperture Image Browser vX  —  <library>  —  <folder>"; no library name when APERTURE_DATA_DIR pins one. -->
+    <Window.Title>
+        <MultiBinding Converter="{StaticResource WindowTitle}">
+            <Binding Path="AppVersion" />
+            <Binding Path="Catalog.ActiveName" />
+            <Binding Path="LocationTitle" />
+        </MultiBinding>
+    </Window.Title>
 
     <Grid>
     <DockPanel>
@@ -578,76 +588,135 @@
             <Border Grid.Column="0" Background="{StaticResource CanvasPanel}" BorderBrush="{StaticResource CanvasLine}"
                     BorderThickness="0,0,1,0" KeyboardNavigation.TabNavigation="Once">
                 <DockPanel>
-                    <!-- Library switcher (Option B): the open library, with a menu to switch to another, create
-                         one in a folder of its own, open an existing one, rename the open one, and remove or
-                         delete libraries you aren't in. Hidden when APERTURE_DATA_DIR pins a single library
-                         (Catalog is null then). IsMainMenu="False" keeps Alt / F10 from moving keyboard focus here. -->
-                    <Menu DockPanel.Dock="Top" Background="Transparent" Margin="8,10,8,0" IsMainMenu="False"
-                          Visibility="{Binding Catalog, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
-                        <MenuItem Padding="6,4" Cursor="Hand"
-                                  ToolTip="Switch or manage libraries">
-                            <MenuItem.Header>
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Data="M2,3 H6 L7.5,4.5 H14 V13 H2 Z" Fill="{StaticResource FolderTealBrush}"
-                                          Stretch="Uniform" Width="14" Height="14" Margin="0,0,7,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding Catalog.ActiveName}" FontWeight="SemiBold"
-                                               Foreground="{StaticResource CanvasInk}" VerticalAlignment="Center" />
-                                    <TextBlock Text=" &#x25BE;" Foreground="{StaticResource CanvasMuted}" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </MenuItem.Header>
-
-                            <MenuItem Header="Switch to" ItemsSource="{Binding Catalog.OtherCatalogs}"
-                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}">
-                                <MenuItem.ItemContainerStyle>
-                                    <Style TargetType="MenuItem">
-                                        <Setter Property="Header" Value="{Binding Name}" />
-                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
-                                        <Setter Property="Command" Value="{Binding Data.Catalog.SwitchCommand, Source={StaticResource Vm}}" />
-                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
-                                    </Style>
-                                </MenuItem.ItemContainerStyle>
+                    <!-- LIBRARIES: every library, the open one marked. Click the open one for everything in it, another
+                         to switch to it; right-click one to rename, remove or delete it. The header collapses the list
+                         (for this session); its + menu makes or opens a library. With APERTURE_DATA_DIR pinning a single
+                         library (Catalog is null) there's no list, and "Everything" stands in for it. -->
+                    <DockPanel DockPanel.Dock="Top" Margin="8,10,8,4" LastChildFill="False">
+                        <Menu DockPanel.Dock="Right" Background="Transparent" IsMainMenu="False"
+                              Visibility="{Binding Catalog, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
+                            <MenuItem Header="+" Padding="6,0" FontSize="15" Cursor="Hand" ToolTip="New or existing library"
+                                      Foreground="{StaticResource CanvasMuted}">
+                                <MenuItem Header="New library…" Command="{Binding Catalog.NewLibraryCommand}"
+                                          ToolTip="Create a library and choose a folder of photos and videos to put in it" />
+                                <MenuItem Header="Open library…" Command="{Binding Catalog.OpenLibraryCommand}"
+                                          ToolTip="Add a library that already exists (a folder holding aperture.db)" />
                             </MenuItem>
-                            <Separator Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}" />
-                            <MenuItem Header="New library…" Command="{Binding Catalog.NewLibraryCommand}"
-                                      ToolTip="Create a new, empty library in a folder of its own" />
-                            <MenuItem Header="Open library…" Command="{Binding Catalog.OpenLibraryCommand}"
-                                      ToolTip="Add a library that already exists (a folder holding aperture.db)" />
-                            <Separator />
-                            <MenuItem Header="Rename this library…" Command="{Binding Catalog.RenameCommand}" />
-                            <MenuItem Header="Remove from list" ItemsSource="{Binding Catalog.OtherCatalogs}"
-                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}"
-                                      ToolTip="Forget a library you aren't in. Its files stay; Open library… adds it back.">
-                                <MenuItem.ItemContainerStyle>
-                                    <Style TargetType="MenuItem">
-                                        <Setter Property="Header" Value="{Binding Name}" />
-                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
-                                        <Setter Property="Command" Value="{Binding Data.Catalog.RemoveCommand, Source={StaticResource Vm}}" />
-                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
-                                    </Style>
-                                </MenuItem.ItemContainerStyle>
-                            </MenuItem>
-                            <MenuItem Header="Delete library files" ItemsSource="{Binding Catalog.OtherCatalogs}"
-                                      Visibility="{Binding Catalog.HasOthers, Converter={StaticResource BoolToVis}}"
-                                      ToolTip="Delete Aperture's index, thumbnails and settings for a library you aren't in. Your photos are not touched.">
-                                <MenuItem.ItemContainerStyle>
-                                    <Style TargetType="MenuItem">
-                                        <Setter Property="Header" Value="{Binding Name}" />
-                                        <Setter Property="HeaderStringFormat" Value="{}{0}…" />
-                                        <Setter Property="ToolTip" Value="{Binding Dir}" />
-                                        <Setter Property="Command" Value="{Binding Data.Catalog.DeleteFilesCommand, Source={StaticResource Vm}}" />
-                                        <Setter Property="CommandParameter" Value="{Binding Id}" />
-                                    </Style>
-                                </MenuItem.ItemContainerStyle>
-                            </MenuItem>
-                        </MenuItem>
-                    </Menu>
-
-                    <!-- Libraries: a saved view over one or more folders. Only the built-in "Everything"
-                         (the union of every included folder) exists for now; add/remove comes later. -->
-                    <TextBlock DockPanel.Dock="Top" Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}"
-                               FontSize="11" FontWeight="SemiBold" Margin="14,12,14,6" />
+                        </Menu>
+                        <Button DockPanel.Dock="Left" Command="{Binding Catalog.ToggleExpandedCommand}" Cursor="Hand"
+                                IsTabStop="False" Focusable="False" ToolTip="Show or hide the libraries">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="Transparent" Padding="6,4">
+                                        <ContentPresenter />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock FontSize="11" Foreground="{StaticResource CanvasMuted}" Width="12"
+                                           VerticalAlignment="Center"
+                                           Visibility="{Binding Catalog, Converter={StaticResource NullToVis}, ConverterParameter=invert}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="▾" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Catalog.IsExpanded}" Value="False">
+                                                    <Setter Property="Text" Value="▸" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="LIBRARIES" Foreground="{StaticResource CanvasMuted}" FontSize="11"
+                                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </DockPanel>
+                    <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Catalog.Libraries}" Margin="8,0,8,2"
+                                  Focusable="False"
+                                  Visibility="{Binding Catalog.IsExpanded, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Click="OnEverythingClick" Margin="0,0,0,2" IsTabStop="False" Focusable="False"
+                                        HorizontalContentAlignment="Stretch" Cursor="Hand" Padding="0" BorderThickness="0"
+                                        Foreground="{StaticResource CanvasInk}" FontSize="14" ToolTip="{Binding Dir}">
+                                    <Button.Style>
+                                        <!-- The open library shows everything in it; another one is switched to. -->
+                                        <Style TargetType="Button">
+                                            <Setter Property="Command" Value="{Binding Data.Catalog.SwitchCommand, Source={StaticResource Vm}}" />
+                                            <Setter Property="CommandParameter" Value="{Binding Id}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                    <Setter Property="Command" Value="{Binding Data.NavigateHomeCommand, Source={StaticResource Vm}}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <!-- Constant 3px left inset so selecting doesn't shift the content. -->
+                                            <Border x:Name="bg" CornerRadius="4" Background="Transparent"
+                                                    BorderBrush="Transparent" BorderThickness="3,0,0,0">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="bg" Property="Background" Value="{StaticResource CanvasHover}" />
+                                                </Trigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding IsActive}" Value="True" />
+                                                        <Condition Binding="{Binding Data.IsHome, Source={StaticResource Vm}}" Value="True" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter TargetName="bg" Property="Background" Value="{StaticResource NavSelBg}" />
+                                                    <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource NavSelBar}" />
+                                                </MultiDataTrigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <Button.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Rename…"
+                                                      Command="{Binding Data.Catalog.RenameCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Id}" />
+                                            <Separator />
+                                            <MenuItem Header="Remove from list" ToolTipService.ShowOnDisabled="True"
+                                                      ToolTip="Forget this library. Its files stay; Open library… adds it back. (Not the open library: switch to another first.)"
+                                                      Command="{Binding Data.Catalog.RemoveCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Id}" />
+                                            <MenuItem Header="Delete library files…" ToolTipService.ShowOnDisabled="True"
+                                                      ToolTip="Delete Aperture's index, thumbnails and settings for this library. Your photos are not touched. (Not the open library: switch to another first.)"
+                                                      Command="{Binding Data.Catalog.DeleteFilesCommand, Source={StaticResource Vm}}"
+                                                      CommandParameter="{Binding Id}" />
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
+                                    <StackPanel Orientation="Horizontal" Margin="9,6">
+                                        <Path Data="M2,2 H7 V7 H2 Z M9,2 H14 V7 H9 Z M2,9 H7 V14 H2 Z M9,9 H14 V14 H9 Z"
+                                              Fill="{StaticResource FolderTealBrush}" Stretch="Uniform" Width="14" Height="14"
+                                              Margin="0,0,7,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                            <Setter Property="FontWeight" Value="SemiBold" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Data.TotalItemCount, Source={StaticResource Vm}, StringFormat= ({0:n0})}"
+                                                   Foreground="{StaticResource CanvasMuted}" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="5,0,0,0"
+                                                   Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" />
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                     <Button x:Name="EverythingButton" DockPanel.Dock="Top" Command="{Binding NavigateHomeCommand}"
                             Click="OnEverythingClick"
+                            Visibility="{Binding Catalog, Converter={StaticResource NullToVis}}"
                             Margin="8,0,8,2" IsTabStop="False" Focusable="False"
                             HorizontalContentAlignment="Stretch" Cursor="Hand" Padding="0" BorderThickness="0"
                             Foreground="{StaticResource CanvasInk}" FontSize="14"
@@ -770,15 +839,24 @@
                                               Margin="0,0,6,0" ToolTip="Include this folder"
                                               Focusable="False" IsTabStop="False"
                                               Visibility="{Binding IsRoot, Converter={StaticResource BoolToVis}}" />
+                                    <!-- A subfolder's own box: untick to hide it, and everything inside it, as a root's box does. -->
+                                    <CheckBox IsChecked="{Binding IsShown, Mode=TwoWay}" VerticalAlignment="Center"
+                                              Margin="0,0,6,0" ToolTip="Show this folder"
+                                              Focusable="False" IsTabStop="False"
+                                              Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
                                     <Path Data="M2,5 L6,5 L7.6,6.8 L14,6.8 L14,13 L2,13 Z" Fill="#3FC2B6"
                                           Stretch="Uniform" Width="15" Height="15" Margin="0,0,6,0" VerticalAlignment="Center"
                                           Visibility="{Binding IsRoot, Converter={StaticResource InverseBoolToVis}}" />
-                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource CanvasInk}" VerticalAlignment="Center"
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" MouseLeftButtonDown="OnAliasClick">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
                                                 <Setter Property="Visibility" Value="Visible" />
+                                                <Setter Property="Foreground" Value="{StaticResource CanvasInk}" />
                                                 <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsShown}" Value="False">
+                                                        <Setter Property="Foreground" Value="{StaticResource CanvasMuted}" />
+                                                    </DataTrigger>
                                                     <DataTrigger Binding="{Binding Root.IsEditing}" Value="True">
                                                         <Setter Property="Visibility" Value="Collapsed" />
                                                     </DataTrigger>
@@ -836,6 +914,8 @@
                       PreviewMouseLeftButtonDown="OnContentsPanePreviewLeftDown">
                 <ListBox x:Name="ItemsList"
                      ItemsSource="{Binding ItemsView}"
+                     mvvm:TileLayout.Size="{Binding TileSize}"
+                     ContextMenuOpening="OnGridContextMenuOpening"
                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                      SelectionMode="Extended"
                      Focusable="True"
@@ -858,6 +938,63 @@
                      MouseDoubleClick="OnItemsDoubleClick"
                      PreviewMouseWheel="OnItemsPreviewMouseWheel"
                      PreviewKeyDown="OnGridKeyDown">
+                <!-- One tile menu for the whole grid (not one per tile): it acts on the tile it was opened on, which
+                     OnGridContextMenuOpening makes its DataContext. A menu inside every tile kept a dozen bindings per
+                     tile on the view-model proxy, and WPF re-evaluated all of them — tiles already discarded included —
+                     on every library switch. -->
+                <ListBox.ContextMenu>
+                    <ContextMenu Closed="OnGridContextMenuClosed">
+                        <MenuItem Header="Preview" InputGestureText="Space"
+                                  Command="{Binding Data.OpenQuickLookCommand, Source={StaticResource Vm}}">
+                            <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE7B3;" /></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Open"
+                                  Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
+                        <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
+                            <MenuItem Header="" />
+                        </MenuItem>
+                        <MenuItem Header="Open containing folder"
+                                  Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><Image Source="{StaticResource OpenFolderIcon}" Width="16" Height="16" /></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Tags &amp; notes…"
+                                  Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8EC;" /></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
+                                  Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
+                                  Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Copy file name"
+                                  Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}" />
+                        <MenuItem Header="Copy full path"
+                                  Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}" />
+                        <Separator />
+                        <MenuItem Header="Copy" InputGestureText="Ctrl+C"
+                                  Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Cut" InputGestureText="Ctrl+X"
+                                  Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
+                        </MenuItem>
+                    </ContextMenu>
+                </ListBox.ContextMenu>
                 <ListBox.InputBindings>
                     <KeyBinding Key="Back" Command="{Binding NavigateUpCommand}" />
                 </ListBox.InputBindings>
@@ -906,64 +1043,11 @@
                 <ListBox.Resources>
                     <!-- Media tile -->
                     <DataTemplate DataType="{x:Type vm:TileVm}">
-                        <StackPanel Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                        <StackPanel Width="{Binding (mvvm:TileLayout.Size), RelativeSource={RelativeSource Self}}"
                                     ToolTip="{Binding Tooltip}">
-                            <StackPanel.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Preview" InputGestureText="Space"
-                                              Command="{Binding Data.OpenQuickLookCommand, Source={StaticResource Vm}}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE7B3;" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <Separator />
-                                    <MenuItem Header="Open"
-                                              Command="{Binding Data.OpenSelectedCommand, Source={StaticResource Vm}}" />
-                                    <MenuItem Header="Open with" SubmenuOpened="OnOpenWithSubmenuOpened">
-                                        <MenuItem Header="" />
-                                    </MenuItem>
-                                    <MenuItem Header="Open containing folder"
-                                              Command="{Binding Data.OpenContainingFolderCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><Image Source="{StaticResource OpenFolderIcon}" Width="16" Height="16" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <Separator />
-                                    <MenuItem Header="Tags &amp; notes…"
-                                              Command="{Binding Data.EditAnnotationCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8EC;" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <Separator />
-                                    <MenuItem Header="Copy image" Visibility="{Binding IsVideo, Converter={StaticResource InverseBoolToVis}}"
-                                              Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Copy thumbnail" Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
-                                              Command="{Binding Data.CopyImageCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><Image Source="{StaticResource PhotoStackIcon}" Width="16" Height="16" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Copy file name"
-                                              Command="{Binding Data.CopyFileNameCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
-                                    <MenuItem Header="Copy full path"
-                                              Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}" />
-                                    <Separator />
-                                    <MenuItem Header="Copy" InputGestureText="Ctrl+C"
-                                              Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Cut" InputGestureText="Ctrl+X"
-                                              Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
-                                              CommandParameter="{Binding}">
-                                        <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </StackPanel.ContextMenu>
                             <Border Background="{StaticResource CanvasThumbBg}" CornerRadius="6"
-                                    Width="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    Height="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    Width="{Binding (mvvm:TileLayout.Size), RelativeSource={RelativeSource Self}}"
+                                    Height="{Binding (mvvm:TileLayout.Size), RelativeSource={RelativeSource Self}}">
                                 <Grid>
                                     <!-- Fill the square tile (center-crop) for a clean uniform grid -->
                                     <Border CornerRadius="6" RenderOptions.BitmapScalingMode="HighQuality">
@@ -1016,7 +1100,7 @@
                             <TextBlock Text="{Binding Caption}" Foreground="{StaticResource CanvasMuted}"
                                        FontSize="11" TextAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Margin="2,4,2,0"
-                                       MaxWidth="{Binding DataContext.TileSize, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                       MaxWidth="{Binding (mvvm:TileLayout.Size), RelativeSource={RelativeSource Self}}" />
                         </StackPanel>
                     </DataTemplate>
                 </ListBox.Resources>
@@ -1226,6 +1310,9 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <CheckBox IsChecked="{Binding FirstRunIncludeSubfolders}" Margin="0,14,0,0">
+                        <TextBlock Text="Include subfolders" Foreground="{StaticResource Ink}" Margin="4,0,0,0" />
+                    </CheckBox>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
                         <Button Content="Not now" Style="{StaticResource ToolButton}" Command="{Binding SkipFirstRunCommand}" />
                         <Button Content="Add selected" Style="{StaticResource ToolButton}"
