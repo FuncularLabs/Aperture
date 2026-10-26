@@ -144,6 +144,12 @@ public sealed class CatalogRegistry
     /// <summary>How long to wait for another window's change before going ahead without the lock.</summary>
     internal TimeSpan LockTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Test seam: runs inside every change, after the file is re-read and before the change is made — the one
+    /// window where a file that couldn't be read becoming writable again would let a stale copy be saved.
+    /// </summary>
+    internal Action? BetweenReadAndChange { get; set; }
+
     /// <summary>All registered catalogs, in registration order. Snapshots — mutating them does nothing.</summary>
     public IReadOnlyList<CatalogEntry> List()
     {
@@ -402,6 +408,7 @@ public sealed class CatalogRegistry
                 catch (AbandonedMutexException) { owned = true; } // the other window died mid-change; carry on
                 if (refresh)
                     RefreshFromDisk(keepActive: true);
+                BetweenReadAndChange?.Invoke();
                 return change();
             }
             finally

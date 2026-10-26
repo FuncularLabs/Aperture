@@ -679,6 +679,23 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void AListThatCouldntBeRead_IsNotOverwritten_EvenIfItBecomesWritableBeforeTheSave()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two")); // another window's addition; A hasn't seen it
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); // the read gives up…
+        a.BetweenReadAndChange = locker.Dispose;                                               // …then the lock lifts
+        Assert.Throws<IOException>(() => a.Add("Three", dir.Combine("three")));
+        a.BetweenReadAndChange = null;
+
+        Assert.Equal(["One", "Two"], new CatalogRegistry(path).List().Select(c => c.Name)); // not [One, Three]
+    }
+
+    [Fact]
     public void WhileTheListCantBeRead_ChangesAreRefused_AndReadFailedSaysWhy()
     {
         using var dir = new TempDir();
