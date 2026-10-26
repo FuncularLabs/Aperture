@@ -297,35 +297,51 @@ public class LibraryServiceShutdownTests
     }
 
     [Fact]
-    public async Task Constructor_WaitsOutAnotherWindowsMomentaryIsOpenCheck()
+    public void Constructor_WaitsOutAnotherWindowsMomentaryIsOpenCheck()
     {
         using var dir = new TempDir();
         using (new LibraryService(dir.Path)) { }
         var probe = new FileStream(
             Path.Combine(dir.Path, ApertureDatabase.LockFileName), FileMode.Open, FileAccess.Read, FileShare.None);
-        var release = Task.Delay(100).ContinueWith(_ => probe.Dispose());
+        var release = new Thread(() => { Thread.Sleep(50); probe.Dispose(); }); // a dedicated thread: no pool delays
+        release.Start();
 
         using var opened = new LibraryService(dir.Path); // must not fail just because a check was in progress
-        await release;
+        release.Join();
 
         Assert.True(LibraryService.IsOpen(dir.Path));
     }
 
     [Fact]
-    public async Task OpeningALibraryThatWasDeletedWhileItWaited_FailsInsteadOfRecreatingItEmpty()
+    public void OpeningALibraryThatWasDeletedWhileItWaited_FailsInsteadOfRecreatingItEmpty()
     {
         using var dir = new TempDir();
         using (new LibraryService(dir.Path)) { }
         var db = Path.Combine(dir.Path, ApertureDatabase.MetadataFileName);
-        var deleting = new FileStream(Path.Combine(dir.Path, ApertureDatabase.LockFileName),
+        var lockFile = Path.Combine(dir.Path, ApertureDatabase.LockFileName);
+        var deleting = new FileStream(lockFile,
             FileMode.Open, FileAccess.Read, FileShare.None, 1, FileOptions.DeleteOnClose); // another window's delete…
         File.Delete(db);
-        var release = Task.Delay(60).ContinueWith(_ => deleting.Dispose());                // …finishing while this one waits
+        var finishes = new Thread(() => { Thread.Sleep(50); deleting.Dispose(); });         // …finishing while this one waits
+        finishes.Start();
 
-        Assert.ThrowsAny<IOException>(() => new LibraryService(dir.Path, mustExist: true));
-        await release;
+        var ex = Assert.ThrowsAny<IOException>(() => new LibraryService(dir.Path, mustExist: true));
+        finishes.Join();
 
-        Assert.False(File.Exists(db)); // not recreated as an empty library
+        Assert.Contains("no Aperture library", ex.Message); // it got the lock and re-checked; not just "can't open"
+        Assert.False(File.Exists(db));                      // not recreated as an empty library
+        Assert.False(File.Exists(lockFile));                // and the lock file it made is gone again
+    }
+
+    [Fact]
+    public void OpeningALibraryThatMustExist_NeverCreatesItsFolder()
+    {
+        using var outer = new TempDir();
+        var gone = outer.Combine("gone");
+
+        Assert.ThrowsAny<IOException>(() => new LibraryService(gone, mustExist: true));
+
+        Assert.False(Directory.Exists(gone));
     }
 
     [Fact]

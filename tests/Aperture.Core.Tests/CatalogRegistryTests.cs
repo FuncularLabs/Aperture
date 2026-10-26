@@ -646,7 +646,7 @@ public class CatalogRegistryTests
     }
 
     [Fact]
-    public async Task Save_WaitsOutAnotherWindowBrieflyReadingTheFile()
+    public void Save_WaitsOutAnotherWindowBrieflyReadingTheFile()
     {
         using var dir = new TempDir();
         var path = RegistryPath(dir);
@@ -654,9 +654,10 @@ public class CatalogRegistryTests
         reg.Add("One", dir.Combine("one"));
 
         var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); // blocks the rename
-        var release = Task.Delay(100).ContinueWith(_ => reader.Dispose());
+        var release = new Thread(() => { Thread.Sleep(50); reader.Dispose(); });           // no thread-pool delays
+        release.Start();
         var two = reg.Add("Two", dir.Combine("two"));
-        await release;
+        release.Join();
 
         Assert.Contains(new CatalogRegistry(path).List(), c => c.Id == two.Id);
     }
@@ -730,7 +731,7 @@ public class CatalogRegistryTests
     }
 
     [Fact]
-    public async Task AChange_WaitsOutABriefReadLock_AndMergesAsUsual()
+    public void AChange_WaitsOutABriefReadLock_AndMergesAsUsual()
     {
         using var dir = new TempDir();
         var path = RegistryPath(dir);
@@ -739,9 +740,10 @@ public class CatalogRegistryTests
         new CatalogRegistry(path).Add("Two", dir.Combine("two"));
 
         var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var release = Task.Delay(100).ContinueWith(_ => locker.Dispose());
+        var release = new Thread(() => { Thread.Sleep(50); locker.Dispose(); }); // no thread-pool delays
+        release.Start();
         a.Add("Three", dir.Combine("three")); // the read retries past the brief lock instead of refusing
-        await release;
+        release.Join();
 
         Assert.Equal(["One", "Two", "Three"], new CatalogRegistry(path).List().Select(c => c.Name));
     }
@@ -804,20 +806,88 @@ public class CatalogRegistryTests
         Assert.Equal("{ broken", File.ReadAllText(path)); // the bytes it couldn't set aside are still there
     }
 
-    [Fact]
-    public void ARegistryLockThisWindowIsDeniedAccessTo_IsTreatedLikeABusyLock_NotAnError()
+    private static Mutex ARegistryLockOnlyAdminsMayOpen(CatalogRegistry reg)
     {
-        using var dir = new TempDir();
-        var reg = new CatalogRegistry(RegistryPath(dir));
         var adminsOnly = new System.Security.AccessControl.MutexSecurity();
         adminsOnly.AddAccessRule(new System.Security.AccessControl.MutexAccessRule(
             new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
             System.Security.AccessControl.MutexRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
-        using var elevatedWindows = System.Threading.MutexAcl.Create(false, reg.MutexName, out _, adminsOnly);
+        return System.Threading.MutexAcl.Create(false, reg.MutexName, out _, adminsOnly); // as an elevated window's change makes it
+    }
 
-        reg.Add("One", dir.Combine("one")); // goes ahead without the lock, as after a timeout
+    [Fact]
+    public void ARegistryLockThisWindowMayNotOpen_IsWaitedFor_LikeAnyHeldLock()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromSeconds(3) };
+        var elevatedWindowsChange = ARegistryLockOnlyAdminsMayOpen(reg);
+        var finishes = new Thread(() => { Thread.Sleep(300); elevatedWindowsChange.Dispose(); }); // its change ends
+        finishes.Start();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        reg.Add("One", dir.Combine("one"));
+        clock.Stop();
+        finishes.Join();
+
+        Assert.True(clock.ElapsedMilliseconds >= 200, $"went ahead after {clock.ElapsedMilliseconds} ms instead of waiting");
+        Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
+    }
+
+    [Fact]
+    public void ARegistryLockThisWindowMayNotOpen_StillGoesAheadAfterTheTimeout()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromMilliseconds(150) };
+        using var neverEnds = ARegistryLockOnlyAdminsMayOpen(reg);
+
+        reg.Add("One", dir.Combine("one")); // goes ahead without the lock rather than hang or fail
 
         Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_WhenTheFolderGoesAwayMidDelete_SaysSo_InsteadOfReportingSuccess()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("usb");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("USB", catDir);
+        reg.BetweenReadAndChange = () => Directory.Move(catDir, dir.Combine("usb-unplugged")); // unplugged mid-delete
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.BetweenReadAndChange = null;
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
+        Assert.Equal([catDir], result.FilesLeft);
+        Assert.True(File.Exists(Path.Combine(dir.Combine("usb-unplugged"), ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_ListsTheLockFileAsLeftOnlyIfThereIsOne()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("readonly");
+        using (new LibraryService(catDir)) { }
+        File.Delete(Path.Combine(catDir, ApertureDatabase.LockFileName));
+        var entry = reg.Add("Read-only", catDir);
+        Acl.DenyCreateFiles(catDir); // the delete can't create the lock file to take it
+        CatalogDeletion result;
+        try
+        {
+            result = reg.RemoveAndDeleteFiles(entry.Id);
+        }
+        finally
+        {
+            Acl.RestoreCreateFiles(catDir);
+        }
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
+        Assert.Contains(Path.Combine(catDir, ApertureDatabase.MetadataFileName), result.FilesLeft);
+        Assert.DoesNotContain(Path.Combine(catDir, ApertureDatabase.LockFileName), result.FilesLeft);
     }
 
     [Fact]

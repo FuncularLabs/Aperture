@@ -66,9 +66,10 @@ public sealed class LibraryService : IDisposable
 
     /// <param name="dataDir">The library's folder.</param>
     /// <param name="mustExist">
-    /// The library must already be there (true for every library but the local Default). Checked again once its
-    /// lock is held, so a library another window deleted while this one waited for the lock is reported, not
-    /// recreated empty; and the folder is never created.
+    /// The library must already be there — true when opening an existing library; false for the local Default, a
+    /// brand-new library, and the pinned <c>APERTURE_DATA_DIR</c> folder, which may be created on the spot. Checked
+    /// again once its lock is held, so a library another window deleted while this one waited for the lock is
+    /// reported, not recreated empty; and the folder is never created.
     /// </param>
     internal LibraryService(string dataDir, bool mustExist)
     {
@@ -167,7 +168,7 @@ public sealed class LibraryService : IDisposable
             }
             catch (IOException ex) when (IsSharingViolation(ex) && attempt < 5)
             {
-                Thread.Sleep(50); // another window's IsOpen check holds it for an instant
+                Thread.Sleep(50); // another window's OpenState check holds it for an instant
             }
             catch (IOException ex) when (IsSharingViolation(ex))
             {

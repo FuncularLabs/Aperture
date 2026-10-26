@@ -1031,6 +1031,25 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task RemoveAndDelete_TouchTheLibraryFolderOffTheCallersThread()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var one = AddLibrary(service, "One", outer.Combine("one"));
+        var two = AddLibrary(service, "Two", outer.Combine("two"));
+        var threads = new List<int>();
+        service.Registry.BetweenReadAndChange = () => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+
+        using var ui = new SingleThreadContext();
+        await ui.Run(() => service.RemoveAsync(one.Id));      // an offline share can take tens of seconds to answer —
+        await ui.Run(() => service.DeleteFilesAsync(two.Id)); // never on the UI thread
+        service.Registry.BetweenReadAndChange = null;
+
+        Assert.Equal(2, threads.Count);
+        Assert.DoesNotContain(ui.ThreadId, threads);
+    }
+
+    [Fact]
     public async Task DeleteFilesAsync_OfALibraryWhoseFolderCantBeReached_SaysNothingWasDeleted()
     {
         using var outer = new TempDir();

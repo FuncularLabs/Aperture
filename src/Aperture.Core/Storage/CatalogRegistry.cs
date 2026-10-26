@@ -302,6 +302,11 @@ public sealed class CatalogRegistry
         if (outcome.Entry is null)
             return new CatalogDeletion(outcome.Outcome, []);
 
+        // The folder may have gone away since the check above (a drive unplugged mid-delete): then nothing could be
+        // deleted, and the user must hear so rather than see a success while the tags and notes stay on that drive.
+        if (!Directory.Exists(outcome.Entry.Dir))
+            return new CatalogDeletion(CatalogDeletionOutcome.PartiallyDeleted, [outcome.Entry.Dir]);
+
         var left = DeleteCatalogFiles(outcome.Entry.Dir);
         return new CatalogDeletion(left.Count == 0 ? CatalogDeletionOutcome.Deleted : CatalogDeletionOutcome.PartiallyDeleted, left);
     }
@@ -358,7 +363,10 @@ public sealed class CatalogRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
+            // Nothing deleted. Name what's left — or, if the folder can't even be seen now, the folder itself, so the
+            // caller never mistakes this for a delete with nothing left over.
+            List<string> untouched = [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
+            return untouched.Count > 0 ? untouched : [dir];
         }
 
         using (exclusive)
@@ -419,19 +427,32 @@ public sealed class CatalogRegistry
             var owned = false;
             try
             {
-                try
+                var deadline = DateTime.UtcNow + LockTimeout;
+                while (true)
                 {
-                    mutex = new Mutex(false, MutexName);
-                    owned = mutex.WaitOne(LockTimeout);
-                }
-                catch (AbandonedMutexException)
-                {
-                    owned = true; // the other window died mid-change; carry on
-                }
-                catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
-                {
-                    // An elevated Aperture window made the lock and this one isn't allowed to open it: go ahead
-                    // without it, as after a timeout, rather than fail every change (or the launch).
+                    try
+                    {
+                        mutex = new Mutex(false, MutexName);
+                        var left = deadline - DateTime.UtcNow;
+                        owned = mutex.WaitOne(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+                        break;
+                    }
+                    catch (AbandonedMutexException)
+                    {
+                        owned = true; // the other window died mid-change; carry on
+                        break;
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
+                    {
+                        // An elevated Aperture window is mid-change: the lock exists only while it holds it, and this
+                        // window isn't allowed to open it. Wait for it to finish, as for any held lock — and after
+                        // LockTimeout go ahead without it, rather than hang or fail the change (or the launch).
+                        mutex?.Dispose();
+                        mutex = null;
+                        if (DateTime.UtcNow >= deadline)
+                            break;
+                        Thread.Sleep(25);
+                    }
                 }
                 if (refresh)
                     RefreshFromDisk(keepActive: true);
