@@ -68,6 +68,7 @@ public class CatalogServiceTests
             Assert.Equal("Default", service.ActiveCatalog!.Name);
             Assert.Empty(service.Current.GetUnion());
             Assert.Contains("USB", service.OpenWarning); // said every time, not just once
+            Assert.Contains("Remove from list", service.OpenWarning); // and how to stop it if the drive is gone for good
             Assert.Contains(service.Registry.List(), c => c.Id == usbId);
         }
         Assert.False(Directory.Exists(usbDir)); // never silently recreated as an empty library
@@ -182,6 +183,81 @@ public class CatalogServiceTests
 
         Assert.Equal(Path.GetFullPath(defaultDir), service.ActiveCatalog!.Dir);
         Assert.Contains("Work", service.OpenWarning);
+    }
+
+    [Fact]
+    public async Task Open_WhileTheLibraryListIsLocked_KeepsTheList_AndSaysWhy()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var defaultDir = outer.Combine("default");
+        await using (var first = CatalogService.Open(regPath, defaultDir))
+        {
+            AddLibrary(first, "Work", outer.Combine("work"));
+            AddLibrary(first, "Travel", outer.Combine("travel"));
+        }
+
+        CatalogService launched;
+        using (new FileStream(regPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) // locked for the whole launch
+            launched = CatalogService.Open(regPath, defaultDir);
+
+        await using (launched)
+        {
+            Assert.Equal("Default", launched.ActiveCatalog!.Name);
+            Assert.Contains("couldn't read its list of libraries", launched.OpenWarning);
+        }
+        var onDisk = new CatalogRegistry(regPath).List().Select(c => c.Name).ToList();
+        Assert.Contains("Work", onDisk);   // the list it couldn't read was never replaced
+        Assert.Contains("Travel", onDisk);
+    }
+
+    [Fact]
+    public async Task Open_WhenTheListIsLockedBriefly_TheUsersLibrariesSurvive()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var defaultDir = outer.Combine("default");
+        await using (var first = CatalogService.Open(regPath, defaultDir))
+        {
+            AddLibrary(first, "Work", outer.Combine("work"));
+            AddLibrary(first, "Travel", outer.Combine("travel"));
+        }
+
+        var locker = new FileStream(regPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var release = Task.Delay(420).ContinueWith(_ => locker.Dispose());
+        var launched = CatalogService.Open(regPath, defaultDir);
+        await release;
+        await launched.DisposeAsync();
+
+        var onDisk = new CatalogRegistry(regPath).List().Select(c => c.Name).ToList();
+        Assert.Contains("Work", onDisk);
+        Assert.Contains("Travel", onDisk);
+    }
+
+    [Fact]
+    public async Task Open_LastResortDefault_IsForThisLaunchOnly_TheUsersLibraryOpensOnceItsBack()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        var defaultDir = outer.Combine("default");
+        var workDir = outer.Combine("work");
+        var parked = outer.Combine("work-unplugged");
+        string workId;
+        await using (var first = CatalogService.Open(regPath, defaultDir))
+        {
+            var work = AddLibrary(first, "Work", workDir);
+            await first.SwitchToAsync(work.Id);
+            await first.RemoveAsync(first.Registry.List().Single(c => c.Name == "Default").Id);
+            workId = work.Id;
+        }
+        Directory.Move(workDir, parked);
+        await using (var fallback = CatalogService.Open(regPath, defaultDir)) // only Default can be opened
+            Assert.Equal(Path.GetFullPath(defaultDir), fallback.ActiveCatalog!.Dir);
+        Directory.Move(parked, workDir);
+
+        await using var later = CatalogService.Open(regPath, defaultDir);
+
+        Assert.Equal(workId, later.ActiveCatalog!.Id);
     }
 
     [Fact]
@@ -518,6 +594,11 @@ public class CatalogServiceTests
     [InlineData("COM1")]
     [InlineData("lpt9")]
     [InlineData("aux.txt")]
+    [InlineData("COM0")]
+    [InlineData("LPT0")]
+    [InlineData("COM¹")] // COM¹ — superscript digits count too
+    [InlineData("CONIN$")]
+    [InlineData("conout$")]
     [InlineData("default")] // case-insensitive duplicate of the existing "Default"
     public async Task CreateLibraryAsync_BadName_IsRefused_BeforeAnythingIsCreated(string name)
     {
@@ -905,6 +986,23 @@ public class CatalogServiceTests
 
         Assert.True(File.Exists(Path.Combine(work.Dir, "settings.json")));
         Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_OfTheOpenLibraryReachedByAnotherPath_IsRefused_AndDeletesNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var real = AddLibrary(service, "Real", outer.Combine("real"));
+        var alias = outer.Combine("alias");
+        Junction.Create(alias, real.Dir);
+        await service.OpenLibraryAsync(alias); // the same folder, picked by another path: now open
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(real.Id));
+
+        Assert.Contains("is open", ex.Message);
+        Assert.True(File.Exists(Path.Combine(real.Dir, ApertureDatabase.MetadataFileName)));
+        Assert.Empty(service.Current.GetUnion());
     }
 
     [Fact]

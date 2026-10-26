@@ -341,6 +341,43 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void RemoveAndDeleteFiles_OfALibraryOpenAnywhere_DeletesNothing()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("open");
+        using var open = new LibraryService(catDir); // open in some window, by some path
+        open.Settings.Update(s => s.DefaultZoom = 3);
+        var entry = reg.Add("Open", catDir);
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
+        Assert.Contains(Path.Combine(catDir, ApertureDatabase.MetadataFileName), result.FilesLeft);
+        Assert.True(File.Exists(Path.Combine(catDir, ApertureDatabase.MetadataFileName)));
+        Assert.True(File.Exists(Path.Combine(catDir, "settings.json")));
+        Assert.Empty(open.GetUnion()); // the open library still works
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_AlsoRemovesTheLockFile_SoNothingOfApertureIsLeft()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("closed");
+        using (new LibraryService(catDir)) { } // leaves its (released) lock file behind
+        Assert.True(File.Exists(Path.Combine(catDir, ApertureDatabase.LockFileName)));
+        File.WriteAllText(Path.Combine(catDir, "mine.txt"), "keep");
+        var entry = reg.Add("Closed", catDir);
+
+        reg.RemoveAndDeleteFiles(entry.Id);
+
+        Assert.Equal(["mine.txt"], Directory.GetFiles(catDir).Select(Path.GetFileName));
+    }
+
+    [Fact]
     public void RemoveAndDeleteFiles_UnknownId_IsNotFound()
     {
         using var dir = new TempDir();
@@ -609,7 +646,7 @@ public class CatalogRegistryTests
     }
 
     [Fact]
-    public void Save_WaitsOutAnotherWindowBrieflyReadingTheFile()
+    public async Task Save_WaitsOutAnotherWindowBrieflyReadingTheFile()
     {
         using var dir = new TempDir();
         var path = RegistryPath(dir);
@@ -619,9 +656,47 @@ public class CatalogRegistryTests
         var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); // blocks the rename
         var release = Task.Delay(100).ContinueWith(_ => reader.Dispose());
         var two = reg.Add("Two", dir.Combine("two"));
-        release.Wait();
+        await release;
 
         Assert.Contains(new CatalogRegistry(path).List(), c => c.Id == two.Id);
+    }
+
+    [Fact]
+    public async Task AChangeWhileTheListCantBeRead_NeverSavesOverIt()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        a.Add("One", dir.Combine("one"));
+        new CatalogRegistry(path).Add("Two", dir.Combine("two")); // another window's addition; A hasn't seen it
+
+        var locker = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); // a backup tool, say
+        var release = Task.Delay(260).ContinueWith(_ => locker.Dispose());
+        Record.Exception(() => a.Add("Three", dir.Combine("three"))); // refused, or merged if the lock lifted in time
+        await release;
+
+        Assert.Contains("Two", new CatalogRegistry(path).List().Select(c => c.Name)); // never overwritten
+    }
+
+    [Fact]
+    public void WhileTheListCantBeRead_ChangesAreRefused_AndReadFailedSaysWhy()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var a = new CatalogRegistry(path);
+        var one = a.Add("One", dir.Combine("one"));
+
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Throws<IOException>(() => a.Add("Two", dir.Combine("two")));
+            Assert.True(a.ReadFailed);
+            Assert.False(a.Rename(one.Id, "First"));
+        }
+
+        Assert.Equal(["One"], new CatalogRegistry(path).List().Select(c => c.Name));
+        a.Rename(one.Id, "First"); // readable again: changes go through
+        Assert.False(a.ReadFailed);
+        Assert.Equal(["First"], new CatalogRegistry(path).List().Select(c => c.Name));
     }
 
     // --- The cross-process lock ---------------------------------------------------------------

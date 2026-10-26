@@ -35,10 +35,11 @@ public sealed class LibraryService : IDisposable
     private bool _tornDown;
     private bool _watchersClosed; // guarded by _watchersLock: no watcher may start once teardown stopped them
 
-    // Marks this data folder as open, for every Aperture window (process) to see: a named kernel event exists
-    // exactly as long as some window holds the library open — even if that window crashes — so another window
-    // can refuse to remove or delete it out from under it (see IsOpen).
-    private readonly EventWaitHandle _openMarker;
+    // The library's lock file (ApertureDatabase.LockFileName), held for as long as this library is open: shared
+    // with other holders (two windows may open one library), never with an exclusive opener. A file lock belongs
+    // to the physical file, so every path to the folder (a junction, a mapped drive, an 8.3 name) and every
+    // process (elevated or not) sees it, and Windows releases it if the process dies. See IsOpen.
+    private readonly FileStream _openLock;
 
     /// <summary>Raised (on a background thread) when a watched root's files change on disk. Argument is the root id.</summary>
     public event EventHandler<long>? RootChanged;
@@ -50,13 +51,15 @@ public sealed class LibraryService : IDisposable
 
     public LibraryService(string dataDir)
     {
-        _openMarker = new EventWaitHandle(false, EventResetMode.ManualReset, OpenMarkerName(dataDir));
         ApertureDatabase? db = null;
+        FileStream? openLock = null;
         try
         {
-            db = new ApertureDatabase(dataDir);
+            db = new ApertureDatabase(dataDir); // creates the folder
+            openLock = HoldOpenLock(dataDir);   // before any database file is opened
             db.Initialize();
             _db = db;
+            _openLock = openLock;
             _roots = new RootStore(_db);
             _items = new ItemStore(_db);
             _thumbnails = new ThumbnailStore(_db);
@@ -71,29 +74,65 @@ public sealed class LibraryService : IDisposable
             // A library that can't be opened (not a database, unwritable, locked) must not keep its
             // files open, or look open to other windows: the user may want to fix, move or delete them.
             db?.Dispose();
-            _openMarker.Dispose();
+            openLock?.Dispose();
             throw;
         }
     }
 
     /// <summary>
-    /// True if any Aperture window — this process or another — has the library in <paramref name="dataDir"/>
-    /// open. The folder may be spelled any way (case, trailing separator).
+    /// True if any Aperture window has the library in <paramref name="dataDir"/> open — this process or another,
+    /// elevated or not, and whatever path it used to reach the folder (case, trailing separator, a junction, a
+    /// mapped drive, an 8.3 name). False for a folder that doesn't exist or can't be reached. If the answer can't
+    /// be determined (access denied), it says open, so nothing gets deleted on a guess.
     /// </summary>
     public static bool IsOpen(string dataDir)
     {
-        if (!EventWaitHandle.TryOpenExisting(OpenMarkerName(dataDir), out var marker))
+        try
+        {
+            using var probe = new FileStream(Path.Combine(dataDir, ApertureDatabase.LockFileName),
+                FileMode.Open, FileAccess.Read, FileShare.None);
+            return false; // nobody holds it
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
             return false;
-        marker.Dispose();
-        return true;
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return false; // the folder can't be reached (drive not ready): nothing has it open from here
+        }
     }
 
-    private static string OpenMarkerName(string dataDir)
+    private static FileStream HoldOpenLock(string dataDir)
     {
-        var dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir)).ToUpperInvariant();
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(dir));
-        return @"Local\Aperture.Library." + Convert.ToHexString(hash, 0, 16);
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return new FileStream(Path.Combine(dataDir, ApertureDatabase.LockFileName),
+                    FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read);
+            }
+            catch (IOException ex) when (IsSharingViolation(ex) && attempt < 5)
+            {
+                Thread.Sleep(50); // another window's IsOpen check holds it for an instant
+            }
+            catch (IOException ex) when (IsSharingViolation(ex))
+            {
+                throw new IOException($"The library in {dataDir} is being deleted, so it can't be opened.", ex);
+            }
+        }
     }
+
+    // ERROR_SHARING_VIOLATION (32) / ERROR_LOCK_VIOLATION (33): another handle's sharing mode forbids ours.
+    private static bool IsSharingViolation(IOException ex) => (ex.HResult & 0xFFFF) is 32 or 33;
 
     // --- Roots ---------------------------------------------------------------
 
@@ -345,7 +384,7 @@ public sealed class LibraryService : IDisposable
 
         StopAllWatchers();
         _db.Dispose();
-        _openMarker.Dispose();
+        _openLock.Dispose();
         _shutdownCts.Dispose();
     }
 

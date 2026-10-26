@@ -249,9 +249,11 @@ public sealed class CatalogService : IAsyncDisposable
     /// </summary>
     public void Rename(string catalogId, string name)
     {
-        var entry = StillListed(Find(catalogId));
+        var entry = Find(catalogId);
         if (!_registry.Rename(entry.Id, CheckName(name, entry.Id, forFolder: false)))
-            throw new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't renamed.");
+            throw StillListed(entry)
+                ? new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't renamed.")
+                : AlreadyRemoved(entry);
     }
 
     /// <summary>
@@ -263,10 +265,12 @@ public sealed class CatalogService : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            var entry = StillListed(Find(catalogId));
+            var entry = Find(catalogId);
             RefuseIfOpen(entry);
             if (!_registry.Remove(entry.Id))
-                throw new CatalogException("Aperture couldn't save its list of libraries, so nothing was removed.");
+                throw StillListed(entry)
+                    ? new CatalogException("Aperture couldn't save its list of libraries, so nothing was removed.")
+                    : AlreadyRemoved(entry);
         }
         finally
         {
@@ -285,7 +289,7 @@ public sealed class CatalogService : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            var entry = StillListed(Find(catalogId));
+            var entry = Find(catalogId);
             RefuseIfOpen(entry);
             var result = _registry.RemoveAndDeleteFiles(entry.Id);
             return result.Outcome switch
@@ -357,26 +361,24 @@ public sealed class CatalogService : IAsyncDisposable
         if (entry.Id == _registry.Active?.Id)
             throw new CatalogException($"\"{entry.Name}\" is the library that's open. Switch to another library first.");
         if (LibraryService.IsOpen(entry.Dir))
-            throw new CatalogException($"\"{entry.Name}\" is open in another Aperture window. Close it there first.");
+            throw new CatalogException(
+                $"\"{entry.Name}\" is open in another Aperture window, or in this one under a different folder path. Close it there first.");
     }
 
-    // Re-reads the list (another window may have changed it since this window's menu was built) and confirms the
-    // library is still in it, so a stale menu can't act on a library that's already gone.
-    private CatalogEntry StillListed(CatalogEntry entry)
-    {
-        _registry.Reload();
-        return _registry.List().FirstOrDefault(c => c.Id == entry.Id) ?? throw AlreadyRemoved(entry);
-    }
+    // After a registry change reported failure: the change re-read the list under the cross-process lock, so if the
+    // library is gone now, another window removed it — say so, rather than blaming a save that never ran.
+    private bool StillListed(CatalogEntry entry) => _registry.List().Any(c => c.Id == entry.Id);
 
     private static CatalogException AlreadyRemoved(CatalogEntry entry) =>
         new($"\"{entry.Name}\" was already removed from the list (perhaps in another Aperture window), so nothing was changed.");
 
     // Names Windows reserves for devices: as a folder name they fail, or make a folder some tools can't open.
+    // (The full list from Microsoft's "Naming files, paths, and namespaces", superscript digits included.)
     private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
     };
 
     private string CheckName(string name, string? exceptId, bool forFolder)
@@ -411,12 +413,17 @@ public sealed class CatalogService : IAsyncDisposable
     private static string? Warning(CatalogRegistry registry, CatalogEntry failed, CatalogEntry opened, ExceptionDispatchInfo? failure)
     {
         var parts = new List<string>();
+        if (registry.ReadFailed)
+            parts.Add($"Aperture couldn't read its list of libraries just now (another program had the file open), so " +
+                      $"it opened \"{opened.Name}\" and won't change the list until it can read it. Restart Aperture to " +
+                      "get your other libraries back.");
         if (registry.QuarantinedFile is { } bad)
             parts.Add($"Aperture couldn't read its list of libraries, so it set the file aside as {bad} and started a " +
                       "new list. To get your other libraries back, use Open library… and choose each library's folder.");
         if (failure is not null)
             parts.Add($"Aperture couldn't open the library \"{failed.Name}\" ({failed.Dir}), so it opened \"{opened.Name}\" " +
-                      $"for now. It will try \"{failed.Name}\" again next time.\n\n{failure.SourceException.Message}");
+                      $"for now. It will try \"{failed.Name}\" again next time — if it's gone for good, use Remove from " +
+                      $"list on it.\n\n{failure.SourceException.Message}");
         return parts.Count == 0 ? null : string.Join("\n\n", parts);
     }
 }

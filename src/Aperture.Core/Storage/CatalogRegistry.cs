@@ -90,13 +90,15 @@ public sealed class CatalogRegistry
     private string? _activeId;    // the library this window has open
     private string? _preferredId; // the user's latest switch (any window) — what the next launch opens
     private bool _defaultSeeded;
+    private bool _readFailed;     // the last read found the file but couldn't read it: never save over it
 
     /// <summary><c>%LOCALAPPDATA%\Aperture Libraries\catalogs.json</c> — outside every catalog's folder.</summary>
     public static string DefaultPath => Path.Combine(AperturePaths.LibrariesDir, "catalogs.json");
 
     /// <summary>
-    /// The files Aperture keeps in a catalog's folder — the only files "delete library files" removes.
-    /// Anything else in the folder (the user's photos, their documents, a nested catalog) is left alone.
+    /// The files Aperture keeps in a catalog's folder — with the lock file (<see cref="ApertureDatabase.LockFileName"/>),
+    /// the only files "delete library files" removes. Anything else in the folder (the user's photos, their
+    /// documents, a nested catalog) is left alone.
     /// </summary>
     public static IReadOnlyList<string> CatalogFileNames { get; } =
     [
@@ -124,6 +126,17 @@ public sealed class CatalogRegistry
     /// for the host to tell the user about. Otherwise <c>null</c>.
     /// </summary>
     public string? QuarantinedFile { get; private set; }
+
+    /// <summary>
+    /// True when the list file exists but this instance couldn't read it the last time it looked (another
+    /// program had it locked for longer than a moment, or access was denied). Until it can be read again nothing
+    /// is saved over it: changes are refused, as for a read-only file, so a list this window couldn't see is
+    /// never replaced by what it has in memory.
+    /// </summary>
+    public bool ReadFailed
+    {
+        get { lock (_gate) return _readFailed; }
+    }
 
     /// <summary>The cross-process lock every Aperture window takes before reading or writing the file.</summary>
     internal string MutexName { get; }
@@ -303,8 +316,8 @@ public sealed class CatalogRegistry
 
     /// <summary>
     /// Deletes Aperture's files in <paramref name="dir"/>, then (if <paramref name="removeEmptyFolder"/>) the
-    /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission).
-    /// Never deletes anything else.
+    /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission) — all
+    /// of them, untouched, if the library is open in any Aperture window. Never deletes anything else.
     /// </summary>
     internal static IReadOnlyList<string> DeleteCatalogFiles(string dir, bool removeEmptyFolder = true)
     {
@@ -312,13 +325,31 @@ public sealed class CatalogRegistry
         if (!Directory.Exists(dir))
             return left;
 
-        foreach (var name in CatalogFileNames)
+        // Hold the library's lock exclusively while deleting: if any Aperture window has the library open — by
+        // any path to this folder, in any process — delete nothing at all; otherwise none can open it meanwhile.
+        // DeleteOnClose removes the lock file itself once the rest are gone.
+        var lockFile = Path.Combine(dir, ApertureDatabase.LockFileName);
+        FileStream exclusive;
+        try
         {
-            var file = Path.Combine(dir, name);
-            if (!File.Exists(file))
-                continue;
-            try { File.Delete(file); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { left.Add(file); }
+            exclusive = new FileStream(lockFile, FileMode.OpenOrCreate, FileAccess.Read, FileShare.None,
+                bufferSize: 1, FileOptions.DeleteOnClose);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [.. CatalogFileNames.Select(n => Path.Combine(dir, n)).Where(File.Exists), lockFile];
+        }
+
+        using (exclusive)
+        {
+            foreach (var name in CatalogFileNames)
+            {
+                var file = Path.Combine(dir, name);
+                if (!File.Exists(file))
+                    continue;
+                try { File.Delete(file); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { left.Add(file); }
+            }
         }
 
         if (left.Count == 0 && removeEmptyFolder)
@@ -385,7 +416,8 @@ public sealed class CatalogRegistry
     // (another window switching must not change what this one is showing). Caller holds _gate.
     private void RefreshFromDisk(bool keepActive)
     {
-        var disk = ReadDisk();
+        var (disk, unreadable) = ReadDisk();
+        _readFailed = unreadable;
         if (disk is null)
             return;
 
@@ -427,25 +459,30 @@ public sealed class CatalogRegistry
             _preferredId = _activeId;
     }
 
-    private CatalogRegistryState? ReadDisk()
+    // Returns the file's contents, or null with Unreadable = false when there is no file (or it was set aside as
+    // not a library list), or null with Unreadable = true when it exists but can't be read right now — then the
+    // caller must not save over it (see _readFailed).
+    private (CatalogRegistryState? State, bool Unreadable) ReadDisk()
     {
         for (var attempt = 0; ; attempt++)
         {
             string json;
             try
             {
-                if (!File.Exists(_path))
-                    return null;
                 json = File.ReadAllText(_path);
             }
-            catch (IOException) when (attempt < 3)
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
-                Thread.Sleep(50); // another window is replacing the file right now
+                return (null, false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 5)
+            {
+                Thread.Sleep(50); // something (antivirus, a backup tool) has it open for a moment
                 continue;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return null; // unreadable for now; this instance's copy stands
+                return (null, true);
             }
 
             try
@@ -460,29 +497,31 @@ public sealed class CatalogRegistry
                 var root = doc.RootElement;
                 if (root.ValueKind == JsonValueKind.Object
                     && root.EnumerateObject().Any(p => string.Equals(p.Name, "catalogs", StringComparison.OrdinalIgnoreCase)))
-                    return root.Deserialize<CatalogRegistryState>(ReadOptions) ?? new CatalogRegistryState();
+                    return (root.Deserialize<CatalogRegistryState>(ReadOptions) ?? new CatalogRegistryState(), false);
             }
             catch (JsonException)
             {
                 // Not JSON at all (corrupt, truncated); set aside below.
             }
-            QuarantineUnreadableFile();
-            return null;
+            // Set aside, a fresh list starts. If it can't be moved aside, treat it as unreadable so it's never saved over.
+            return (null, !QuarantineUnreadableFile());
         }
     }
 
-    // Not JSON we can read (corrupt, or another program's file with this name): set it aside, never overwrite it.
-    private void QuarantineUnreadableFile()
+    // Not a library list we can read (corrupt, or another program's file with this name): set it aside, never
+    // overwrite it. Returns false if it couldn't be moved.
+    private bool QuarantineUnreadableFile()
     {
         var bad = $"{_path}.bad-{DateTime.Now:yyyyMMdd-HHmmss-fff}";
         try
         {
             File.Move(_path, bad);
             QuarantinedFile = bad;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Can't move it (no permission): then the save that would replace it fails the same way.
+            return false;
         }
     }
 
@@ -491,6 +530,9 @@ public sealed class CatalogRegistry
     // for this window only), so memory never holds a change the next re-read would silently drop.
     private bool Save()
     {
+        if (_readFailed)
+            return false; // what's on disk wasn't read, so writing this copy could drop another window's changes
+
         var tmp = _path + ".tmp";
         try
         {

@@ -253,6 +253,76 @@ public class LibraryServiceShutdownTests
     }
 
     [Fact]
+    public void IsOpen_SeesTheSameFolderReachedThroughAJunction()
+    {
+        using var outer = new TempDir();
+        var real = outer.Combine("real");
+        Directory.CreateDirectory(real);
+        var alias = outer.Combine("alias");
+        Junction.Create(alias, real);
+
+        using var open = new LibraryService(real);
+
+        Assert.True(LibraryService.IsOpen(alias)); // a different spelling of the same physical folder
+    }
+
+    [Fact]
+    public void IsOpen_IsTrueWhileAnotherProgramHoldsTheLibrarysLock()
+    {
+        using var dir = new TempDir();
+        using (new LibraryService(dir.Path)) { }
+        using var otherWindow = new FileStream(
+            Path.Combine(dir.Path, ApertureDatabase.LockFileName), FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        Assert.True(LibraryService.IsOpen(dir.Path)); // e.g. an elevated Aperture window: same file, same lock
+    }
+
+    [Fact]
+    public void IsOpen_IsFalseForAFolderThatDoesNotExist()
+    {
+        using var dir = new TempDir();
+
+        Assert.False(LibraryService.IsOpen(dir.Combine("not-there")));
+    }
+
+    [Fact]
+    public void TwoServicesCanHaveTheSameLibraryOpen()
+    {
+        using var dir = new TempDir();
+        using var first = new LibraryService(dir.Path);
+
+        using var second = new LibraryService(dir.Path); // two windows on one library: allowed, as before
+
+        Assert.True(LibraryService.IsOpen(dir.Path));
+    }
+
+    [Fact]
+    public async Task Constructor_WaitsOutAnotherWindowsMomentaryIsOpenCheck()
+    {
+        using var dir = new TempDir();
+        using (new LibraryService(dir.Path)) { }
+        var probe = new FileStream(
+            Path.Combine(dir.Path, ApertureDatabase.LockFileName), FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Delay(100).ContinueWith(_ => probe.Dispose());
+
+        using var opened = new LibraryService(dir.Path); // must not fail just because a check was in progress
+        await release;
+
+        Assert.True(LibraryService.IsOpen(dir.Path));
+    }
+
+    [Fact]
+    public void Constructor_WhileTheLibraryIsBeingDeleted_Fails()
+    {
+        using var dir = new TempDir();
+        using (new LibraryService(dir.Path)) { }
+        using var deleting = new FileStream(
+            Path.Combine(dir.Path, ApertureDatabase.LockFileName), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Assert.ThrowsAny<IOException>(() => new LibraryService(dir.Path));
+    }
+
+    [Fact]
     public void IsOpen_IsFalseAfterDispose_AndAfterAFailedOpen()
     {
         using var dir = new TempDir();

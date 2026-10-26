@@ -15,6 +15,12 @@ public sealed class ApertureDatabase : IDisposable
     public const string MetadataFileName = "aperture.db";
     public const string ThumbnailFileName = "thumbs.db";
 
+    /// <summary>
+    /// The lock file an open library holds in its folder for as long as it's open (see
+    /// <c>LibraryService.IsOpen</c>); "Delete library files" holds it exclusively while it deletes, then removes it.
+    /// </summary>
+    public const string LockFileName = "aperture.lock";
+
     public string Directory { get; }
     public string MetadataPath { get; }
     public string ThumbnailPath { get; }

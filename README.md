@@ -87,7 +87,8 @@ pwsh ./publish.ps1 -SelfContained  # bundles the runtime (portable, larger)
 ## Data & privacy
 
 Everything is local. Each library keeps its index, thumbnail cache, and settings in a folder
-of its own (`aperture.db`, `thumbs.db`, `settings.json`):
+of its own (`aperture.db`, `thumbs.db`, `settings.json`, plus a small `aperture.lock` that tells
+other Aperture windows the library is open):
 
 - Your first library, **Default**, lives in `%LOCALAPPDATA%\Aperture`.
 - **New library…** creates a library in a new folder wherever you choose (Aperture suggests

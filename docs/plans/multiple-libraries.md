@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 3, after review round 2) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 4, after review round 3) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -60,6 +60,11 @@ catalog's files and the list of every catalog never share a folder.
   A change that can't be saved is refused and undone — `Add` throws, `Rename`/`Remove` return `false` — so
   memory never holds a change that a later re-read would silently drop. Switching is the exception: this
   window still switches; only which library the next launch opens isn't recorded.
+- **Never save over a list it couldn't read.** "No file" and "a file that can't be read right now" are
+  different: if the file exists but stays locked or denied through ~250 ms of retries, `ReadFailed` is set
+  and nothing is saved until a later read succeeds — changes are refused as for a read-only file. At launch
+  that means Aperture opens Default for now and says so, rather than replacing the list with what little it
+  has in memory.
 - **Several Aperture windows.** Every read of the file and every change runs under a cross-process mutex
   (5 s timeout, then it goes ahead rather than hang), and every change re-reads and merges first, so one
   window can't drop another's additions. Each window keeps its own active catalog in memory (another window
@@ -72,10 +77,14 @@ catalog's files and the list of every catalog never share a folder.
   `-wal`/`-shm`/`-journal` files, `settings.json`) and the folder if that leaves it empty. Nothing else in the
   folder — the user's photos, other files, a nested catalog — is ever deleted. If the forget can't be saved,
   nothing is deleted; files that can't be deleted (in use) are reported, not swallowed.
-- **Open in any window.** Every open `LibraryService` holds a named kernel event for its folder
-  (`Local\Aperture.Library.<hash>`) for as long as it's open — released even if the window crashes.
-  `LibraryService.IsOpen(dir)` checks it, so a library open in *any* Aperture window can't be removed or
-  deleted from another.
+- **Open in any window.** Every open `LibraryService` holds its folder's lock file, `aperture.lock`, for as
+  long as it's open (shared, so two windows may open one library). A file lock belongs to the physical file,
+  so every path to the folder — a junction, a mapped drive, an 8.3 name — and every process, elevated or not,
+  sees it, and Windows releases it if the window crashes. `LibraryService.IsOpen(dir)` asks for the lock
+  exclusively and reports "open" on a sharing violation, so a library open anywhere can't be removed or
+  deleted. As a backstop, deleting a library's files holds its lock exclusively for the whole delete
+  (deleting nothing if any window has it open, and keeping any window from opening it meanwhile), and the
+  lock file goes with the rest.
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
@@ -84,8 +93,8 @@ corresponds to `ActiveCatalog`.
 
 - **Open the target first.** `SwitchToAsync` opens the target library *before* touching the current one. If
   that fails (unwritable folder, not a database, locked), the current library stays open and untouched and
-  no event is raised. Only then: `PreparingToSwitch` → `await current.ShutdownAsync()` → swap → `SetActive`
-  → `ActiveLibraryChanged`.
+  no event is raised. Only then: `PreparingToSwitch` → `await current.ShutdownAsync()` → swap → `Activate`
+  (which lists the target again if another window removed it) → `ActiveLibraryChanged`.
 - **One switch at a time.** A semaphore serializes switch, create, open, remove and delete; a second request
   waits and then runs (the last request wins). Nothing can open a library and then lose it.
 - **Events on the caller's context.** The shutdown await deliberately has no `ConfigureAwait(false)`, so a
@@ -145,16 +154,17 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*` and reported at launch; sanitized on load; Aperture starts. |
 | List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
 | Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be removed or deleted from the other; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
-| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open. |
+| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. |
+| The same folder registered twice through different paths (junction, mapped drive) | Two list entries for one folder (cosmetic). Safe: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. |
 | Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
 ## Work breakdown and tests
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (49) |
-| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` | `LibraryServiceShutdownTests` (17) — the cancel/await tests hold an index mid-run with `BlockingProgress` |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (66) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (53) |
+| 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (23) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (75) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -202,6 +212,30 @@ found new problems, nearly all in the round-1 fix's own cross-window code:
 Accepted residual: the cleanup after a New library that fails *halfway through* opening (folder created,
 database partly written) has no deterministic test — there's no way to make SQLite fail mid-`Initialize`
 without fault injection. It deletes only Aperture's own files, and only from a folder that was new or empty.
+
+## Revision 4 — what changed after review round 3 (2026-10-25)
+
+Round 3 found that revision 3's "library is open" marker — a named kernel event keyed on the folder's path
+text — could be bypassed: the same folder reached by another path (a junction, a mapped drive, an 8.3 name)
+got a different marker, so "Delete library files" on one list entry could delete the files of the library open
+under the other (reproduced: tags and notes lost). It also failed outright against an elevated window, whose
+event a normal window can't open. That was the second round in a row in which a fix introduced findings, so
+the marker was **redesigned** rather than patched: an `aperture.lock` file held in the library's own folder,
+which the OS ties to the physical file and which works across elevation (§1, "Open in any window"). The delete
+holds that lock exclusively throughout, so data safety no longer depends on the "is it open?" check alone.
+
+Round 3 also found that revision 3's save retry could overwrite the list with a stale copy: a read that gave up
+on a locked file left this window's old copy standing, and the save's longer retry then wrote it — at launch,
+replacing the whole list with Default. Reads now tell "missing" from "can't read right now", and nothing is
+saved over a list that couldn't be read (§1, "Never save over a list it couldn't read").
+
+Also: the launch-fallback warning now says how to stop it ("use Remove from list") when a library is gone for
+good; Rename and Remove decide "already removed" from the same locked re-read that made the change (closing a
+race instead of narrowing it); the last-resort Default is pinned as for-this-launch-only; and the reserved-name
+list is Microsoft's complete one.
+
+Accepted residual (cosmetic): an alias of an already-listed folder is registered as a second entry rather than
+recognised as the same library.
 
 ## Out of scope (future)
 
