@@ -399,7 +399,8 @@ to finish" advice end to end. Fixed:
 - **Tests:** the drive-lost-partway test now loses the drive just before the database, after the other files are
   really gone, and a service-level test follows the message's advice to the end (reconnect, Open library…,
   switch away, Delete); the realistic unplug — a junction left pointing at nothing — is pinned mid-delete; the
-  left-over message's wording is pinned.
+  left-over message's wording is pinned (both its "the files below" and its causes), and so is which of the two
+  "nothing deleted" messages a folder gets.
 - **Wording:** "can be reached" means listed (not "or a file opened"); "can always be added back" becomes "still
   has its database" (an earlier crash's journal deleted before the database could, in principle, leave one that
   won't open); the left-over message says "the files below" rather than "some of its files"; the delete's doc
@@ -409,7 +410,8 @@ Accepted residuals:
 
 - **Two windows naming two libraries the same at the same moment.** Revision 9's re-read narrowed this race; it
   isn't closed, because the name is checked before the new library is built, not inside the list's locked change.
-  The worst case is two libraries with one name, in different folders — rename either. Rename has the same shape.
+  The worst case is two libraries with one name, in different folders — rename either. Open library… (its name
+  is made unique against the list read before it opens) and Rename have the same shape. **Pending Paul's OK.**
 - On a share that drops mid-delete, a failing file can now cost a few network timeouts (the folder is listed to
   classify the error); it runs off the UI thread, with the switcher's commands disabled meanwhile.
 

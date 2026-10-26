@@ -1271,6 +1271,8 @@ public class CatalogServiceTests
         var ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(usb.Id));
 
         Assert.Contains("nothing was deleted", ex.Message);
+        Assert.Contains("can't reach", ex.Message);
+        Assert.DoesNotContain("isn't allowed", ex.Message); // that's the unlistable folder's message
         Assert.Contains(service.Registry.List(), c => c.Id == usb.Id);
         Directory.Move(parked, usb.Dir);
         Assert.True(File.Exists(Path.Combine(usb.Dir, ApertureDatabase.MetadataFileName))); // tags and notes still there
@@ -1320,6 +1322,7 @@ public class CatalogServiceTests
         var lost = await service.DeleteFilesAsync(usb.Id);
         service.Registry.DeletingFile = null;
         Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, lost.Outcome);
+        Assert.False(File.Exists(Path.Combine(drive, ApertureDatabase.ThumbnailFileName))); // it did get partway
 
         Directory.Delete(link);
         Junction.Create(link, drive);                                  // "reconnect the drive,

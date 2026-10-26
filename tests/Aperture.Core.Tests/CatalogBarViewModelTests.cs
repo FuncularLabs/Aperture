@@ -335,6 +335,7 @@ public class CatalogBarViewModelTests
         var (message, isError) = Assert.Single(f.Dialogs.Messages);
         Assert.True(isError);
         Assert.Contains(settings, message);
+        Assert.Contains("the files below couldn't be deleted", message); // true whether some or all were left
         Assert.Contains("another program may be using them, or Windows didn't allow it", message); // not one guessed cause
     }
 
