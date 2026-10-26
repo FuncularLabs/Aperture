@@ -54,7 +54,10 @@ public sealed class CatalogService : IAsyncDisposable
     /// <summary>Raised after <see cref="Current"/> has been swapped to the new catalog's library.</summary>
     public event EventHandler? ActiveLibraryChanged;
 
-    /// <summary>Test seam: runs wherever a switch, New library or Open library is about to touch a library's folder.</summary>
+    /// <summary>
+    /// Test seam: runs wherever the service is about to touch a library's folder — opening it (Switch to, New library,
+    /// Open library) or checking whether it's open (Remove, Delete).
+    /// </summary>
     internal Action? TouchingLibraryFolder { get; set; }
 
     private CatalogService(CatalogRegistry registry, string defaultDir, LibraryService current, string? openWarning)
@@ -396,6 +399,7 @@ public sealed class CatalogService : IAsyncDisposable
     {
         if (entry.Id == _registry.Active?.Id)
             throw new CatalogException($"\"{entry.Name}\" is the library that's open. Switch to another library first.");
+        TouchingLibraryFolder?.Invoke();
         switch (LibraryService.OpenState(entry.Dir))
         {
             case LibraryOpenState.Open:

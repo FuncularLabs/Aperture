@@ -1095,16 +1095,21 @@ public class CatalogServiceTests
         await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
         var one = AddLibrary(service, "One", outer.Combine("one"));
         var two = AddLibrary(service, "Two", outer.Combine("two"));
-        var threads = new List<int>();
-        service.Registry.BetweenReadAndChange = () => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+        var probes = new List<int>(); // the "is it open somewhere?" check
+        var changes = new List<int>(); // the registry change, and the delete's own look at the folder
+        service.TouchingLibraryFolder = () => { lock (probes) probes.Add(Environment.CurrentManagedThreadId); };
+        service.Registry.BetweenReadAndChange = () => { lock (changes) changes.Add(Environment.CurrentManagedThreadId); };
 
         using var ui = new SingleThreadContext();
         await ui.Run(() => service.RemoveAsync(one.Id));      // an offline share can take tens of seconds to answer —
         await ui.Run(() => service.DeleteFilesAsync(two.Id)); // never on the UI thread
+        service.TouchingLibraryFolder = null;
         service.Registry.BetweenReadAndChange = null;
 
-        Assert.Equal(2, threads.Count);
-        Assert.DoesNotContain(ui.ThreadId, threads);
+        Assert.Equal(2, probes.Count);
+        Assert.DoesNotContain(ui.ThreadId, probes);
+        Assert.Equal(2, changes.Count);
+        Assert.DoesNotContain(ui.ThreadId, changes);
     }
 
     [Fact]
