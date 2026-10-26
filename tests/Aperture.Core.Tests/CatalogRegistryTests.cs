@@ -1068,13 +1068,175 @@ public class CatalogRegistryTests
         reg.Add("Stay", dir.Combine("stay"));
         var (link, drive) = ALibraryBehindAJunction(dir);
         var entry = reg.Add("USB", link);
-        reg.AfterDeleteLock = () => Directory.Delete(link); // the way to the drive goes; the drive's files stay
+        reg.DeletingFile = _ =>
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link); // before the first file: the way to the drive goes; the drive's files stay
+        };
 
         var result = reg.RemoveAndDeleteFiles(entry.Id);
-        reg.AfterDeleteLock = null;
+        reg.DeletingFile = null;
 
         Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome); // not a clean "Deleted"
         Assert.True(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_DeletesTheDatabaseLast()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("Work", catDir);
+        var order = new List<string>();
+        reg.DeletingFile = order.Add;
+
+        reg.RemoveAndDeleteFiles(entry.Id);
+        reg.DeletingFile = null;
+
+        // Whatever interrupts a delete, a folder that still has its database can be added back with Open library….
+        Assert.Equal(ApertureDatabase.MetadataFileName, order.Last());
+        Assert.Equal(CatalogRegistry.CatalogFileNames.Order(), order.Order());
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_WhenTheDriveGoesPartway_LeavesALibraryOpenLibraryCanAddBack()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var (link, drive) = ALibraryBehindAJunction(dir);
+        var entry = reg.Add("USB", link);
+        var files = 0;
+        reg.DeletingFile = _ =>
+        {
+            if (++files == 2)
+                Directory.Delete(link); // after the first file
+        };
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.DeletingFile = null;
+
+        Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome);
+        Assert.True(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName))); // what the message's "how to finish" needs
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_OfALibraryWhoseFolderThisUserMayNotList_ForgetsNothing()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("locked");
+        using (new LibraryService(catDir)) { }
+        File.Delete(Path.Combine(catDir, ApertureDatabase.LockFileName));
+        var entry = reg.Add("Locked", catDir);
+        Acl.DenyListing(catDir); // Aperture can't tell what's in it
+        CatalogDeletion result;
+        try
+        {
+            result = reg.RemoveAndDeleteFiles(entry.Id);
+        }
+        finally
+        {
+            Acl.RestoreListing(catDir);
+        }
+
+        Assert.Equal(CatalogDeletionOutcome.FolderNotFound, result.Outcome);
+        Assert.Contains(reg.List(), c => c.Id == entry.Id);
+        Assert.True(File.Exists(Path.Combine(catDir, ApertureDatabase.MetadataFileName)));
+    }
+
+    // What Windows reports for a write-protected disk (ERROR_WRITE_PROTECT): an I/O error that doesn't mean the folder
+    // is gone. Tests raise it from the delete's own test seams, where the real call would.
+    private static IOException WriteProtected() => new("The media is write protected.", unchecked((int)0x80070013));
+
+    [Fact]
+    public void RemoveAndDeleteFiles_ADiskErrorTakingTheLock_InAFolderStillThere_ReportsTheFilesLeft()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("Work", catDir);
+        reg.BeforeDeleteLock = () => throw WriteProtected();
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.BeforeDeleteLock = null;
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome); // not "lost access… reconnect the drive"
+        Assert.Contains(Path.Combine(catDir, ApertureDatabase.MetadataFileName), result.FilesLeft);
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_ADiskErrorDeletingAFile_InAFolderStillThere_ReportsThatFileLeft()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var entry = reg.Add("Work", catDir);
+        reg.DeletingFile = name =>
+        {
+            if (name == ApertureDatabase.ThumbnailFileName)
+                throw WriteProtected();
+        };
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.DeletingFile = null;
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
+        Assert.Equal([Path.Combine(catDir, ApertureDatabase.ThumbnailFileName)], result.FilesLeft);
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_LeavesAFolderThatHasOneOfApertureFileNames()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var notAFile = Path.Combine(catDir, Aperture.Core.Settings.SettingsService.FileName);
+        if (File.Exists(notAFile))
+            File.Delete(notAFile);
+        Directory.CreateDirectory(notAFile); // the user's folder, not Aperture's settings file
+        var entry = reg.Add("Work", catDir);
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+
+        Assert.Equal(CatalogDeletionOutcome.Deleted, result.Outcome); // nothing of Aperture's was left
+        Assert.True(Directory.Exists(notAFile));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_AFileThisUserMayNotDelete_IsReportedAsLeft()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var catDir = dir.Combine("work");
+        using (new LibraryService(catDir)) { }
+        var thumbs = Path.Combine(catDir, ApertureDatabase.ThumbnailFileName);
+        var entry = reg.Add("Work", catDir);
+        File.SetAttributes(thumbs, FileAttributes.ReadOnly); // File.Delete: UnauthorizedAccessException
+        CatalogDeletion result;
+        try
+        {
+            result = reg.RemoveAndDeleteFiles(entry.Id);
+        }
+        finally
+        {
+            File.SetAttributes(thumbs, FileAttributes.Normal);
+        }
+
+        Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
+        Assert.Equal([thumbs], result.FilesLeft);
+        Assert.False(File.Exists(Path.Combine(catDir, ApertureDatabase.MetadataFileName)));
     }
 
     [Fact]

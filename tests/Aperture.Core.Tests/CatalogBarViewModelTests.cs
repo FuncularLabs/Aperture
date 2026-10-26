@@ -338,7 +338,7 @@ public class CatalogBarViewModelTests
     }
 
     [Fact]
-    public async Task DeleteFiles_WhenTheFolderGoesAwayMidDelete_SaysNothingWasDeleted_AndHowToFinish()
+    public async Task DeleteFiles_WhenTheFolderGoesAwayMidDelete_SaysNotEverythingWasDeleted_AndHowToFinish()
     {
         await using var f = new Fixture();
         var usb = f.AddLibrary("USB");

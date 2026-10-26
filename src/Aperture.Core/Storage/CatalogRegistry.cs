@@ -166,11 +166,11 @@ public sealed class CatalogRegistry
     /// </summary>
     internal Action? BetweenReadAndChange { get; set; }
 
-    /// <summary>Test seams: run in <see cref="RemoveAndDeleteFiles"/> just before its delete takes the library's lock, and just after.</summary>
+    /// <summary>Test seam: runs in <see cref="RemoveAndDeleteFiles"/> just before its delete takes the library's lock.</summary>
     internal Action? BeforeDeleteLock { get; set; }
 
-    /// <inheritdoc cref="BeforeDeleteLock"/>
-    internal Action? AfterDeleteLock { get; set; }
+    /// <summary>Test seam: runs in <see cref="RemoveAndDeleteFiles"/> before each of the library's files is deleted, with its name.</summary>
+    internal Action<string>? DeletingFile { get; set; }
 
     /// <summary>All registered catalogs, in registration order. Snapshots — mutating them does nothing.</summary>
     public IReadOnlyList<CatalogEntry> List()
@@ -321,7 +321,7 @@ public sealed class CatalogRegistry
 
         // The folder may go out of reach after the check above (a drive unplugged mid-delete): then not everything
         // was deleted, and the user must hear so rather than see a success while the tags and notes stay on that drive.
-        var left = DeleteCatalogFiles(outcome.Entry.Dir, beforeLock: BeforeDeleteLock, afterLock: AfterDeleteLock);
+        var left = DeleteCatalogFiles(outcome.Entry.Dir, beforeLock: BeforeDeleteLock, deletingFile: DeletingFile);
         if (left is null)
             return new CatalogDeletion(CatalogDeletionOutcome.FolderLostDuringDelete, []);
         return new CatalogDeletion(left.Count == 0 ? CatalogDeletionOutcome.Deleted : CatalogDeletionOutcome.PartiallyDeleted, left);
@@ -362,7 +362,7 @@ public sealed class CatalogRegistry
     /// <summary>
     /// Whether <paramref name="dir"/> can actually be reached. <see cref="Directory.Exists(string)"/> isn't enough:
     /// it says yes for a junction (or link) to a drive that's gone, whose contents can't be opened. So this lists the
-    /// folder. A folder this user may not list is there, so it counts as reachable.
+    /// folder. A folder this user may not list doesn't count either: Aperture can't tell what's in it.
     /// </summary>
     internal static bool FolderIsReachable(string dir)
     {
@@ -372,13 +372,9 @@ public sealed class CatalogRegistry
             entries.MoveNext();
             return true;
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return true;
-        }
-        catch (IOException)
-        {
-            return false; // not found, or a path or network error
+            return false; // not found, a path or network error, or not allowed to look
         }
     }
 
@@ -387,13 +383,12 @@ public sealed class CatalogRegistry
     /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission) — all
     /// of them, untouched, if the library is open in any Aperture window — or <c>null</c> if the folder can't be
     /// reached, before the delete or during it (then not all of its files were deleted). Never deletes anything else.
-    /// <paramref name="beforeLock"/> and <paramref name="afterLock"/> are test seams.
+    /// <paramref name="beforeLock"/> and <paramref name="deletingFile"/> are test seams.
     /// </summary>
     internal static IReadOnlyList<string>? DeleteCatalogFiles(string dir, bool removeEmptyFolder = true,
-        Action? beforeLock = null, Action? afterLock = null)
+        Action? beforeLock = null, Action<string>? deletingFile = null)
     {
         var left = new List<string>();
-        beforeLock?.Invoke();
 
         // Hold the library's lock exclusively while deleting: if any Aperture window has the library open — by
         // any path to this folder, in any process — delete nothing at all; otherwise none can open it meanwhile.
@@ -402,13 +397,14 @@ public sealed class CatalogRegistry
         FileStream exclusive;
         try
         {
+            beforeLock?.Invoke();
             exclusive = new FileStream(lockFile, FileMode.OpenOrCreate, FileAccess.Read, FileShare.None,
                 bufferSize: 1, FileOptions.DeleteOnClose);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && InUse(io))
+        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && (InUse(io) || FolderIsReachable(dir)))
         {
-            // Nothing deleted: the library is open somewhere (its lock is held), or this user may not create the lock
-            // file. Name Aperture's files that are left.
+            // Nothing deleted: the library is open somewhere (its lock is held), this user may not create the lock
+            // file, or some other error in a folder that's still there (a write-protected disk). Name what's left.
             return [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
         }
         catch (IOException)
@@ -418,17 +414,21 @@ public sealed class CatalogRegistry
 
         using (exclusive)
         {
-            afterLock?.Invoke();
-            foreach (var name in CatalogFileNames)
+            // The database goes last: whatever interrupts the delete (a drive unplugged, Aperture closed), a folder
+            // that still has it can be added back with Open library… and the delete finished from there.
+            foreach (var name in CatalogFileNames.OrderBy(n => n == ApertureDatabase.MetadataFileName))
             {
                 var file = Path.Combine(dir, name);
+                if (Directory.Exists(file))
+                    continue; // a folder with that name isn't Aperture's
                 try
                 {
+                    deletingFile?.Invoke(name);
                     File.Delete(file); // nothing to do if it isn't there — but it throws if the folder can't be reached
                 }
-                catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && InUse(io))
+                catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && (InUse(io) || FolderIsReachable(dir)))
                 {
-                    left.Add(file); // in use, or no permission
+                    left.Add(file); // in use, no permission, or another error in a folder that's still there
                 }
                 catch (IOException)
                 {

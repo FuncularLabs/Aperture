@@ -1177,7 +1177,7 @@ public class CatalogServiceTests
         }
         service.TouchingLibraryFolder = null;
 
-        Assert.Equal(4, touches.Count); // each opened its library, then closed it again when the list couldn't be saved
+        Assert.Equal(5, touches.Count); // each opened its library and closed it again; New also removed its files
         Assert.DoesNotContain(ui.ThreadId, touches);
         Assert.False(Directory.Exists(outer.Combine("Work")));
     }
@@ -1211,6 +1211,35 @@ public class CatalogServiceTests
         Assert.Contains("Photos", ex.Message);
         Assert.Equal("Default", service.ActiveCatalog!.Name);
         Assert.Equal("Photos", service.Registry.List().Single(c => c.Id == photos.Id).Name);
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_WithANameAnotherWindowJustGaveALibrary_IsRefused()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        new CatalogRegistry(regPath).Add("Trips", outer.Combine("elsewhere")); // another window, unseen by this one
+
+        await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Trips", outer.Path));
+
+        Assert.Single(service.Registry.List(), c => c.Name == "Trips");
+        Assert.False(Directory.Exists(outer.Combine("Trips")));
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_InAFolderAnotherWindowJustListed_IsRefused()
+    {
+        using var outer = new TempDir();
+        var regPath = RegistryPath(outer);
+        await using var service = CatalogService.Open(regPath, outer.Combine("default"));
+        Directory.CreateDirectory(outer.Combine("Work"));
+        new CatalogRegistry(regPath).Add("Photos", outer.Combine("Work")); // another window, unseen by this one
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+
+        Assert.Contains("Photos", ex.Message);
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
     }
 
     [Fact]

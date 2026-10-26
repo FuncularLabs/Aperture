@@ -157,7 +157,7 @@ public sealed class CatalogBarViewModel : ObservableObject
         if (result.Outcome == CatalogDeletionOutcome.PartiallyDeleted)
             _dialogs.ShowMessage("Aperture",
                 $"\"{entry.Name}\" was removed from the list, but some of its files couldn't be deleted " +
-                $"(another program may be using them):\n\n{string.Join("\n", result.FilesLeft)}",
+                $"(another program may be using them, or Windows didn't allow it):\n\n{string.Join("\n", result.FilesLeft)}",
                 isError: true);
         else if (result.Outcome == CatalogDeletionOutcome.FolderLostDuringDelete)
             _dialogs.ShowMessage("Aperture",

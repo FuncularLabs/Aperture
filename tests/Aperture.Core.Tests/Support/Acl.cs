@@ -47,4 +47,22 @@ public static class Acl
         security.RemoveAccessRule(Deny(FileSystemRights.CreateFiles));
         folder.SetAccessControl(security);
     }
+
+    public static void DenyListing(string dir)
+    {
+        var folder = new DirectoryInfo(dir);
+        var security = folder.GetAccessControl();
+        security.AddAccessRule(Deny(FileSystemRights.ListDirectory));
+        folder.SetAccessControl(security);
+    }
+
+    public static void RestoreListing(string dir)
+    {
+        var folder = new DirectoryInfo(dir);
+        if (!folder.Exists)
+            return;
+        var security = folder.GetAccessControl();
+        security.RemoveAccessRule(Deny(FileSystemRights.ListDirectory));
+        folder.SetAccessControl(security);
+    }
 }
