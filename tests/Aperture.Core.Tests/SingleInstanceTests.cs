@@ -6,8 +6,8 @@ using Aperture.Core.Startup;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// One Aperture window (Paul, 2026-10-26): the first launch claims a named event for as long as it runs; a later
-/// launch asks it to come to the front and exits. Real kernel objects, each test under a name of its own.
+/// One Aperture window (Paul, 2026-10-26): the first launch claims a named event until it gives the window up; a
+/// later launch asks it to come to the front and exits. Real kernel objects, each test under a name of its own.
 /// </summary>
 public class SingleInstanceTests
 {

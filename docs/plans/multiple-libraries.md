@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 13, after review round 13 of the single window) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 14, after review round 14 of the single window) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -456,15 +456,18 @@ this one have neither the lock file nor the library list, so they can't see each
 | SW7 | A relaunch waits for the copy it replaces | `ALaunchStartedToReplaceAnother_ClaimsOnlyOnceThatOneHasExited`, `AnOrdinaryLaunch_ClaimsWithoutWaiting`, `ArgsAfter_…`, `PreviousProcessId_…`, `WaitForExit_…`, `RestartStartInfo_StartsTheNewCopyAfterThisOne` |
 | SW8 | An activation handler that throws doesn't stop the next activation | `AnActivationThatThrows_DoesntStopTheNext` |
 | SW9 | Closing the instance stops it listening; closing twice is harmless | `Dispose_StopsListening_AndCanBeRepeated`, `Dispose_FromInsideTheActivation_DoesntHang` |
-| SW10 | A launch while Aperture is closing (or failing to start) opens a window, never nothing | App wiring: verified by reading and by round 13's WPF probe (the real Core classes wired as the App wires them); live check below |
+| SW10 | A launch while Aperture is closing (or failing to start) opens a window (see the accepted millisecond race below) | App wiring: verified by reading and by round 13's WPF probe (the real Core classes wired as the App wires them) |
 
 The wiring (`App.xaml.cs`, `MainWindow.xaml.cs`, and the install-move in `MainViewModel.cs`) is in the exempt
 shells. The two update relaunches in `UpdateService` start the new copy with `RestartStartInfo`, which is tested;
 that they call it is checked by reading — those methods replace the running exe, or put a new one beside it, and
-start it, which a test can't let them do. Live check (Paul): launch twice — one window; minimize it and launch
-again — it comes back; and, to catch a launch during a *slow* close (a quick close is over before a person can
-relaunch), start indexing a large folder, then in PowerShell run
-`$p = Get-Process Aperture; $p.CloseMainWindow(); Start-Process $p.Path` — a new window opens.
+start it, which a test can't let them do.
+
+Live check (Paul) — a smoke test of the one-window behaviour; it can't test SW10's close ordering, because a close
+is over in well under a second even mid-index (the indexer stops between files), so SW10 rests on reading and on
+round 13's probe. First close every other Aperture, including an installed older version (it doesn't take part
+in the guard, so it would still show its own window). Then: launch twice — one window; minimize it and launch
+again — it comes back (maximized, if it was); close it and launch again — it opens.
 
 ### Revision 12 — what changed after review round 12
 
@@ -482,6 +485,8 @@ the window forward over and over, a wake-on-close bug once more as it closes); m
 Accepted (one window, as ruled):
 
 - A launch while Aperture is running but hung brings nothing forward until that copy is closed.
+- A launch that asks in the milliseconds just before a close starts gets nothing (the copy it asked is going away):
+  launch again.
 - "Run as administrator" while Aperture runs normally brings the normal window forward instead of starting an
   elevated one; a newer exe started by hand while this one runs brings the running window forward.
 - **From when an update's old copy starts closing until its new copy claims** — the old copy's close, a few
@@ -501,8 +506,9 @@ Accepted (one window, as ruled):
 Round 13 verified the round-12 Medium fixed (a WPF probe drove the real Core classes as the App wires them: the
 window is given up before its own Closing handler saves, on `Shutdown()` too, and before the startup-error box;
 launches during each close opened). Fixed: the relaunch test now has the closing copy hold the window, so
-"claim first, then wait" fails it; the live check catches a slow close; comments and this plan no longer say the
-claim lasts the whole run; the update-gap residual above states its real extent.
+"claim first, then wait" fails it; the live check is described as the smoke test it is (revision 14: it can't catch
+a slow close, because measured closes are fast); comments and this plan no longer say the claim lasts the whole
+run; the update-gap residual above states its real extent.
 
 ## Out of scope (future)
 

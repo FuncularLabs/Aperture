@@ -46,8 +46,8 @@ public class RelaunchTests
     public void RestartStartInfo_StartsTheNewCopyAfterThisOne()
     {
         // The in-place update, the portable update and the installer's move start the new copy with this — checked by
-        // reading: the methods that call it replace the running exe, or put a new one beside it, and start it — which a
-        // test can't let them do.
+        // reading: the methods that call it replace the running exe, put a new one beside it, or copy it into the
+        // install folder, and start it — which a test can't let them do.
         var psi = Aperture.App.Updates.UpdateService.RestartStartInfo(@"C:\Apps\Aperture.exe", ["--finish-move", @"C:\Downloads\Aperture.exe"]);
 
         Assert.Equal(@"C:\Apps\Aperture.exe", psi.FileName);

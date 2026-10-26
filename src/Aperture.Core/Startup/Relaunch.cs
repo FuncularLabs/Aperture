@@ -7,8 +7,9 @@ namespace Aperture.Core.Startup;
 /// <summary>
 /// The handoff when Aperture restarts itself (an update, the installer's move): the closing copy starts the new one
 /// with <c>--after &lt;its process id&gt;</c>, and the new one waits for it to exit before claiming the window
-/// (<see cref="SingleInstance"/>) — so the new copy doesn't open while the old one is still tearing its library
-/// down, and the old exe is free for the new copy to clean up.
+/// (<see cref="SingleInstance"/>) — so the new copy doesn't meet the closing copy still holding the window (it would
+/// only ask it to come forward, and exit), doesn't open while the old one is still tearing its library down, and
+/// finds the old exe free to clean up.
 /// </summary>
 public static class Relaunch
 {
