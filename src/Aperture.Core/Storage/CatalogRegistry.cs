@@ -403,7 +403,7 @@ public sealed class CatalogRegistry
     /// <paramref name="removeEmptyFolder"/>) the folder if nothing else is in it. Returns the files that couldn't be
     /// deleted — in use, no permission, or another error in a folder that's still there; all of them, untouched, if
     /// the lock couldn't be taken (the library is open in some Aperture window, another program has the lock file open,
-    /// the lock file can't be created, or another error in a folder that's still there) —
+    /// the lock file can't be created or opened, or another error in a folder that's still there) —
     /// or <c>null</c> if the folder can't be reached, before the delete or during it (then not all of its files were
     /// deleted). Never deletes anything else.
     /// <paramref name="beforeLock"/> and <paramref name="deletingFile"/> are test seams.

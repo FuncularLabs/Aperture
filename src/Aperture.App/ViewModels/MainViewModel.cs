@@ -645,10 +645,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             if (willMove && !alreadyInstalled)
             {
-                var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
-                psi.ArgumentList.Add("--finish-move");
-                psi.ArgumentList.Add(download);
-                Process.Start(psi);
+                Process.Start(UpdateService.RestartStartInfo(exe, ["--finish-move", download]));
                 System.Windows.Application.Current?.Shutdown();
                 return true;
             }

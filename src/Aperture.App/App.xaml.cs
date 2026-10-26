@@ -5,6 +5,7 @@ using Aperture.App.Services;
 using Aperture.App.Updates;
 using Aperture.App.ViewModels;
 using Aperture.Core.Library;
+using Aperture.Core.Startup;
 using Aperture.Core.Storage;
 
 namespace Aperture.App;
@@ -18,6 +19,7 @@ public partial class App : Application
     private LibraryService? _pinnedLibrary;
     private MainViewModel? _viewModel;
     private MainWindow? _window;
+    private SingleInstance? _instance;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -52,6 +54,25 @@ public partial class App : Application
         // pointing at a different drive); otherwise the default under LOCALAPPDATA.
         var overrideDir = Environment.GetEnvironmentVariable("APERTURE_DATA_DIR");
         var dataDir = string.IsNullOrWhiteSpace(overrideDir) ? AperturePaths.DefaultDataDir : overrideDir;
+
+        // One window. A relaunch (an update, the installer's move) first waits for the copy it replaces; then a launch
+        // while Aperture is already running brings that window to the front instead of opening a second one. A pinned
+        // data folder has a window of its own.
+        if (Relaunch.PreviousProcessId(e.Args) is { } previous)
+            Relaunch.WaitForExit(previous, Relaunch.Wait);
+        var place = string.IsNullOrWhiteSpace(overrideDir) ? CatalogRegistry.DefaultPath : overrideDir;
+        switch (SingleInstance.TryClaim(SingleInstance.NameFor(place), BringWindowForward, out _instance))
+        {
+            case SingleInstanceClaim.AlreadyRunning:
+                Shutdown(0);
+                return;
+            case SingleInstanceClaim.RunningButUnreachable:
+                MessageBox.Show(
+                    "Aperture is already running, as administrator, so this copy can't bring it to the front. Switch " +
+                    "to it, or close it and start Aperture again.", "Aperture", MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown(0);
+                return;
+        }
 
         // One-time move of a pre-rename %LOCALAPPDATA%\Reel store into the Aperture location.
         // Only for the default location — a custom APERTURE_DATA_DIR is the user's to manage.
@@ -104,6 +125,19 @@ public partial class App : Application
 
     private MainViewModel BuildViewModel(LibraryService library) =>
         new(library, new ThumbnailService(library), _catalogBar);
+
+    // A later launch asked for this window. It runs on the single-window listener's thread, so it only queues the work
+    // on the UI thread — never blocking, since Dispose waits for the listener.
+    private void BringWindowForward() => Dispatcher.InvokeAsync(() =>
+    {
+        if (_window is null)
+            return; // still starting: the window comes up in front anyway
+        if (_window.WindowState == WindowState.Minimized)
+            _window.WindowState = WindowState.Normal;
+        _window.Activate();
+        _window.Topmost = true; // in front of the window the later launch was started from
+        _window.Topmost = false;
+    });
 
     /// <summary>
     /// The target library has opened and the current one is about to close: stop the view model from
@@ -160,6 +194,7 @@ public partial class App : Application
         else
             _pinnedLibrary?.Dispose();
 
+        _instance?.Dispose(); // the next launch is the window now
         base.OnExit(e);
     }
 

@@ -210,7 +210,8 @@ internal static class UpdateService
     /// shortcuts and the Start-with-Windows Run key, then restart. Throws with a readable message on
     /// failure (nothing destructive happens before the copy succeeds).
     /// </summary>
-    /// <param name="relaunchArgs">Arguments for the restarted instance. Each is
+    /// <param name="relaunchArgs">Arguments for the restarted instance, after <c>--after</c> this
+    /// process (so it waits for this one to exit before taking the window). Each is
     /// passed via ArgumentList (no quoting bugs on paths with spaces).</param>
     public static void ApplyInstalledAndRestart(string verifiedNewExe, IReadOnlyList<string>? relaunchArgs = null)
     {
@@ -259,9 +260,7 @@ internal static class UpdateService
         // would be wrong twice over: it succeeded, and the sentence names no file.
         try
         {
-            var psi = new ProcessStartInfo(target) { UseShellExecute = true };
-            foreach (var a in relaunchArgs ?? []) psi.ArgumentList.Add(a);
-            Process.Start(psi);
+            Process.Start(RestartStartInfo(target, relaunchArgs));
         }
         catch (Exception ex)
         {
@@ -671,6 +670,19 @@ internal static class UpdateService
     }
 
     /// <summary>
+    /// How every restart starts the new copy: <c>--after</c> this process, so the new copy waits for this one to
+    /// exit before taking the window (one Aperture window), then <paramref name="relaunchArgs"/>. Each is passed via
+    /// ArgumentList (no quoting bugs on paths with spaces).
+    /// </summary>
+    internal static ProcessStartInfo RestartStartInfo(string exe, IReadOnlyList<string>? relaunchArgs)
+    {
+        var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+        foreach (var a in Relaunch.ArgsAfter(Environment.ProcessId, relaunchArgs))
+            psi.ArgumentList.Add(a);
+        return psi;
+    }
+
+    /// <summary>
     /// Portable flow: place the (already verified) versioned exe next to the
     /// running one and start it. Returns the new exe path.
     /// </summary>
@@ -710,9 +722,7 @@ internal static class UpdateService
                     "try again.", ex);
             }
         }
-        var psiP = new ProcessStartInfo(dest) { UseShellExecute = true };
-        foreach (var a in relaunchArgs ?? []) psiP.ArgumentList.Add(a);
-        Process.Start(psiP);
+        Process.Start(RestartStartInfo(dest, relaunchArgs));
 
         // If this exe was registered to start with Windows, point the Run key at
         // the new file so the next logon is the version just applied.

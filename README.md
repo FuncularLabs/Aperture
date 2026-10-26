@@ -35,6 +35,8 @@ on your machine — it never uploads anything or phones home.
   each other's folders, tags, or search results, and switch between them from the library
   menu at the top of the folder pane. Each library has its own index, thumbnail cache, and
   settings.
+- **One window.** Starting Aperture while it's already open brings the open window to the
+  front (restored if it was minimized) instead of opening a second one.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and
   square, center-cropped tiles.
 - **Collapsible date sections** that auto-collapse older buckets, so you land on ~2
@@ -88,7 +90,8 @@ pwsh ./publish.ps1 -SelfContained  # bundles the runtime (portable, larger)
 
 Everything is local. Each library keeps its index, thumbnail cache, and settings in a folder
 of its own (`aperture.db`, `thumbs.db`, `settings.json`, plus a small `aperture.lock` that tells
-other Aperture windows the library is open):
+any other copy of Aperture — on this PC or another, for a library on a shared drive — that the
+library is open):
 
 - Your first library, **Default**, lives in `%LOCALAPPDATA%\Aperture`.
 - **New library…** creates a library in a new folder wherever you choose (Aperture suggests

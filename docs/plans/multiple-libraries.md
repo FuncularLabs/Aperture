@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 10, after review round 9) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 11, after review rounds 10–11 and Paul's rulings) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -313,7 +313,7 @@ Round 6 found no High or Medium defects. Fixed:
 Not pinned, by design: the delete's second "already removed" check (another window removing the library between
 the re-read and the forget) is reachable only through that race; it's kept as a backstop and checked by reading.
 
-Accepted residual, **pending Paul's OK**: at launch the last-used library is still opened on the UI thread,
+Accepted residual (**accepted by Paul, 2026-10-26**): at launch the last-used library is still opened on the UI thread,
 before the window appears. On an unreachable share each unreachable host costs about 40 seconds (Windows
 remembers a host it gave up on, so two libraries on the same host cost about the same). Aperture then falls back
 for that launch: to Default if it's listed; if the user removed Default, it tries the other listed libraries
@@ -411,9 +411,52 @@ Accepted residuals:
 - **Two windows naming two libraries the same at the same moment.** Revision 9's re-read narrowed this race; it
   isn't closed, because the name is checked before the new library is built, not inside the list's locked change.
   The worst case is two libraries with one name, in different folders — rename either. Open library… (its name
-  is made unique against the list read before it opens) and Rename have the same shape. **Pending Paul's OK.**
+  is made unique against the list read before it opens) and Rename have the same shape. **Accepted by Paul, 2026-10-26.**
 - On a share that drops mid-delete, a failing file can now cost a few network timeouts (the folder is listed to
   classify the error); it runs off the UI thread, with the switcher's commands disabled meanwhile.
+
+## Revision 11 — one Aperture window (Paul, 2026-10-26)
+
+Round 10 found only Nits (its regression review was CLEAN); round 11 was CLEAN at 69633b8. Paul then ruled on
+the open items: the launch delay on an unreachable share is **kept**; the same-name race is **accepted**;
+`WpfCatalogDialogs.cs` and `TextPromptDialog.xaml.cs` are **exempt** from the coverage floor, like the other
+WPF shells; and **Aperture runs as a single window**.
+
+Design of the single window:
+
+- At launch, before anything else, Aperture claims a named event, `Local\Aperture.Window.<hash>`, per Windows
+  session. The hash is of the library list's path — or, with `APERTURE_DATA_DIR`, of the pinned folder, so a
+  pinned (test) copy runs beside the user's own Aperture, one window per pinned folder.
+- The first launch owns the event for its lifetime. Windows removes it when that process exits or crashes, so
+  nothing stale is ever left to block a launch.
+- A later launch finds the event, signals it, and exits without opening a window; the running one brings its
+  window to the front (restored if minimized). The later launch first lets the running one take the
+  foreground, which Windows otherwise refuses a background process.
+- If the running one can't be signalled (it runs elevated and this launch doesn't), the later launch says
+  Aperture is already running and exits — it still never opens a second window.
+- A relaunch (an in-place update, a portable update, the installer's "move") starts the new copy with
+  `--after <pid>`; the new copy waits, up to 30 seconds, for that process to exit before claiming, so it doesn't
+  hand the window to the copy that is closing.
+- Two launches at the same moment: exactly one claims the event (Windows decides); the other signals it.
+
+The cross-window protections from earlier revisions stay: they still matter for pinned copies, an older
+Aperture running alongside, an elevated and a non-elevated copy, and libraries other machines open.
+
+| AC | Behaviour | Tests (`SingleInstanceTests`, `RelaunchTests`) |
+|---|---|---|
+| SW1 | The first launch is the instance; a later one isn't | `TheFirstLaunch_IsTheInstance_ALaterOneIsNot` |
+| SW2 | A later launch brings the running window forward, every time | `ALaterLaunch_AsksTheRunningOneToComeForward`, `EveryLaterLaunch_AsksAgain` |
+| SW3 | Once the running one has closed, the next launch is the instance | `OnceTheRunningOneHasClosed_TheNextLaunchIsTheInstance` |
+| SW4 | A running one this launch can't signal is reported, never joined by a second window | `ARunningOneThisLaunchMayNotSignal_IsReported` |
+| SW5 | Two launches at once: exactly one instance | `ManyLaunchesAtOnce_OnlyOneIsTheInstance` |
+| SW6 | One name per place; different places, different names | `NameFor_IsOnePerPlace` |
+| SW7 | A relaunch waits for the copy it replaces | `ArgsAfter_…`, `PreviousProcessId_…`, `WaitForExit_…` |
+| SW8 | An activation handler that throws doesn't stop the next activation | `AnActivationThatThrows_DoesntStopTheNext` |
+| SW9 | Closing the instance stops it listening; closing twice is harmless | `Dispose_StopsListening_AndCanBeRepeated` |
+
+The wiring (`App.xaml.cs`, and the install-move in `MainViewModel.cs`) is in the exempt shells; the two update
+relaunches in `UpdateService` build their arguments with `Relaunch.ArgsAfter`. Live check (Paul): launch twice —
+one window; minimize it and launch again — it comes back.
 
 ## Out of scope (future)
 
