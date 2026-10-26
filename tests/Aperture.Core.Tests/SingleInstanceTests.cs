@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using Aperture.Core.Startup;
@@ -56,6 +57,8 @@ public class SingleInstanceTests
                 SingleInstance.TryClaim(name, () => { }, out _);
                 Assert.True(asked.Wait(Soon), $"launch {launch + 2} wasn't passed on");
             }
+            Thread.Sleep(250);
+            Assert.Equal(0, asked.CurrentCount); // once per launch: not brought forward over and over
         }
     }
 
@@ -161,7 +164,10 @@ public class SingleInstanceTests
     {
         var name = AName();
         var askedTheClosedOne = 0;
-        SingleInstance.TryClaim(name, () => Interlocked.Increment(ref askedTheClosedOne), out var closed);
+        using var heard = new SemaphoreSlim(0);
+        SingleInstance.TryClaim(name, () => { Interlocked.Increment(ref askedTheClosedOne); heard.Release(); }, out var closed);
+        SingleInstance.TryClaim(name, () => { }, out _);
+        Assert.True(heard.Wait(Soon)); // one ask heard: the listener is now waiting for the next
         closed!.Dispose();
         closed.Dispose();
 
@@ -172,7 +178,37 @@ public class SingleInstanceTests
             SingleInstance.TryClaim(name, () => { }, out _);
             Assert.True(asked.Wait(Soon)); // the new instance was asked …
         }
-        Assert.Equal(0, askedTheClosedOne); // … and the closed one never was
+        Assert.Equal(1, askedTheClosedOne); // … and the closed one wasn't again (not even by being closed)
+    }
+
+    [Fact]
+    public void ALaunchStartedToReplaceAnother_ClaimsOnlyOnceThatOneHasExited()
+    {
+        var name = AName();
+        using var previous = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 2 127.0.0.1 > nul")
+            { CreateNoWindow = true, UseShellExecute = false })!; // the copy that's closing: about a second
+
+        var claim = SingleInstance.ClaimAtLaunch(Relaunch.ArgsAfter(previous.Id), name, () => { }, out var instance);
+        var exitedFirst = previous.HasExited;
+        using (instance)
+        {
+            Assert.Equal(SingleInstanceClaim.Claimed, claim);
+            Assert.True(exitedFirst, "claimed while the copy it replaces was still running");
+        }
+    }
+
+    [Fact]
+    public void AnOrdinaryLaunch_ClaimsWithoutWaiting()
+    {
+        var name = AName();
+        var clock = Stopwatch.StartNew();
+
+        var claim = SingleInstance.ClaimAtLaunch([], name, () => { }, out var instance);
+        using (instance)
+        {
+            Assert.Equal(SingleInstanceClaim.Claimed, claim);
+            Assert.True(clock.ElapsedMilliseconds < 2000);
+        }
     }
 
     [Fact]

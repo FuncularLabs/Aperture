@@ -22,6 +22,15 @@ public partial class MainWindow : Window
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;
 
+    /// <summary>Raised first when the window starts closing — before its own Closing handler saves anything.</summary>
+    public event EventHandler? ClosingStarted;
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        ClosingStarted?.Invoke(this, EventArgs.Empty);
+        base.OnClosing(e); // raises Closing: OnClosing(sender, e) below saves the placement and the pane width
+    }
+
     /// <summary>
     /// A catalog switch gives the window a new view model. Move the handlers <see cref="OnLoaded"/> attached
     /// from the old view model to the new one, and forget remembered scroll positions — they're keyed by

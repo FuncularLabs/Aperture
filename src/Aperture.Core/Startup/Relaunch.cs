@@ -37,12 +37,15 @@ public static class Relaunch
     /// Waits up to <paramref name="timeout"/> for the process to exit. True once it has, or if it isn't running; false
     /// if it's still running at the timeout, or can't be watched (then the caller goes on anyway).
     /// </summary>
-    public static bool WaitForExit(int processId, TimeSpan timeout)
+    public static bool WaitForExit(int processId, TimeSpan timeout) => WaitForExit(processId, timeout, WaitOn);
+
+    // `waitOn` is the test seam: whether this process may watch another depends on who runs the tests (an elevated
+    // runner may watch even the System process), so tests raise what Windows raises instead.
+    internal static bool WaitForExit(int processId, TimeSpan timeout, Func<int, TimeSpan, bool> waitOn)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return process.WaitForExit(timeout);
+            return waitOn(processId, timeout);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -52,5 +55,11 @@ public static class Relaunch
         {
             return false; // running, but this process may not watch it (it's elevated)
         }
+    }
+
+    private static bool WaitOn(int processId, TimeSpan timeout)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.WaitForExit(timeout);
     }
 }

@@ -38,6 +38,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             LogCrash(ex);
+            ReleaseWindow(); // a launch while this box is up should open, not be swallowed by a copy that's failing
             try
             {
                 MessageBox.Show(StartupGuard.Describe(ex, CrashLogPath), StartupGuard.Title,
@@ -58,18 +59,17 @@ public partial class App : Application
         // One window. A relaunch (an update, the installer's move) first waits for the copy it replaces; then a launch
         // while Aperture is already running brings that window to the front instead of opening a second one. A pinned
         // data folder has a window of its own.
-        if (Relaunch.PreviousProcessId(e.Args) is { } previous)
-            Relaunch.WaitForExit(previous, Relaunch.Wait);
         var place = string.IsNullOrWhiteSpace(overrideDir) ? CatalogRegistry.DefaultPath : overrideDir;
-        switch (SingleInstance.TryClaim(SingleInstance.NameFor(place), BringWindowForward, out _instance))
+        switch (SingleInstance.ClaimAtLaunch(e.Args, SingleInstance.NameFor(place), BringWindowForward, out _instance))
         {
             case SingleInstanceClaim.AlreadyRunning:
                 Shutdown(0);
                 return;
             case SingleInstanceClaim.RunningButUnreachable:
                 MessageBox.Show(
-                    "Aperture is already running, as administrator, so this copy can't bring it to the front. Switch " +
-                    "to it, or close it and start Aperture again.", "Aperture", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "Aperture is already running with different permissions (for example, as administrator), so this " +
+                    "copy can't bring it to the front. Switch to it, or close it and start Aperture again.", "Aperture",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
                 Shutdown(0);
                 return;
         }
@@ -111,6 +111,7 @@ public partial class App : Application
 
         _viewModel = BuildViewModel(library);
         _window = new MainWindow { DataContext = _viewModel };
+        _window.ClosingStarted += (_, _) => ReleaseWindow(); // nothing in Aperture cancels a close
         _window.Show();
 
         // The last-used library couldn't be opened (an unplugged drive, a deleted folder), so another was
@@ -125,6 +126,11 @@ public partial class App : Application
 
     private MainViewModel BuildViewModel(LibraryService library) =>
         new(library, new ThumbnailService(library), _catalogBar);
+
+    // Gives up the window as soon as this copy starts closing (or has failed to start), before the settings save and
+    // the library's teardown: a launch in the meantime then opens, instead of asking a window that is going away.
+    // Safe to call more than once.
+    private void ReleaseWindow() => _instance?.Dispose();
 
     // A later launch asked for this window. It runs on the single-window listener's thread, so it only queues the work
     // on the UI thread — never blocking, since Dispose waits for the listener.
@@ -185,6 +191,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        ReleaseWindow(); // first, in case the window never closed (an update's Shutdown)
         _viewModel?.PrepareForClose();
 
         // Release the live library's DB handles. The catalog service owns it in the normal path; a pinned
@@ -194,7 +201,6 @@ public partial class App : Application
         else
             _pinnedLibrary?.Dispose();
 
-        _instance?.Dispose(); // the next launch is the window now
         base.OnExit(e);
     }
 

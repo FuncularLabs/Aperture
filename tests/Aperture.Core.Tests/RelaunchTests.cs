@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using Aperture.Core.Startup;
 
@@ -42,9 +43,10 @@ public class RelaunchTests
         Assert.Null(Relaunch.PreviousProcessId(Args(args)));
 
     [Fact]
-    public void EveryRestart_StartsTheNewCopyAfterThisOne()
+    public void RestartStartInfo_StartsTheNewCopyAfterThisOne()
     {
-        // The in-place update, the portable update and the installer's move all start the new copy through this.
+        // The in-place update, the portable update and the installer's move start the new copy with this — checked by
+        // reading: the methods that call it replace and start the running exe, which a test can't let them do.
         var psi = Aperture.App.Updates.UpdateService.RestartStartInfo(@"C:\Apps\Aperture.exe", ["--finish-move", @"C:\Downloads\Aperture.exe"]);
 
         Assert.Equal(@"C:\Apps\Aperture.exe", psi.FileName);
@@ -57,10 +59,9 @@ public class RelaunchTests
     [Fact]
     public void WaitForExit_OfAProcessThisOneMayNotWatch_SaysItCouldnt()
     {
-        var clock = Stopwatch.StartNew();
-
-        Assert.False(Relaunch.WaitForExit(4, TimeSpan.FromSeconds(10))); // the System process: access denied
-        Assert.True(clock.ElapsedMilliseconds < 2000); // doesn't sit out the timeout
+        // What Process.WaitForExit throws for an elevated process watched from an unelevated one (ERROR_ACCESS_DENIED).
+        // Raised through the seam: whether a real process is watchable depends on who runs the tests.
+        Assert.False(Relaunch.WaitForExit(1234, TimeSpan.FromSeconds(10), (_, _) => throw new Win32Exception(5)));
     }
 
     [Fact]

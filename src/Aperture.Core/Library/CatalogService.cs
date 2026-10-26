@@ -288,8 +288,8 @@ public sealed class CatalogService : IAsyncDisposable
 
     /// <summary>
     /// Forgets a library from the list; its files stay where they are. Refused for the library this window has
-    /// open and for one known to be open in another Aperture window; allowed when Aperture can't tell (its lock
-    /// file can't be read), because forgetting a list entry harms nothing — a window that has it open lists it
+    /// open and for one known to be open in another copy of Aperture; allowed when Aperture can't tell (its lock
+    /// file can't be read), because forgetting a list entry harms nothing — a copy that has it open lists it
     /// again. Throws <see cref="CatalogException"/> if refused, already removed, or the list couldn't be saved.
     /// </summary>
     public async Task RemoveAsync(string catalogId)
@@ -440,7 +440,8 @@ public sealed class CatalogService : IAsyncDisposable
         {
             case LibraryOpenState.Open:
                 throw new CatalogException(
-                    $"\"{entry.Name}\" is open in another Aperture window, or in this one under a different folder path. " +
+                    $"\"{entry.Name}\" is open in another copy of Aperture — on this PC or another — or in this one " +
+                    "under a different folder path. " +
                     $"Close it there first. (If it isn't, another program may have its {ApertureDatabase.LockFileName} open — try again shortly.)");
             case LibraryOpenState.Unknown when deleting:
                 throw new CatalogException(
@@ -454,7 +455,7 @@ public sealed class CatalogService : IAsyncDisposable
     private bool StillListed(CatalogEntry entry) => _registry.List().Any(c => c.Id == entry.Id);
 
     private static CatalogException AlreadyRemoved(CatalogEntry entry) =>
-        new($"\"{entry.Name}\" was already removed from the list (perhaps in another Aperture window), so nothing was changed.");
+        new($"\"{entry.Name}\" was already removed from the list (perhaps in another copy of Aperture), so nothing was changed.");
 
     // Names Windows reserves for devices: as a folder name they fail, or make a folder some tools can't open.
     // (The full list from Microsoft's "Naming files, paths, and namespaces", superscript digits included.)

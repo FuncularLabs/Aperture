@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 11, after review rounds 10–11 and Paul's rulings) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 12, after review round 12 of the single window) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -180,6 +180,7 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (28) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
 | 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
+| 4b | One window (revision 11) | `SingleInstanceTests` (13), `RelaunchTests` (16) — real kernel objects and real child processes |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -439,8 +440,9 @@ Design of the single window:
   hand the window to the copy that is closing.
 - Two launches at the same moment: exactly one claims the event (Windows decides); the other signals it.
 
-The cross-window protections from earlier revisions stay: they still matter for pinned copies, an older
-Aperture running alongside, an elevated and a non-elevated copy, and libraries other machines open.
+The cross-window protections from earlier revisions stay: they still matter for a pinned copy, the same user in
+another Windows session, and a library on a shared drive that another PC has open. (Released versions before
+this one have neither the lock file nor the library list, so they can't see each other either way.)
 
 | AC | Behaviour | Tests (`SingleInstanceTests`, `RelaunchTests`) |
 |---|---|---|
@@ -450,18 +452,41 @@ Aperture running alongside, an elevated and a non-elevated copy, and libraries o
 | SW4 | A running one this launch can't signal is reported, never joined by a second window | `ARunningOneThisLaunchMayNotSignal_IsReported` |
 | SW5 | Two launches at once: exactly one instance | `ManyLaunchesAtOnce_OnlyOneIsTheInstance` |
 | SW6 | One name per place; different places, different names | `NameFor_IsOnePerPlace` |
-| SW7 | A relaunch waits for the copy it replaces | `ArgsAfter_…`, `PreviousProcessId_…`, `WaitForExit_…` |
+| SW7 | A relaunch waits for the copy it replaces | `ALaunchStartedToReplaceAnother_ClaimsOnlyOnceThatOneHasExited`, `AnOrdinaryLaunch_ClaimsWithoutWaiting`, `ArgsAfter_…`, `PreviousProcessId_…`, `WaitForExit_…`, `RestartStartInfo_StartsTheNewCopyAfterThisOne` |
 | SW8 | An activation handler that throws doesn't stop the next activation | `AnActivationThatThrows_DoesntStopTheNext` |
-| SW9 | Closing the instance stops it listening; closing twice is harmless | `Dispose_StopsListening_AndCanBeRepeated` |
+| SW9 | Closing the instance stops it listening; closing twice is harmless | `Dispose_StopsListening_AndCanBeRepeated`, `Dispose_FromInsideTheActivation_DoesntHang` |
+| SW10 | A launch while Aperture is closing (or failing to start) opens a window, never nothing | App wiring — live check |
 
-The wiring (`App.xaml.cs`, and the install-move in `MainViewModel.cs`) is in the exempt shells; the two update
-relaunches in `UpdateService` build their arguments with `Relaunch.ArgsAfter`. Live check (Paul): launch twice —
-one window; minimize it and launch again — it comes back.
+The wiring (`App.xaml.cs`, `MainWindow.xaml.cs`, and the install-move in `MainViewModel.cs`) is in the exempt
+shells. The two update relaunches in `UpdateService` start the new copy with `RestartStartInfo`, which is tested;
+that they call it is checked by reading — those methods replace and start the running exe, which a test can't
+let them do. Live check (Paul): launch twice — one window; minimize it and launch again — it comes back; close it
+and launch again at once — it opens.
+
+### Revision 12 — what changed after review round 12
+
+Round 12 (two reviews) found one Medium: the claim was given up only at the very end of exit — after the settings
+save and the library's teardown — so a launch while Aperture was closing (or while its startup-error box was up)
+did nothing at all, and an update's new copy could time out waiting and leave no Aperture running. The window is
+now given up as soon as it starts closing (before anything is saved), again first thing on exit, and before the
+startup-error box; a launch in the meantime opens normally while the old copy finishes closing, as before this
+feature. Also fixed: a test that relied on the System process being unwatchable (an elevated CI runner can watch
+it) now raises the real access-denied error through a seam; "wait for `--after`, then claim" is one Core method
+tested with a live child process; the activation tests count activations exactly (a reset-mode or wake-on-close
+bug would bring the window forward over and over); messages no longer speak of "another Aperture window"; the
+"already running" message no longer assumes the other copy is elevated.
+
+Accepted (one window, as ruled):
+
+- A launch while Aperture is running but hung brings nothing forward until that copy is closed.
+- "Run as administrator" while Aperture runs normally brings the normal window forward instead of starting an
+  elevated one; a newer exe started by hand while this one runs brings the running window forward.
+- A launch that lands in the instant between an update's old copy exiting and its new copy claiming becomes the
+  window instead (the new copy then exits): the update has still been applied on disk.
+- `UpdateService`'s update-collision messages still mention other windows: still possible with a pinned copy or
+  another session, so left as they are.
 
 ## Out of scope (future)
-
-- A single-instance guard (a second launch focuses the first window). It would make most of the cross-window
-  handling above unnecessary; worth considering for a later release.
 
 - Named saved views **within** a catalog (Option A) — complementary, can layer on later.
 - Moving/copying items *between* catalogs.

@@ -1040,7 +1040,7 @@ public class CatalogServiceTests
 
         var ex = await Assert.ThrowsAsync<CatalogException>(() => service.RemoveAsync(work.Id));
 
-        Assert.Contains("another Aperture window", ex.Message);
+        Assert.Contains("another copy of Aperture", ex.Message);
         Assert.Equal(2, service.Registry.List().Count);
     }
 

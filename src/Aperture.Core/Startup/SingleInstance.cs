@@ -9,7 +9,7 @@ public enum SingleInstanceClaim
 {
     /// <summary>
     /// No Aperture is running here: this launch is the one. Normally it gets an instance to keep for as long as it
-    /// runs; if the name is taken by something that isn't an Aperture's, it gets none and runs without the guard.
+    /// runs; if the name is taken by something that isn't an event at all, it gets none and runs without the guard.
     /// </summary>
     Claimed,
 
@@ -54,6 +54,18 @@ public sealed class SingleInstance : IDisposable
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(place)).ToUpperInvariant();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))[..16];
         return @"Local\Aperture.Window." + hash;
+    }
+
+    /// <summary>
+    /// The launch's claim: if this launch was started to replace another copy (<c>--after</c> in
+    /// <paramref name="args"/>, see <see cref="Relaunch"/>), it first waits — up to <see cref="Relaunch.Wait"/> — for
+    /// that copy to exit; then <see cref="TryClaim"/>.
+    /// </summary>
+    public static SingleInstanceClaim ClaimAtLaunch(IReadOnlyList<string> args, string name, Action activate, out SingleInstance? instance)
+    {
+        if (Relaunch.PreviousProcessId(args) is { } previous)
+            Relaunch.WaitForExit(previous, Relaunch.Wait);
+        return TryClaim(name, activate, out instance);
     }
 
     /// <summary>

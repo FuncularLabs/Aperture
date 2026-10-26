@@ -367,7 +367,7 @@ public sealed class CatalogRegistry
 
     internal static bool SameDir(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    // A sharing or lock violation: another handle has the file (another Aperture window, or another program).
+    // A sharing or lock violation: another handle has the file (another copy of Aperture, or another program).
     private static bool InUse(IOException ex) => (ex.HResult & 0xFFFF) is 32 or 33;
 
     private enum FolderAccess { Reachable, NotFound, NotAllowed }
