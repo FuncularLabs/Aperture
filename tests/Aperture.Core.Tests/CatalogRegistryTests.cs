@@ -884,11 +884,18 @@ public class CatalogRegistryTests
         {
             var anotherWindow = new Thread(() =>
             {
-                using var other = new Mutex(false, reg.MutexName);
-                var got = other.WaitOne(0);
-                if (got)
-                    other.ReleaseMutex();
-                heldDuringTheChange = !got;
+                try
+                {
+                    using var other = new Mutex(false, reg.MutexName);
+                    var got = other.WaitOne(0);
+                    if (got)
+                        other.ReleaseMutex();
+                    heldDuringTheChange = !got;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    heldDuringTheChange = false; // the elevated window's lock is still there: this change didn't wait
+                }
             });
             anotherWindow.Start();
             anotherWindow.Join();
