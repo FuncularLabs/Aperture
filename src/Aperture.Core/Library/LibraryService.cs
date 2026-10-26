@@ -429,6 +429,7 @@ public sealed class LibraryService : IDisposable
             _tornDown = true;
         }
 
+        TearingDown?.Invoke();
         StopAllWatchers();
         _db.Dispose();
         _openLock.Dispose();
@@ -445,6 +446,9 @@ public sealed class LibraryService : IDisposable
             _watchers.Clear();
         }
     }
+
+    /// <summary>Test seam: runs on the thread that closes this library (its database, watchers and lock), as it starts.</summary>
+    internal Action? TearingDown { get; set; }
 
     /// <summary>How many roots are being watched. For tests of the teardown contract.</summary>
     internal int WatcherCount

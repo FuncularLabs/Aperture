@@ -56,8 +56,9 @@ public sealed class CatalogService : IAsyncDisposable
 
     /// <summary>
     /// Test seam: runs on the thread where the service touches a library's folder — when opening one (after checking
-    /// it's there, just before taking its lock), closing one (the library a switch leaves, or one a New or Open whose
-    /// list couldn't be saved opened), and checking whether one is open (Remove, Delete).
+    /// it's there, just before taking its lock), when any library it holds is closed (from inside the close itself:
+    /// the library a switch leaves, or one a New or Open whose list couldn't be saved opened), and when checking
+    /// whether one is open (Remove, Delete).
     /// </summary>
     internal Action? TouchingLibraryFolder { get; set; }
 
@@ -65,7 +66,7 @@ public sealed class CatalogService : IAsyncDisposable
     {
         _registry = registry;
         _defaultDir = defaultDir;
-        _current = current;
+        _current = Watched(current);
         OpenWarning = openWarning;
     }
 
@@ -160,8 +161,9 @@ public sealed class CatalogService : IAsyncDisposable
 
     /// <summary>
     /// Creates a new library in its own folder, <paramref name="parentDir"/>\<paramref name="name"/>, registers
-    /// it and switches to it. The folder must not exist yet, or be empty — a new library never moves into a
-    /// folder that already holds files. Nothing is registered unless the library opens.
+    /// it and switches to it. The folder must not be a listed library's, and must not exist yet or be empty — a new
+    /// library never moves into a folder that already holds files (a lone, unheld <c>aperture.lock</c> left by an
+    /// interrupted New doesn't count). Nothing is registered unless the library opens.
     /// </summary>
     public async Task<CatalogEntry> CreateLibraryAsync(string name, string parentDir)
     {
@@ -170,6 +172,10 @@ public sealed class CatalogService : IAsyncDisposable
         {
             var trimmed = CheckNewLibraryName(name);
             var dir = CatalogRegistry.NormalizeDir(Path.Combine(parentDir, trimmed));
+            _registry.Reload(); // another window may have registered this folder meanwhile
+            if (_registry.List().FirstOrDefault(c => CatalogRegistry.SameDir(c.Dir, dir)) is { } listed)
+                throw new CatalogException(
+                    $"{dir} is already the library \"{listed.Name}\". Choose another name or location for the new one.");
             // Off the caller's thread: the chosen location may be a slow or unreachable network share.
             var (existed, next) = await Task.Run(() =>
             {
@@ -184,7 +190,7 @@ public sealed class CatalogService : IAsyncDisposable
                 TouchingLibraryFolder?.Invoke();
                 try
                 {
-                    return (existed, new LibraryService(dir));
+                    return (existed, Watched(new LibraryService(dir)));
                 }
                 catch
                 {
@@ -204,7 +210,6 @@ public sealed class CatalogService : IAsyncDisposable
                 // Off the caller's thread, like the open: closing the library and removing its files touch its folder.
                 await Task.Run(() =>
                 {
-                    TouchingLibraryFolder?.Invoke();
                     next.Dispose();
                     CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed);
                 });
@@ -245,7 +250,7 @@ public sealed class CatalogService : IAsyncDisposable
                 if (!File.Exists(Path.Combine(full, ApertureDatabase.MetadataFileName)))
                     throw new CatalogException($"{full} doesn't contain an Aperture library. To start a new one, use New library….");
                 TouchingLibraryFolder?.Invoke();
-                return new LibraryService(full, mustExist: true);
+                return Watched(new LibraryService(full, mustExist: true));
             });
             var folderName = Path.GetFileName(full);
             CatalogEntry entry;
@@ -255,11 +260,7 @@ public sealed class CatalogService : IAsyncDisposable
             }
             catch (IOException)
             {
-                await Task.Run(() =>
-                {
-                    TouchingLibraryFolder?.Invoke();
-                    next.Dispose(); // off the caller's thread, like the open
-                });
+                await Task.Run(next.Dispose); // off the caller's thread, like the open
                 throw new CatalogException("Aperture couldn't save its list of libraries, so the library wasn't added.");
             }
             await CommitSwitchAsync(entry, next);
@@ -377,18 +378,21 @@ public sealed class CatalogService : IAsyncDisposable
 
         var previous = _current;
         // Off the caller's thread: closing a library touches its folder, which may be on a share that has gone away.
-        await Task.Run(() =>
-        {
-            TouchingLibraryFolder?.Invoke();
-            return previous.ShutdownAsync();
-        });
+        await Task.Run(previous.ShutdownAsync);
         _current = next;
         _registry.Activate(target, rememberForNextLaunch: true);
         ActiveLibraryChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private LibraryService OpenLibrary(string dir) =>
-        OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir), checkedFolder: TouchingLibraryFolder);
+        Watched(OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir), checkedFolder: TouchingLibraryFolder));
+
+    // Every library the service holds reports its close to the test seam, on whichever thread closes it.
+    private LibraryService Watched(LibraryService library)
+    {
+        library.TearingDown = () => TouchingLibraryFolder?.Invoke();
+        return library;
+    }
 
     // Only the local Default may be created on the spot (a fresh install, or its folder was deleted). Any
     // other library must still be there: a missing one is reported, not silently recreated empty — that's

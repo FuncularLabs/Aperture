@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 7, after review round 6) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 8, after review round 7) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -90,8 +90,10 @@ catalog's files and the list of every catalog never share a folder.
   any window has it open, and keeping any window from opening it meanwhile), and the lock file goes with the
   rest; a window that was waiting to open it (any library but the local Default) then re-checks for
   `aperture.db` and reports it gone instead of recreating it empty. A delete whose folder can't be reached deletes and forgets nothing, and says so; if the folder goes away
-  mid-delete, the library has already been forgotten but nothing was deleted, and the user is told exactly that —
-  and how to finish once the drive is back (add it again with Open library…, then delete it).
+  mid-delete, the library has already been forgotten but not all of its files were deleted, and the user is told
+  exactly that — and how to finish once the drive is back (add it again with Open library…, switch to another
+  library, then delete it). "Can be reached" means Aperture could list the folder or open a file in it, never
+  just that the path exists: a junction to a drive that's gone still "exists".
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
 
@@ -165,7 +167,8 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | Aperture closed while New library is creating | The folder left behind holds only Aperture's lock (or a new, empty database). New library with the same name uses a lock-only folder again (a lock another window holds still counts as taken); one with a database can be added with Open library…. |
 | The same folder registered twice through different paths (junction, mapped drive; an 8.3 short name is de-duplicated) | Two list entries for one folder. Safe while open: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. Once neither is open, "Delete library files" on one leaves the other listed but pointing at a deleted library — switching to it then says so. |
 | The list file can't be read at launch (locked by another program, or not accessible) | Opens Default for now, says so, and changes nothing on disk until the list can be read. If the first read fails but a second one succeeds, the user's own choice opens, not Default. A Default the user had removed can come back into the list if they keep working in it during such a launch (it's the library that window has open, and an open library is always listed). |
-| A library on a drive or share that's gone | Remove from list works (without freezing the window); Delete says it can't reach the folder and changes nothing. |
+| A library on a drive or share that's gone | Remove from list works (without freezing the window); Delete says it can't reach the folder and changes nothing — also when the library is reached through a junction or link whose drive is gone. |
+| New library in the folder of a listed library | Refused, naming that library. |
 | A library whose `aperture.lock` this user can't read | Remove from list works; Delete refuses, saying Aperture can't tell whether it's open. |
 | Legacy "Reel" migration | Unchanged — it targets the Default catalog's folder. |
 
@@ -173,9 +176,9 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (71) |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (75) |
 | 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (28) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (86) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (88) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -296,8 +299,8 @@ Round 6 found no High or Medium defects. Fixed:
   the folder as a file. A delete now reports that case as its own outcome, and the user is told the library was
   removed from the list but none of its files were deleted, and how to finish. Relatedly, a delete that can't
   take the lock in a folder holding none of Aperture's files no longer reports the folder as "left".
-- **The last folder work on the UI thread during a switch.** Closing the library a switch leaves, and the
-  clean-up after a New or Open whose list couldn't be saved, now run off the UI thread too.
+- **Folder work on the UI thread during a switch.** Closing the library a switch leaves, and the clean-up after
+  a New or Open whose list couldn't be saved, now run off the UI thread too. (Not all of it: see revision 8.)
 - **An interrupted New.** Closing Aperture while New library was creating could leave a folder holding only
   `aperture.lock`, which then blocked both New and Open with that folder. New now treats an unheld lone lock as
   a leftover and uses the folder.
@@ -317,6 +320,45 @@ for that launch: to Default if it's listed; if the user removed Default, it trie
 first — opening the first reachable one, or after the last re-registering Default — so two libraries on two
 unreachable hosts took about 84 seconds. The alternative is to give up on a library after a few seconds, at the
 risk of skipping a slow NAS that is only waking up.
+
+## Revision 8 — what changed after review round 7 (2026-10-25)
+
+Round 7 found one **Medium** defect, introduced by revision 7: a library reached through a junction (or link) to
+a drive that's gone was forgotten by Delete library files with no message, its tags and notes left on the drive.
+`Directory.Exists` says yes for such a junction, and revision 7 had removed the fallback that used to catch it.
+This was the third round running whose fix caused the next round's finding, so the reachability checks were
+redesigned rather than patched again:
+
+- **Reachable means touched.** Before deleting, the folder is listed (not just checked for existence); a
+  folder that can't be listed is "can't reach": nothing deleted, nothing forgotten. During the delete, the lock
+  and every file are classified by what actually happened: in use or no permission is a file left over;
+  anything else (not found, a path or network error) means the folder went out of reach, and the user is told
+  not all of its files could be deleted — including when the drive goes after the delete took its lock, which
+  revision 7 still reported as a clean delete.
+- **The tests use the real thing:** a library behind a junction whose drive is moved away (the same
+  `DirectoryNotFoundException` a real unplug gives), just before the delete, just before its lock, and once its
+  lock is held.
+
+Also fixed:
+
+- **New library in a listed library's folder** (one emptied by hand) silently reused that library's entry and
+  dropped the new name; it's now refused, naming the library.
+- **The off-thread tests watched the code around the work, not the work.** Closing a library now reports to the
+  test hook from inside the close itself, so moving the close back onto the UI thread fails a test.
+- **The "how to finish" message** now says to switch to another library before deleting (a library can't be
+  deleted while it's the open one).
+- **Tests:** the elevated-lock test no longer crashes the test run when the wait it guards is skipped; New and
+  Open queued behind another switch still notify on the caller's thread.
+
+Accepted residuals:
+
+- Switching still reads the *new* library's database on the UI thread when the window rebuilds its view model
+  (in the exempt, untested App shell; unchanged by this feature's fixes).
+- Closing the window during the clean-up after a New whose list couldn't be saved can leave the folder holding
+  some of Aperture's files without `aperture.db`; New then refuses that name and Open says there's no library
+  there, until the files are deleted by hand. Widening "a leftover" beyond a lone lock would risk deleting files
+  that aren't Aperture's (Windows' own `Thumbs.db` shares the name of Aperture's thumbnail cache).
+- The delete's second "already removed" check stays a backstop checked by reading (revision 7).
 
 ## Out of scope (future)
 

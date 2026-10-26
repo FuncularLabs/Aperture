@@ -352,8 +352,9 @@ public class CatalogBarViewModelTests
         var (message, isError) = Assert.Single(f.Dialogs.Messages);
         Assert.True(isError);
         Assert.Contains(usb.Dir, message);
-        Assert.Contains("none of its files were deleted", message);
-        Assert.Contains("Open library", message); // how to finish once the drive is back
+        Assert.Contains("not all of its files could be deleted", message);
+        Assert.Contains("Open library", message); // how to finish once the drive is back —
+        Assert.Contains("switch to another library", message); // a library can't be deleted while it's the open one
         Assert.DoesNotContain("another program", message);
         Assert.True(File.Exists(Path.Combine(unplugged, ApertureDatabase.MetadataFileName)));
     }

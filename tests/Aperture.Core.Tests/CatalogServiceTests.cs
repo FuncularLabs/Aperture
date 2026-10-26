@@ -380,6 +380,34 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task QueuedNewAndOpen_StillRaiseTheirEventsOnTheCallersContext()
+    {
+        using var outer = new TempDir();
+        using var lib = new TempDir();
+        TestImages.Write(Path.Combine(lib.Path, "a.jpg"), 64, 64);
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var a = AddLibrary(service, "A", outer.Combine("a"));
+        var unlisted = outer.Combine("unlisted");
+        using (new LibraryService(unlisted)) { }
+        var held = new BlockingProgress();
+        var indexing = service.Current.IndexRootAsync(service.Current.AddRoot(lib.Path, "L"), held);
+        Assert.True(held.Entered.Wait(5000));
+        var threads = new List<int>();
+        service.ActiveLibraryChanged += (_, _) => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+
+        using var ui = new SingleThreadContext();
+        var first = ui.Run(() => service.SwitchToAsync(a.Id));
+        var created = ui.Run(() => service.CreateLibraryAsync("Fresh", outer.Path)); // each waits its turn
+        var opened = ui.Run(() => service.OpenLibraryAsync(unlisted));
+        await Task.Delay(200);
+        held.Release();
+        await Task.WhenAll(first, created, opened);
+        await Record.ExceptionAsync(() => indexing);
+
+        Assert.Equal([ui.ThreadId, ui.ThreadId, ui.ThreadId], threads);
+    }
+
+    [Fact]
     public async Task CreateLibraryAsync_WhereTheFolderCantBeCreated_KeepsCurrentLive_AndRegistersNothing()
     {
         using var outer = new TempDir();
@@ -1167,6 +1195,22 @@ public class CatalogServiceTests
 
         Assert.Equal("Work", service.ActiveCatalog!.Name);
         Assert.True(File.Exists(Path.Combine(dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task CreateLibraryAsync_InTheFolderOfAListedLibrary_IsRefused()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var photos = AddLibrary(service, "Photos", outer.Combine("Work")); // listed under another name
+        foreach (var file in Directory.GetFiles(photos.Dir).Where(f => Path.GetFileName(f) != ApertureDatabase.LockFileName))
+            File.Delete(file); // its files deleted by hand: only the lock is left
+
+        var ex = await Assert.ThrowsAsync<CatalogException>(() => service.CreateLibraryAsync("Work", outer.Path));
+
+        Assert.Contains("Photos", ex.Message);
+        Assert.Equal("Default", service.ActiveCatalog!.Name);
+        Assert.Equal("Photos", service.Registry.List().Single(c => c.Id == photos.Id).Name);
     }
 
     [Fact]

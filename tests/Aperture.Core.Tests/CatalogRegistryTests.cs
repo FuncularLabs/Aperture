@@ -892,7 +892,7 @@ public class CatalogRegistryTests
                         other.ReleaseMutex();
                     heldDuringTheChange = !got;
                 }
-                catch (UnauthorizedAccessException)
+                catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException)
                 {
                     heldDuringTheChange = false; // the elevated window's lock is still there: this change didn't wait
                 }
@@ -1000,6 +1000,81 @@ public class CatalogRegistryTests
         using var dir = new TempDir();
 
         Assert.Null(CatalogRegistry.DeleteCatalogFiles(dir.Combine("unplugged")));
+    }
+
+    // A library reached through a junction to a drive: unplugging the drive leaves the junction behind, and
+    // Directory.Exists still says yes for it — but nothing in it can be opened (DirectoryNotFoundException).
+    private static (string Link, string Drive) ALibraryBehindAJunction(TempDir dir)
+    {
+        var drive = dir.Combine("drive");
+        using (new LibraryService(drive)) { }
+        var link = dir.Combine("usb");
+        Junction.Create(link, drive);
+        return (link, drive);
+    }
+
+    [Fact]
+    public void DeleteCatalogFiles_OfAJunctionWhoseDriveIsGone_SaysItCouldntBeReached()
+    {
+        using var dir = new TempDir();
+        var (link, drive) = ALibraryBehindAJunction(dir);
+        Directory.Move(drive, dir.Combine("drive-unplugged"));
+        Assert.True(Directory.Exists(link)); // the trap
+
+        Assert.Null(CatalogRegistry.DeleteCatalogFiles(link));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_OfALibraryBehindAJunctionWhoseDriveIsGone_ForgetsNothing_AndSaysSo()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var (link, drive) = ALibraryBehindAJunction(dir);
+        var entry = reg.Add("USB", link);
+        var unplugged = dir.Combine("drive-unplugged");
+        Directory.Move(drive, unplugged);
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+
+        Assert.Equal(CatalogDeletionOutcome.FolderNotFound, result.Outcome);
+        Assert.Contains(reg.List(), c => c.Id == entry.Id); // nothing deleted, so nothing forgotten
+        Assert.True(File.Exists(Path.Combine(unplugged, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_WhenTheDriveGoesJustBeforeTheDeleteTakesItsLock_SaysNothingWasDeleted()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var (link, drive) = ALibraryBehindAJunction(dir);
+        var entry = reg.Add("USB", link);
+        var unplugged = dir.Combine("drive-unplugged");
+        reg.BeforeDeleteLock = () => Directory.Move(drive, unplugged);
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.BeforeDeleteLock = null;
+
+        Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome);
+        Assert.True(File.Exists(Path.Combine(unplugged, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public void RemoveAndDeleteFiles_WhenTheDriveGoesOnceTheDeleteHoldsItsLock_SaysNotEverythingWasDeleted()
+    {
+        using var dir = new TempDir();
+        var reg = new CatalogRegistry(RegistryPath(dir));
+        reg.Add("Stay", dir.Combine("stay"));
+        var (link, drive) = ALibraryBehindAJunction(dir);
+        var entry = reg.Add("USB", link);
+        reg.AfterDeleteLock = () => Directory.Delete(link); // the way to the drive goes; the drive's files stay
+
+        var result = reg.RemoveAndDeleteFiles(entry.Id);
+        reg.AfterDeleteLock = null;
+
+        Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome); // not a clean "Deleted"
+        Assert.True(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName)));
     }
 
     [Fact]

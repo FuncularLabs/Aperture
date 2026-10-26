@@ -162,8 +162,8 @@ public sealed class CatalogBarViewModel : ObservableObject
         else if (result.Outcome == CatalogDeletionOutcome.FolderLostDuringDelete)
             _dialogs.ShowMessage("Aperture",
                 $"\"{entry.Name}\" was removed from the list, but Aperture lost access to {entry.Dir} during the delete, " +
-                "so none of its files were deleted. To delete them, reconnect the drive, add the library again with " +
-                "Open library…, and delete it from there.",
+                "so not all of its files could be deleted. To delete them, reconnect the drive, add the library again with " +
+                "Open library…, then switch to another library and delete it.",
                 isError: true);
     }
 

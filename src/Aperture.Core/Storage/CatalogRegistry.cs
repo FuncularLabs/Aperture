@@ -42,7 +42,7 @@ public enum CatalogDeletionOutcome
 
     /// <summary>
     /// The catalog was removed from the list, but its folder went out of reach during the delete (a drive unplugged,
-    /// a share dropped), so none of its files were deleted. FilesLeft is empty: the folder couldn't be read.
+    /// a share dropped), so not all of its files were deleted. FilesLeft is empty: the folder couldn't be read.
     /// </summary>
     FolderLostDuringDelete,
 }
@@ -165,6 +165,12 @@ public sealed class CatalogRegistry
     /// window where a file that couldn't be read becoming writable again would let a stale copy be saved.
     /// </summary>
     internal Action? BetweenReadAndChange { get; set; }
+
+    /// <summary>Test seams: run in <see cref="RemoveAndDeleteFiles"/> just before its delete takes the library's lock, and just after.</summary>
+    internal Action? BeforeDeleteLock { get; set; }
+
+    /// <inheritdoc cref="BeforeDeleteLock"/>
+    internal Action? AfterDeleteLock { get; set; }
 
     /// <summary>All registered catalogs, in registration order. Snapshots — mutating them does nothing.</summary>
     public IReadOnlyList<CatalogEntry> List()
@@ -300,7 +306,7 @@ public sealed class CatalogRegistry
         var known = Mutate(() => _catalogs.FirstOrDefault(c => c.Id == id) is { } listed ? Clone(listed) : null, seam: false);
         if (known is null)
             return new CatalogDeletion(CatalogDeletionOutcome.NotFound, []);
-        if (!Directory.Exists(known.Dir))
+        if (!FolderIsReachable(known.Dir))
             return new CatalogDeletion(CatalogDeletionOutcome.FolderNotFound, []);
 
         var outcome = Mutate(() =>
@@ -313,9 +319,9 @@ public sealed class CatalogRegistry
         if (outcome.Entry is null)
             return new CatalogDeletion(outcome.Outcome, []);
 
-        // The folder may have gone away since the check above (a drive unplugged mid-delete): then nothing could be
-        // deleted, and the user must hear so rather than see a success while the tags and notes stay on that drive.
-        var left = DeleteCatalogFiles(outcome.Entry.Dir);
+        // The folder may go out of reach after the check above (a drive unplugged mid-delete): then not everything
+        // was deleted, and the user must hear so rather than see a success while the tags and notes stay on that drive.
+        var left = DeleteCatalogFiles(outcome.Entry.Dir, beforeLock: BeforeDeleteLock, afterLock: AfterDeleteLock);
         if (left is null)
             return new CatalogDeletion(CatalogDeletionOutcome.FolderLostDuringDelete, []);
         return new CatalogDeletion(left.Count == 0 ? CatalogDeletionOutcome.Deleted : CatalogDeletionOutcome.PartiallyDeleted, left);
@@ -350,17 +356,44 @@ public sealed class CatalogRegistry
 
     internal static bool SameDir(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
+    // A sharing or lock violation: another handle has the file (another Aperture window, or another program).
+    private static bool InUse(IOException ex) => (ex.HResult & 0xFFFF) is 32 or 33;
+
+    /// <summary>
+    /// Whether <paramref name="dir"/> can actually be reached. <see cref="Directory.Exists(string)"/> isn't enough:
+    /// it says yes for a junction (or link) to a drive that's gone, whose contents can't be opened. So this lists the
+    /// folder. A folder this user may not list is there, so it counts as reachable.
+    /// </summary>
+    internal static bool FolderIsReachable(string dir)
+    {
+        try
+        {
+            using var entries = Directory.EnumerateFileSystemEntries(dir).GetEnumerator();
+            entries.MoveNext();
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return false; // not found, or a path or network error
+        }
+    }
+
     /// <summary>
     /// Deletes Aperture's files in <paramref name="dir"/>, then (if <paramref name="removeEmptyFolder"/>) the
     /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission) — all
     /// of them, untouched, if the library is open in any Aperture window — or <c>null</c> if the folder can't be
-    /// found or reached, when nothing was deleted. Never deletes anything else.
+    /// reached, before the delete or during it (then not all of its files were deleted). Never deletes anything else.
+    /// <paramref name="beforeLock"/> and <paramref name="afterLock"/> are test seams.
     /// </summary>
-    internal static IReadOnlyList<string>? DeleteCatalogFiles(string dir, bool removeEmptyFolder = true)
+    internal static IReadOnlyList<string>? DeleteCatalogFiles(string dir, bool removeEmptyFolder = true,
+        Action? beforeLock = null, Action? afterLock = null)
     {
         var left = new List<string>();
-        if (!Directory.Exists(dir))
-            return null;
+        beforeLock?.Invoke();
 
         // Hold the library's lock exclusively while deleting: if any Aperture window has the library open — by
         // any path to this folder, in any process — delete nothing at all; otherwise none can open it meanwhile.
@@ -372,23 +405,35 @@ public sealed class CatalogRegistry
             exclusive = new FileStream(lockFile, FileMode.OpenOrCreate, FileAccess.Read, FileShare.None,
                 bufferSize: 1, FileOptions.DeleteOnClose);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && InUse(io))
         {
-            // Nothing deleted: say the folder went out of reach if it did, else name Aperture's files that are left.
-            if (!Directory.Exists(dir))
-                return null;
+            // Nothing deleted: the library is open somewhere (its lock is held), or this user may not create the lock
+            // file. Name Aperture's files that are left.
             return [.. CatalogFileNames.Append(ApertureDatabase.LockFileName).Select(n => Path.Combine(dir, n)).Where(File.Exists)];
+        }
+        catch (IOException)
+        {
+            return null; // the folder went out of reach (not found, or a path or network error): nothing deleted
         }
 
         using (exclusive)
         {
+            afterLock?.Invoke();
             foreach (var name in CatalogFileNames)
             {
                 var file = Path.Combine(dir, name);
-                if (!File.Exists(file))
-                    continue;
-                try { File.Delete(file); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { left.Add(file); }
+                try
+                {
+                    File.Delete(file); // nothing to do if it isn't there — but it throws if the folder can't be reached
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException io && InUse(io))
+                {
+                    left.Add(file); // in use, or no permission
+                }
+                catch (IOException)
+                {
+                    return null; // the folder went out of reach mid-delete
+                }
             }
         }
 
