@@ -54,6 +54,9 @@ public sealed class CatalogService : IAsyncDisposable
     /// <summary>Raised after <see cref="Current"/> has been swapped to the new catalog's library.</summary>
     public event EventHandler? ActiveLibraryChanged;
 
+    /// <summary>Test seam: runs wherever a switch, New library or Open library is about to touch a library's folder.</summary>
+    internal Action? TouchingLibraryFolder { get; set; }
+
     private CatalogService(CatalogRegistry registry, string defaultDir, LibraryService current, string? openWarning)
     {
         _registry = registry;
@@ -166,6 +169,7 @@ public sealed class CatalogService : IAsyncDisposable
             // Off the caller's thread: the chosen location may be a slow or unreachable network share.
             var (existed, next) = await Task.Run(() =>
             {
+                TouchingLibraryFolder?.Invoke();
                 if (File.Exists(dir))
                     throw new CatalogException($"There's already a file called \"{trimmed}\" in {parentDir}. Choose another name.");
                 var existed = Directory.Exists(dir);
@@ -227,6 +231,7 @@ public sealed class CatalogService : IAsyncDisposable
             // Off the caller's thread: the chosen folder may be on a slow or unreachable network share.
             var next = await Task.Run(() =>
             {
+                TouchingLibraryFolder?.Invoke();
                 if (!File.Exists(Path.Combine(full, ApertureDatabase.MetadataFileName)))
                     throw new CatalogException($"{full} doesn't contain an Aperture library. To start a new one, use New library….");
                 return new LibraryService(full, mustExist: true);
@@ -362,8 +367,11 @@ public sealed class CatalogService : IAsyncDisposable
         ActiveLibraryChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private LibraryService OpenLibrary(string dir) =>
-        OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir));
+    private LibraryService OpenLibrary(string dir)
+    {
+        TouchingLibraryFolder?.Invoke();
+        return OpenLibrary(dir, allowCreate: CatalogRegistry.SameDir(dir, _defaultDir));
+    }
 
     // Only the local Default may be created on the spot (a fresh install, or its folder was deleted). Any
     // other library must still be there: a missing one is reported, not silently recreated empty — that's

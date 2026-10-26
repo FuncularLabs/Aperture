@@ -1050,6 +1050,28 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task SwitchNewAndOpen_TouchTheLibraryFolderOffTheCallersThread()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var one = AddLibrary(service, "One", outer.Combine("one"));
+        var unlisted = outer.Combine("unlisted");
+        using (new LibraryService(unlisted)) { }
+        var threads = new List<int>();
+        service.TouchingLibraryFolder = () => { lock (threads) threads.Add(Environment.CurrentManagedThreadId); };
+
+        using var ui = new SingleThreadContext();
+        await ui.Run(() => service.SwitchToAsync(one.Id));                   // a listed library
+        await ui.Run(() => service.CreateLibraryAsync("Fresh", outer.Path)); // a new one
+        await ui.Run(() => service.OpenLibraryAsync(unlisted));              // a folder not listed yet
+        await ui.Run(() => service.OpenLibraryAsync(one.Dir));               // a listed one, by folder
+        service.TouchingLibraryFolder = null;
+
+        Assert.Equal(4, threads.Count);
+        Assert.DoesNotContain(ui.ThreadId, threads);
+    }
+
+    [Fact]
     public async Task DeleteFilesAsync_OfALibraryWhoseFolderCantBeReached_SaysNothingWasDeleted()
     {
         using var outer = new TempDir();

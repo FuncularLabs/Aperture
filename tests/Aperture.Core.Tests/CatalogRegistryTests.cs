@@ -840,8 +840,11 @@ public class CatalogRegistryTests
         var reg = new CatalogRegistry(RegistryPath(dir)) { LockTimeout = TimeSpan.FromMilliseconds(150) };
         using var neverEnds = ARegistryLockOnlyAdminsMayOpen(reg);
 
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         reg.Add("One", dir.Combine("one")); // goes ahead without the lock rather than hang or fail
+        clock.Stop();
 
+        Assert.True(clock.ElapsedMilliseconds < 3000, $"waited {clock.ElapsedMilliseconds} ms for a 150 ms timeout");
         Assert.Single(new CatalogRegistry(RegistryPath(dir)).List());
     }
 
@@ -888,6 +891,27 @@ public class CatalogRegistryTests
         Assert.Equal(CatalogDeletionOutcome.PartiallyDeleted, result.Outcome);
         Assert.Contains(Path.Combine(catDir, ApertureDatabase.MetadataFileName), result.FilesLeft);
         Assert.DoesNotContain(Path.Combine(catDir, ApertureDatabase.LockFileName), result.FilesLeft);
+    }
+
+    [Fact]
+    public void DeleteCatalogFiles_ThatCantTakeTheLock_WithNoFilesToName_NamesTheFolder()
+    {
+        using var dir = new TempDir();
+        var catDir = dir.Combine("bare");
+        Directory.CreateDirectory(catDir);
+        Acl.DenyCreateFiles(catDir); // the lock can't be taken, and there's no Aperture file to name instead
+        IReadOnlyList<string> left;
+        try
+        {
+            left = CatalogRegistry.DeleteCatalogFiles(catDir);
+        }
+        finally
+        {
+            Acl.RestoreCreateFiles(catDir);
+        }
+
+        Assert.Equal([catDir], left); // never empty: the caller would report an empty list as a clean delete
+        Assert.True(Directory.Exists(catDir));
     }
 
     [Fact]

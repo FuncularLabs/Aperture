@@ -171,9 +171,9 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 
 | # | Item | Tests (`tests/Aperture.Core.Tests`) |
 |---|---|---|
-| 1 | `CatalogRegistry` | `CatalogRegistryTests` (65) |
+| 1 | `CatalogRegistry` | `CatalogRegistryTests` (66) |
 | 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (27) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (79) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (80) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (20) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -268,7 +268,7 @@ instead of waiting for it (the lock exists only while that window is mid-change,
 update) — it's now waited for like any held lock, up to the timeout; a folder that went away *during* a delete
 was reported as a success — the user is now told nothing could be deleted; Switch to, New library and Open
 library now open the target off the UI thread too, like Remove and Delete; and several docs that overclaimed
-after the three-state open check were corrected. New tests pin Remove/Delete running off the caller's thread, the
+after the three-state open check were corrected. New tests pin Switch to, New, Open, Remove and Delete touching the library folder off the caller's thread (an internal hook records the thread), the "nothing to name: report the folder" fallback, the bounded wait for an unopenable lock, the
 stray-lock clean-up, "never creates the folder", and "lists the lock file only if there is one"; the brief-lock
 tests release from a dedicated thread so a busy thread pool can't fail them.
 
