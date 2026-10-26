@@ -191,7 +191,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        ReleaseWindow(); // first, in case the window never closed (an update's Shutdown)
+        ReleaseWindow(); // a backstop: closing the window (Shutdown closes it too) has already given it up
         _viewModel?.PrepareForClose();
 
         // Release the live library's DB handles. The catalog service owns it in the normal path; a pinned

@@ -8,8 +8,8 @@ namespace Aperture.Core.Startup;
 public enum SingleInstanceClaim
 {
     /// <summary>
-    /// No Aperture is running here: this launch is the one. Normally it gets an instance to keep for as long as it
-    /// runs; if the name is taken by something that isn't an event at all, it gets none and runs without the guard.
+    /// No Aperture is running here: this launch is the one. Normally it gets an instance to keep until it gives the
+    /// window up; if the name is taken by something that isn't an event at all, it gets none and runs without the guard.
     /// </summary>
     Claimed,
 
@@ -24,9 +24,10 @@ public enum SingleInstanceClaim
 }
 
 /// <summary>
-/// One Aperture window per library list (or per pinned data folder). The first launch claims a named event for as
-/// long as it runs; a later launch finds it, asks the running one to come to the front, and exits. Windows removes
-/// the event when the process that made it exits or crashes, so nothing stale can block a launch.
+/// One Aperture window per library list (or per pinned data folder). The first launch claims a named event and keeps
+/// it until it gives the window up (Aperture does as its window starts closing); a later launch finds it, asks the
+/// running one to come to the front, and exits. Windows removes the event when the process that made it exits or
+/// crashes, so nothing stale can block a launch.
 /// </summary>
 public sealed class SingleInstance : IDisposable
 {
@@ -71,7 +72,7 @@ public sealed class SingleInstance : IDisposable
     /// <summary>
     /// Claims <paramref name="name"/>, or — if a running Aperture holds it — asks that one to come to the front.
     /// <paramref name="activate"/> runs on a background thread each time a later launch asks, so it must get onto the
-    /// UI thread itself. Dispose the instance when this Aperture exits.
+    /// UI thread itself. Dispose the instance to give the window up.
     /// </summary>
     public static SingleInstanceClaim TryClaim(string name, Action activate, out SingleInstance? instance)
     {

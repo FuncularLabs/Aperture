@@ -185,14 +185,16 @@ public class SingleInstanceTests
     public void ALaunchStartedToReplaceAnother_ClaimsOnlyOnceThatOneHasExited()
     {
         var name = AName();
-        using var previous = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 2 127.0.0.1 > nul")
-            { CreateNoWindow = true, UseShellExecute = false })!; // the copy that's closing: about a second
+        using var previous = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 3 127.0.0.1 > nul")
+            { CreateNoWindow = true, UseShellExecute = false })!; // the copy that's closing: about two seconds
+        SingleInstance.TryClaim(name, () => { }, out var held); // it has the window …
+        using var startsClosing = new Timer(_ => held!.Dispose(), null, 500, Timeout.Infinite); // … and gives it up as it starts closing
 
         var claim = SingleInstance.ClaimAtLaunch(Relaunch.ArgsAfter(previous.Id), name, () => { }, out var instance);
         var exitedFirst = previous.HasExited;
         using (instance)
         {
-            Assert.Equal(SingleInstanceClaim.Claimed, claim);
+            Assert.Equal(SingleInstanceClaim.Claimed, claim); // claiming first would have met the closing copy's window
             Assert.True(exitedFirst, "claimed while the copy it replaces was still running");
         }
     }

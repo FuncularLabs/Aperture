@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 12, after review round 12 of the single window) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 13, after review round 13 of the single window) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -428,7 +428,8 @@ Design of the single window:
 - At launch, before anything else, Aperture claims a named event, `Local\Aperture.Window.<hash>`, per Windows
   session. The hash is of the library list's path — or, with `APERTURE_DATA_DIR`, of the pinned folder, so a
   pinned (test) copy runs beside the user's own Aperture, one window per pinned folder.
-- The first launch owns the event for its lifetime. Windows removes it when that process exits or crashes, so
+- The first launch owns the event until its window starts closing (revision 12). Windows removes it when that
+  process exits or crashes, so
   nothing stale is ever left to block a launch.
 - A later launch finds the event, signals it, and exits without opening a window; the running one brings its
   window to the front (restored if minimized). The later launch first lets the running one take the
@@ -455,13 +456,15 @@ this one have neither the lock file nor the library list, so they can't see each
 | SW7 | A relaunch waits for the copy it replaces | `ALaunchStartedToReplaceAnother_ClaimsOnlyOnceThatOneHasExited`, `AnOrdinaryLaunch_ClaimsWithoutWaiting`, `ArgsAfter_…`, `PreviousProcessId_…`, `WaitForExit_…`, `RestartStartInfo_StartsTheNewCopyAfterThisOne` |
 | SW8 | An activation handler that throws doesn't stop the next activation | `AnActivationThatThrows_DoesntStopTheNext` |
 | SW9 | Closing the instance stops it listening; closing twice is harmless | `Dispose_StopsListening_AndCanBeRepeated`, `Dispose_FromInsideTheActivation_DoesntHang` |
-| SW10 | A launch while Aperture is closing (or failing to start) opens a window, never nothing | App wiring — live check |
+| SW10 | A launch while Aperture is closing (or failing to start) opens a window, never nothing | App wiring: verified by reading and by round 13's WPF probe (the real Core classes wired as the App wires them); live check below |
 
 The wiring (`App.xaml.cs`, `MainWindow.xaml.cs`, and the install-move in `MainViewModel.cs`) is in the exempt
 shells. The two update relaunches in `UpdateService` start the new copy with `RestartStartInfo`, which is tested;
-that they call it is checked by reading — those methods replace and start the running exe, which a test can't
-let them do. Live check (Paul): launch twice — one window; minimize it and launch again — it comes back; close it
-and launch again at once — it opens.
+that they call it is checked by reading — those methods replace the running exe, or put a new one beside it, and
+start it, which a test can't let them do. Live check (Paul): launch twice — one window; minimize it and launch
+again — it comes back; and, to catch a launch during a *slow* close (a quick close is over before a person can
+relaunch), start indexing a large folder, then in PowerShell run
+`$p = Get-Process Aperture; $p.CloseMainWindow(); Start-Process $p.Path` — a new window opens.
 
 ### Revision 12 — what changed after review round 12
 
@@ -472,8 +475,8 @@ now given up as soon as it starts closing (before anything is saved), again firs
 startup-error box; a launch in the meantime opens normally while the old copy finishes closing, as before this
 feature. Also fixed: a test that relied on the System process being unwatchable (an elevated CI runner can watch
 it) now raises the real access-denied error through a seam; "wait for `--after`, then claim" is one Core method
-tested with a live child process; the activation tests count activations exactly (a reset-mode or wake-on-close
-bug would bring the window forward over and over); messages no longer speak of "another Aperture window"; the
+tested with a live child process; the activation tests count activations exactly (a reset-mode bug would bring
+the window forward over and over, a wake-on-close bug once more as it closes); messages no longer speak of "another Aperture window"; the
 "already running" message no longer assumes the other copy is elevated.
 
 Accepted (one window, as ruled):
@@ -481,10 +484,25 @@ Accepted (one window, as ruled):
 - A launch while Aperture is running but hung brings nothing forward until that copy is closed.
 - "Run as administrator" while Aperture runs normally brings the normal window forward instead of starting an
   elevated one; a newer exe started by hand while this one runs brings the running window forward.
-- A launch that lands in the instant between an update's old copy exiting and its new copy claiming becomes the
-  window instead (the new copy then exits): the update has still been applied on disk.
+- **From when an update's old copy starts closing until its new copy claims** — the old copy's close, a few
+  seconds — a launch by hand becomes the window, and the new copy exits. The update is on disk either way. After
+  an in-place update the hand launch runs the new version (harmless). After the installer's move the downloaded
+  exe isn't deleted (delete it by hand). After a portable update a shortcut to the old exe runs the old version
+  until the new exe is started. *(Revision 13: wider than "an instant" since the window is given up at close;
+  pending Paul's re-acceptance.)*
+- Pre-existing, from the two-window days: `settings.json` is written in place, and a read that fails counts as no
+  settings. A launch whose settings load overlapped the closing copy's save (only on a slow library drive) would
+  start with default settings.
 - `UpdateService`'s update-collision messages still mention other windows: still possible with a pinned copy or
   another session, so left as they are.
+
+### Revision 13 — what changed after review round 13
+
+Round 13 verified the round-12 Medium fixed (a WPF probe drove the real Core classes as the App wires them: the
+window is given up before its own Closing handler saves, on `Shutdown()` too, and before the startup-error box;
+launches during each close opened). Fixed: the relaunch test now has the closing copy hold the window, so
+"claim first, then wait" fails it; the live check catches a slow close; comments and this plan no longer say the
+claim lasts the whole run; the update-gap residual above states its real extent.
 
 ## Out of scope (future)
 
