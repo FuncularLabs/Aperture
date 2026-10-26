@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 9, after review round 8) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 10, after review round 9) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -92,7 +92,7 @@ catalog's files and the list of every catalog never share a folder.
   `aperture.db` and reports it gone instead of recreating it empty. A delete whose folder can't be reached deletes and forgets nothing, and says so; if the folder goes away
   mid-delete, the library has already been forgotten but not all of its files were deleted, and the user is told
   exactly that — and how to finish once the drive is back (add it again with Open library…, switch to another
-  library, then delete it). "Can be reached" means Aperture could list the folder or open a file in it, never
+  library, then delete it). "Can be reached" means Aperture could list the folder, never
   just that the path exists: a junction to a drive that's gone still "exists".
 
 ### 2. Runtime switch — `Aperture.Core.Library.CatalogService`
@@ -163,7 +163,7 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 | Corrupt / foreign / hand-edited `catalogs.json` | Kept as `.bad-*` and reported at launch; sanitized on load; Aperture starts. |
 | List file can't be saved (read-only, locked) | New/Open/Rename/Remove/Delete are refused with a message and change nothing; a switch still switches this window. |
 | Two Aperture windows | Changes merge; neither drops the other's libraries; a library open in one can't be deleted from the other, nor removed while it's known to be open; a stale menu is told the library's already gone. Two windows writing the *same* library's database is still possible and out of scope. |
-| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. If the folder goes out of reach mid-delete, the library is forgotten and the user is told not all of its files were deleted, and how to finish (the database is deleted last, so the folder can always be added back). A folder this user may not list counts as out of reach. |
+| Deleting a library's files | Only Aperture's files; reported if some are in use; never if the forget couldn't be saved; never while any window has it open, by any path. If the folder goes out of reach mid-delete, the library is forgotten and the user is told not all of its files were deleted, and how to finish (the database is deleted last, so the folder still has it and can be added back). A folder this user may not list is refused with its own message (nothing deleted, nothing forgotten; Remove from list still works). |
 | Aperture closed while New library is creating | The folder left behind holds only Aperture's lock (or a new, empty database). New library with the same name uses a lock-only folder again (a lock another window holds still counts as taken); one with a database can be added with Open library…. |
 | The same folder registered twice through different paths (junction, mapped drive; an 8.3 short name is de-duplicated) | Two list entries for one folder. Safe while open: the lock file is shared, so neither entry can be removed or deleted while the folder is open through the other. Once neither is open, "Delete library files" on one leaves the other listed but pointing at a deleted library — switching to it then says so. |
 | The list file can't be read at launch (locked by another program, or not accessible) | Opens Default for now, says so, and changes nothing on disk until the list can be read. If the first read fails but a second one succeeds, the user's own choice opens, not Default. A Default the user had removed can come back into the list if they keep working in it during such a launch (it's the library that window has open, and an open library is always listed). |
@@ -178,7 +178,7 @@ At the top of the folder pane: the open library's name with a menu (`CatalogBarV
 |---|---|---|
 | 1 | `CatalogRegistry` | `CatalogRegistryTests` (82) |
 | 2 | `LibraryService.ShutdownAsync`, disposable `ApertureDatabase`, `IsOpen` / lock file | `LibraryServiceShutdownTests` (28) — the cancel/await tests hold an index mid-run with `BlockingProgress`; the lock tests reach a folder through a real junction |
-| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (90) — includes events on a `SingleThreadContext` stand-in for the UI thread |
+| 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
@@ -387,6 +387,31 @@ Recorded, not changed:
 - The "lock violation" half of the in-use check can't occur for these calls; it mirrors LibraryService's.
 - Unverified: if a removed volume answered with "file not found" rather than "path not found", each delete
   would succeed silently and the result would read as a clean delete.
+
+## Revision 10 — what changed after review round 9 (2026-10-25)
+
+Round 9 found no High or Medium defects; the disposition review found nothing above Nit and followed the "how
+to finish" advice end to end. Fixed:
+
+- **A library whose folder this user may not list** still opens and works, but Delete said "can't reach… if
+  it's gone for good, use Remove from list". It now says Aperture isn't allowed to see what's in the folder,
+  nothing was deleted, and Remove from list still works.
+- **Tests:** the drive-lost-partway test now loses the drive just before the database, after the other files are
+  really gone, and a service-level test follows the message's advice to the end (reconnect, Open library…,
+  switch away, Delete); the realistic unplug — a junction left pointing at nothing — is pinned mid-delete; the
+  left-over message's wording is pinned.
+- **Wording:** "can be reached" means listed (not "or a file opened"); "can always be added back" becomes "still
+  has its database" (an earlier crash's journal deleted before the database could, in principle, leave one that
+  won't open); the left-over message says "the files below" rather than "some of its files"; the delete's doc
+  comment names every case.
+
+Accepted residuals:
+
+- **Two windows naming two libraries the same at the same moment.** Revision 9's re-read narrowed this race; it
+  isn't closed, because the name is checked before the new library is built, not inside the list's locked change.
+  The worst case is two libraries with one name, in different folders — rename either. Rename has the same shape.
+- On a share that drops mid-delete, a failing file can now cost a few network timeouts (the folder is listed to
+  classify the error); it runs off the UI thread, with the switcher's commands disabled meanwhile.
 
 ## Out of scope (future)
 

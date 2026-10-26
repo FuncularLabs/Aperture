@@ -1277,6 +1277,63 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task DeleteFilesAsync_OfALibraryWhoseFolderThisUserMayNotList_SaysSo_AndChangesNothing()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var locked = AddLibrary(service, "Locked", outer.Combine("locked"));
+        Acl.DenyListing(locked.Dir); // the library still opens and works; only what's in its folder can't be seen
+        CatalogException ex;
+        try
+        {
+            ex = await Assert.ThrowsAsync<CatalogException>(() => service.DeleteFilesAsync(locked.Id));
+        }
+        finally
+        {
+            Acl.RestoreListing(locked.Dir);
+        }
+
+        Assert.Contains("isn't allowed to see", ex.Message);
+        Assert.DoesNotContain("can't reach", ex.Message);
+        Assert.Contains(service.Registry.List(), c => c.Id == locked.Id);
+        Assert.True(File.Exists(Path.Combine(locked.Dir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task DeleteFilesAsync_WhenTheDriveGoesPartway_TheAdviceGivenWorks()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var drive = outer.Combine("drive");
+        using (new LibraryService(drive)) { }
+        var link = outer.Combine("usb");
+        Junction.Create(link, drive);
+        var usb = service.Registry.Add("USB", link);
+        service.Registry.DeletingFile = name =>
+        {
+            if (name != ApertureDatabase.MetadataFileName)
+                return;
+            Directory.Delete(link); // unplugged just before the database: the junction stays, pointing at nothing
+            Junction.Create(link, outer.Combine("nowhere"));
+        };
+
+        var lost = await service.DeleteFilesAsync(usb.Id);
+        service.Registry.DeletingFile = null;
+        Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, lost.Outcome);
+
+        Directory.Delete(link);
+        Junction.Create(link, drive);                                  // "reconnect the drive,
+        var back = await service.OpenLibraryAsync(link);               //  add the library again with Open library…,
+        var defaultId = service.Registry.List().Single(c => c.Name == "Default").Id;
+        await service.SwitchToAsync(defaultId);                        //  then switch to another library
+        var deleted = await service.DeleteFilesAsync(back.Id);         //  and delete it."
+
+        Assert.Equal(CatalogDeletionOutcome.Deleted, deleted.Outcome);
+        Assert.DoesNotContain(service.Registry.List(), c => c.Id == back.Id);
+        Assert.False(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
     public async Task DeleteFilesAsync_OfALibraryAnotherWindowAlreadyDeleted_SaysItWasAlreadyRemoved()
     {
         using var outer = new TempDir();

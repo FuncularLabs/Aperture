@@ -41,6 +41,12 @@ public enum CatalogDeletionOutcome
     FolderNotFound,
 
     /// <summary>
+    /// This user isn't allowed to see what's in the catalog's folder (its permissions deny listing it), so nothing was
+    /// deleted and it is still listed. The library itself may well open and work.
+    /// </summary>
+    FolderNotListable,
+
+    /// <summary>
     /// The catalog was removed from the list, but its folder went out of reach during the delete (a drive unplugged,
     /// a share dropped), so not all of its files were deleted. FilesLeft is empty: the folder couldn't be read.
     /// </summary>
@@ -306,8 +312,13 @@ public sealed class CatalogRegistry
         var known = Mutate(() => _catalogs.FirstOrDefault(c => c.Id == id) is { } listed ? Clone(listed) : null, seam: false);
         if (known is null)
             return new CatalogDeletion(CatalogDeletionOutcome.NotFound, []);
-        if (!FolderIsReachable(known.Dir))
-            return new CatalogDeletion(CatalogDeletionOutcome.FolderNotFound, []);
+        switch (Probe(known.Dir))
+        {
+            case FolderAccess.NotFound:
+                return new CatalogDeletion(CatalogDeletionOutcome.FolderNotFound, []);
+            case FolderAccess.NotAllowed:
+                return new CatalogDeletion(CatalogDeletionOutcome.FolderNotListable, []);
+        }
 
         var outcome = Mutate(() =>
         {
@@ -359,30 +370,41 @@ public sealed class CatalogRegistry
     // A sharing or lock violation: another handle has the file (another Aperture window, or another program).
     private static bool InUse(IOException ex) => (ex.HResult & 0xFFFF) is 32 or 33;
 
-    /// <summary>
-    /// Whether <paramref name="dir"/> can actually be reached. <see cref="Directory.Exists(string)"/> isn't enough:
-    /// it says yes for a junction (or link) to a drive that's gone, whose contents can't be opened. So this lists the
-    /// folder. A folder this user may not list doesn't count either: Aperture can't tell what's in it.
-    /// </summary>
-    internal static bool FolderIsReachable(string dir)
+    private enum FolderAccess { Reachable, NotFound, NotAllowed }
+
+    // Lists the folder. Directory.Exists isn't enough: it says yes for a junction (or link) to a drive that's gone,
+    // whose contents can't be opened.
+    private static FolderAccess Probe(string dir)
     {
         try
         {
             using var entries = Directory.EnumerateFileSystemEntries(dir).GetEnumerator();
             entries.MoveNext();
-            return true;
+            return FolderAccess.Reachable;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (UnauthorizedAccessException)
         {
-            return false; // not found, a path or network error, or not allowed to look
+            return FolderAccess.NotAllowed;
+        }
+        catch (IOException)
+        {
+            return FolderAccess.NotFound; // not found, or a path or network error
         }
     }
 
     /// <summary>
-    /// Deletes Aperture's files in <paramref name="dir"/>, then (if <paramref name="removeEmptyFolder"/>) the
-    /// folder if nothing else is in it. Returns the files that couldn't be deleted (in use, no permission) — all
-    /// of them, untouched, if the library is open in any Aperture window — or <c>null</c> if the folder can't be
-    /// reached, before the delete or during it (then not all of its files were deleted). Never deletes anything else.
+    /// Whether <paramref name="dir"/> can actually be reached: listed, not just found. A folder this user may not list
+    /// doesn't count — Aperture can't tell what's in it.
+    /// </summary>
+    internal static bool FolderIsReachable(string dir) => Probe(dir) == FolderAccess.Reachable;
+
+    /// <summary>
+    /// Deletes Aperture's files in <paramref name="dir"/> (the database last), then (if
+    /// <paramref name="removeEmptyFolder"/>) the folder if nothing else is in it. Returns the files that couldn't be
+    /// deleted — in use, no permission, or another error in a folder that's still there; all of them, untouched, if
+    /// the lock couldn't be taken (the library is open in some Aperture window, or the lock file can't be created) —
+    /// or <c>null</c> if the folder can't be reached, before the delete or during it (then not all of its files were
+    /// deleted). Never deletes anything else.
     /// <paramref name="beforeLock"/> and <paramref name="deletingFile"/> are test seams.
     /// </summary>
     internal static IReadOnlyList<string>? DeleteCatalogFiles(string dir, bool removeEmptyFolder = true,

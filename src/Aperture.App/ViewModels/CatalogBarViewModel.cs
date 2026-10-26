@@ -156,7 +156,7 @@ public sealed class CatalogBarViewModel : ObservableObject
         var result = await _catalog.DeleteFilesAsync(id);
         if (result.Outcome == CatalogDeletionOutcome.PartiallyDeleted)
             _dialogs.ShowMessage("Aperture",
-                $"\"{entry.Name}\" was removed from the list, but some of its files couldn't be deleted " +
+                $"\"{entry.Name}\" was removed from the list, but the files below couldn't be deleted " +
                 $"(another program may be using them, or Windows didn't allow it):\n\n{string.Join("\n", result.FilesLeft)}",
                 isError: true);
         else if (result.Outcome == CatalogDeletionOutcome.FolderLostDuringDelete)

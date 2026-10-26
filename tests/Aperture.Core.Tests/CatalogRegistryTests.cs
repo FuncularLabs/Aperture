@@ -1068,10 +1068,12 @@ public class CatalogRegistryTests
         reg.Add("Stay", dir.Combine("stay"));
         var (link, drive) = ALibraryBehindAJunction(dir);
         var entry = reg.Add("USB", link);
+        var unplugged = false;
         reg.DeletingFile = _ =>
         {
-            if (Directory.Exists(link))
-                Directory.Delete(link); // before the first file: the way to the drive goes; the drive's files stay
+            if (!unplugged)
+                Unplug(link, dir); // before the first file
+            unplugged = true;
         };
 
         var result = reg.RemoveAndDeleteFiles(entry.Id);
@@ -1101,26 +1103,34 @@ public class CatalogRegistryTests
         Assert.Equal(CatalogRegistry.CatalogFileNames.Order(), order.Order());
     }
 
+    // What a drive unplugged mid-delete leaves: the junction to it stays, pointing at nothing (Directory.Exists still
+    // says yes). The delete holds the drive's lock file open, so the drive can't simply be moved away here.
+    private static void Unplug(string link, TempDir dir)
+    {
+        Directory.Delete(link);
+        Junction.Create(link, dir.Combine("nowhere"));
+    }
+
     [Fact]
-    public void RemoveAndDeleteFiles_WhenTheDriveGoesPartway_LeavesALibraryOpenLibraryCanAddBack()
+    public void RemoveAndDeleteFiles_WhenTheDriveGoesJustBeforeTheDatabase_LeavesALibraryOpenLibraryCanAddBack()
     {
         using var dir = new TempDir();
         var reg = new CatalogRegistry(RegistryPath(dir));
         reg.Add("Stay", dir.Combine("stay"));
         var (link, drive) = ALibraryBehindAJunction(dir);
         var entry = reg.Add("USB", link);
-        var files = 0;
-        reg.DeletingFile = _ =>
+        reg.DeletingFile = name =>
         {
-            if (++files == 2)
-                Directory.Delete(link); // after the first file
+            if (name == ApertureDatabase.MetadataFileName)
+                Unplug(link, dir); // everything else is gone by now
         };
 
         var result = reg.RemoveAndDeleteFiles(entry.Id);
         reg.DeletingFile = null;
 
         Assert.Equal(CatalogDeletionOutcome.FolderLostDuringDelete, result.Outcome);
-        Assert.True(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName))); // what the message's "how to finish" needs
+        Assert.False(File.Exists(Path.Combine(drive, ApertureDatabase.ThumbnailFileName))); // the delete did get going
+        Assert.True(File.Exists(Path.Combine(drive, ApertureDatabase.MetadataFileName))); // what "how to finish" needs
     }
 
     [Fact]
@@ -1144,7 +1154,7 @@ public class CatalogRegistryTests
             Acl.RestoreListing(catDir);
         }
 
-        Assert.Equal(CatalogDeletionOutcome.FolderNotFound, result.Outcome);
+        Assert.Equal(CatalogDeletionOutcome.FolderNotListable, result.Outcome); // not "can't reach": it's there, and it works
         Assert.Contains(reg.List(), c => c.Id == entry.Id);
         Assert.True(File.Exists(Path.Combine(catDir, ApertureDatabase.MetadataFileName)));
     }

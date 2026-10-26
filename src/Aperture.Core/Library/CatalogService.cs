@@ -195,7 +195,7 @@ public sealed class CatalogService : IAsyncDisposable
                 catch
                 {
                     // Undo only what this attempt made: Aperture's files, and the folder if this attempt created it.
-                    CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed, beforeLock: TouchingLibraryFolder);
+                    CatalogRegistry.DeleteCatalogFiles(dir, removeEmptyFolder: !existed);
                     throw;
                 }
             });
@@ -320,9 +320,10 @@ public sealed class CatalogService : IAsyncDisposable
     /// Forgets a library that isn't open — in this window or any other — and deletes Aperture's own files for
     /// it (index, thumbnail cache, settings), never anything else in its folder. Throws
     /// <see cref="CatalogException"/>, deleting nothing, if it's open, if Aperture can't tell whether it's open
-    /// (its lock file can't be read), if its folder can't be reached, if it was already removed, or if the list
-    /// couldn't be saved. The result lists any files that couldn't be deleted, or says the folder went out of reach
-    /// mid-delete (<see cref="CatalogDeletionOutcome.FolderLostDuringDelete"/>: forgotten, but not all of its files deleted).
+    /// (its lock file can't be read), if its folder can't be reached or this user may not see what's in it, if it was
+    /// already removed, or if the list couldn't be saved. The result lists any files that couldn't be deleted, or says
+    /// the folder went out of reach mid-delete (<see cref="CatalogDeletionOutcome.FolderLostDuringDelete"/>: forgotten,
+    /// but not all of its files deleted).
     /// </summary>
     public async Task<CatalogDeletion> DeleteFilesAsync(string catalogId)
     {
@@ -344,6 +345,9 @@ public sealed class CatalogService : IAsyncDisposable
                 CatalogDeletionOutcome.FolderNotFound => throw new CatalogException(
                     $"Aperture can't reach {entry.Dir}, so nothing was deleted. If the library is gone for good, use " +
                     "Remove from list instead."),
+                CatalogDeletionOutcome.FolderNotListable => throw new CatalogException(
+                    $"Aperture isn't allowed to see what's in {entry.Dir}, so nothing was deleted. Its files are still " +
+                    "there; to stop listing the library, use Remove from list."),
                 _ => result,
             };
         }
