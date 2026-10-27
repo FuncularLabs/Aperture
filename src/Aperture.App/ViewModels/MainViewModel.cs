@@ -1909,8 +1909,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // LocationKey, which keys scroll memory by place alone. Internal for tests.
     internal string ViewKey => $"{LocationKey}|{_searchText.Trim()}|{_showImages}|{_showVideos}|{_shownChanges}";
 
-    // The user changed which folders or files the library shows: a folder added, removed, ticked or unticked, its
-    // subfolders taken in or left out, a subfolder shown or hidden, videos indexed or not.
+    // The user changed which folders or files the library shows: a folder removed, ticked or unticked, its subfolders
+    // taken in or left out, a subfolder shown or hidden, videos indexed or not. (Adding a folder goes to it: another
+    // place.)
     private int _shownChanges;
 
     /// <summary>
@@ -2020,7 +2021,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_closing || additions.Count == 0)
             return;
-        _shownChanges++;
         foreach (var folder in additions)
             AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
         // Folders are in: stop offering Pictures etc. Only now, so an add that fails leaves the offer for next time.

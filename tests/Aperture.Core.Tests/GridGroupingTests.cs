@@ -589,9 +589,10 @@ public class GridGroupingTests
                 IsAnotherView("hiding a subfolder", () => trip.IsShown = false);
                 IsAnotherView("leaving subfolders out", () => root.IsRecursive = false);
                 IsAnotherView("not indexing videos", () => vm.IncludeVideos = false);
-                IsAnotherView("adding a folder", () => vm.AddFolder(more.Path, includeSubfolders: true));
+                IsAnotherView("adding a folder (which goes to it)", () => vm.AddFolder(more.Path, includeSubfolders: true));
+                vm.NavigateHomeCommand.Execute(null); // Everything: the place stays as folders are unticked or removed
                 IsAnotherView("unticking a folder", () => root.IsIncluded = false);
-                IsAnotherView("removing a folder", () => vm.RemoveRootCommand.Execute(vm.Roots.Single(r => r.Path == more.Path)));
+                IsAnotherView("removing a folder that isn't the one shown", () => vm.RemoveRootCommand.Execute(vm.Roots.Single(r => r.Path == more.Path)));
             }
             finally
             {
