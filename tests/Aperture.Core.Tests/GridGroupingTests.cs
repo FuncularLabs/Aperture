@@ -73,10 +73,12 @@ public class GridGroupingTests
         {
             Assert.Equal(1, vm.TilesPerRow); // no width reported yet
             Assert.Equal(12, Sections(vm).Count);
+            var requested = vm.BuildGeneration;
 
             vm.SetGridWidth(Across(vm, 12));
 
             Assert.Equal(12, vm.TilesPerRow);
+            Assert.Equal(requested + 1, vm.BuildGeneration); // counted as it's asked for (what the "no rebuild" tests rely on)
             Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020"]), Wait), string.Join(", ", Sections(vm)));
 
             vm.SetGridWidth(Across(vm, 2) + 1);
@@ -305,5 +307,133 @@ public class GridGroupingTests
                 library.ShutdownAsync().GetAwaiter().GetResult();
             }
         });
+    }
+
+    // --- Lens B's probes (round 24): only the user's toggles go from one place to another ---
+
+    private static readonly DateTime In2020 = new(2020, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime In2019 = new(2019, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+
+    // 70 photos in 2020 and 5 in 2019 (collapsed by default: past the newest ~2 screens); 3 in 2019 (open: its newest).
+    private static readonly DateTime[] OlderYearBelow = [.. Enumerable.Repeat(In2020, 70).Concat(Enumerable.Repeat(In2019, 5))];
+    private static readonly DateTime[] OnlyThatYear = [.. Enumerable.Repeat(In2019, 3)];
+
+    private static void Photos(string folder, IEnumerable<DateTime> dates, int start = 0)
+    {
+        var i = start;
+        foreach (var date in dates)
+        {
+            var path = Path.Combine(folder, $"p{i:000}.jpg");
+            TestImages.Write(path, 32, 24);
+            File.SetLastWriteTimeUtc(path, date.AddMinutes(i++));
+        }
+    }
+
+    // A library of these folders (by name), indexed, and a view model over it; the body can go to a folder and add photos.
+    private static void WithFolders((string Name, DateTime[] Dates)[] folders, Action<MainViewModel, Action<string>, Func<string, string>> body)
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            var dirs = folders.ToDictionary(f => f.Name, _ => new TempDir());
+            try
+            {
+                var library = new LibraryService(data.Path);
+                foreach (var (name, dates) in folders)
+                {
+                    Photos(dirs[name].Path, dates);
+                    library.IndexRoot(library.AddRoot(dirs[name].Path, name));
+                }
+                var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.Zero };
+                try
+                {
+                    Assert.True(Sta.PumpUntil(() => vm.FolderTree.Count == folders.Length && Sections(vm).Count > 0 && !vm.IsLoadingView, Wait));
+                    // Goes to the folder and waits for its view: two folders can show the same sections.
+                    void GoTo(string name)
+                    {
+                        var applied = 0;
+                        void Count() => applied++;
+                        vm.ViewApplied += Count;
+                        vm.NavigateToNode(vm.FolderTree.Single(n => n.Name == name));
+                        Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView, Wait), $"{name}'s view never came");
+                        vm.ViewApplied -= Count;
+                    }
+                    body(vm, GoTo, name => dirs[name].Path);
+                }
+                finally
+                {
+                    vm.PrepareForClose();
+                    library.ShutdownAsync().GetAwaiter().GetResult();
+                }
+            }
+            finally
+            {
+                foreach (var dir in dirs.Values)
+                    dir.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void ASectionCollapsedOnlyByDefault_IsntCarriedStraightToAnotherFolder()
+    {
+        WithFolders([("A", OlderYearBelow), ("C", OnlyThatYear)], (vm, goTo, _) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+            Assert.False(Section(vm, "2019").Toggled);
+
+            goTo("C");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "A's default-collapsed 2019 was carried to C");
+        });
+    }
+
+    [Fact]
+    public void AStateCarriedToAnotherFolder_DoesntBecomeAToggle()
+    {
+        // A → C (by year) → B (by month) → D (only 2019): D's 2019, its newest, opens.
+        WithFolders([("A", OlderYearBelow), ("C", OnlyThatYear), ("B", MonthlyIn2020), ("D", OnlyThatYear)], (vm, goTo, _) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            goTo("C");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            goTo("B");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+            goTo("D");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "D's 2019 (its newest) collapsed by a state the user never set");
+        });
+    }
+
+    [Fact]
+    public void ASectionKeptOpenByARebuild_IsntRememberedAsAToggle()
+    {
+        // X: 2019 open by default; 20 photos arrive in 2020 and the rebuild keeps it open (not the user). Then B (by month),
+        // then D (by year, 2019 past the newest ~2 screens): D's 2019 is collapsed, as its default.
+        WithFolders([("X", [.. Enumerable.Repeat(In2020, 50).Concat(Enumerable.Repeat(In2019, 5))]), ("B", MonthlyIn2020), ("D", OlderYearBelow)],
+            (vm, goTo, dir) =>
+            {
+                goTo("X");
+                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+                Assert.True(Section(vm, "2019").IsExpanded);
+                Photos(dir("X"), Enumerable.Repeat(In2020, 20), start: 100);
+                vm.StartBackgroundRefresh();
+                Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 70 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
+                Assert.True(Section(vm, "2019").IsExpanded); // kept open…
+                Assert.False(Section(vm, "2019").Toggled);   // …but not by the user
+
+                goTo("B");
+                Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+                goTo("D");
+                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+
+                Assert.False(Section(vm, "2019").IsExpanded, "D's 2019 opened by a state no user set");
+            });
     }
 }

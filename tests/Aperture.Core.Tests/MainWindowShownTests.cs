@@ -83,13 +83,17 @@ public class MainWindowShownTests
                     .Select(t => $"{((LibraryListItem)t.DataContext).Name} {t.Text.Trim()}")
                     .Order()];
 
+                var everything = (TextBlock)window.FindName("EverythingCount");
+
                 window.Show(); // a binding the window can't make with this view model throws here, or as it's laid out
                 Assert.Equal(["Work (42)"], Counts()); // the open library's items aren't read yet (that waits for this thread): no "(0)"
+                Assert.Equal("", everything.Text);     // nor beside Everything
 
                 Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == 3 && !vm.IsLoadingView, TimeSpan.FromSeconds(10)));
                 Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300)); // layout and bindings settle
 
                 Assert.Equal(["Default (3)", "Work (42)"], Counts());
+                Assert.Equal("(3)", everything.Text.Trim());
 
                 var spinner = Assert.Single(Descendants((DependencyObject)window.FindName("IndexingCard")).OfType<ShapePath>());
                 Assert.Same(window.FindResource("IndexingSpinner"), spinner.Style);
@@ -255,6 +259,98 @@ public class MainWindowShownTests
             Assert.Equal(0, applied - before);
             Assert.Equal(4, vm.TilesPerRow);
             Assert.Equal(6, Sections(vm).Count);
+        });
+    }
+
+    [Fact]
+    public void AHeightChangeThatBringsInTheScrollbar_AsksForNoBuild()
+    {
+        // Lens B's probe (round 24): the grid's SizeChanged came before its layout, with the old viewport beside the new
+        // scrollbar — one scrollbar's width off, so a rebuild was asked for in a grouping that hadn't changed.
+        WithWindow(QuarterYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            void Settle() => Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            SizeTheViewport(window, 4 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 6, TimeSpan.FromSeconds(10)));
+            foreach (var month in Sections(vm).Skip(1))
+                month.IsExpanded = false;
+            Settle();
+            window.Height += GridScroll(window).ExtentHeight + 60 - GridScroll(window).ViewportHeight; // room to spare
+            Settle();
+            SizeTheViewport(window, 5 * slot + 5, frame); // months, four across (five less a scrollbar)
+            Settle();
+            Assert.False(ScrollbarShown(window));
+            Assert.Equal((4, 6), (vm.TilesPerRow, Sections(vm).Count));
+            var (requested, applied) = (vm.BuildGeneration, 0);
+            vm.ViewApplied += () => applied++;
+
+            window.Height -= 120; // shorter than the months: the scrollbar comes in
+            Settle();
+            Sta.PumpUntil(() => false, TimeSpan.FromSeconds(1));
+
+            Assert.True(ScrollbarShown(window));
+            Assert.Equal(4, vm.TilesPerRow);
+            Assert.True(requested == vm.BuildGeneration && applied == 0, $"builds asked for: {vm.BuildGeneration - requested}, applied: {applied}");
+        });
+    }
+
+    [Fact]
+    public void AHeightChangeThatTakesTheScrollbarAway_AsksForNoBuild()
+    {
+        // Lens B's probe (round 24), the other way: years, five across beside a scrollbar; the window grows past them.
+        WithWindow(QuarterYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            void Settle() => Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            SizeTheViewport(window, 5 * slot + 25, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 2, TimeSpan.FromSeconds(10)), $"{Sections(vm).Count} at {vm.TilesPerRow}");
+            Settle();
+            var years = GridScroll(window).ExtentHeight;
+            window.Height += years - 80 - GridScroll(window).ViewportHeight;
+            Settle();
+            Assert.True(ScrollbarShown(window));
+            Assert.Equal(5, vm.TilesPerRow);
+            var (requested, applied) = (vm.BuildGeneration, 0);
+            vm.ViewApplied += () => applied++;
+
+            window.Height += 140; // taller than the years: the scrollbar goes
+            Settle();
+            Sta.PumpUntil(() => false, TimeSpan.FromSeconds(1));
+
+            Assert.False(ScrollbarShown(window));
+            Assert.Equal(5, vm.TilesPerRow);
+            Assert.True(requested == vm.BuildGeneration && applied == 0, $"builds asked for: {vm.BuildGeneration - requested}, applied: {applied}");
+        });
+    }
+
+    [Fact]
+    public void TheKeyboardsColumns_FollowTheWindow_WithItsFirstSectionCollapsed()
+    {
+        // Lens A (round 24): keyboard navigation's column count came from the first section's wrap panel too, which keeps
+        // its width once collapsed: Down went two rows.
+        WithWindow(HalfYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            SizeTheViewport(window, 6 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 2 && !vm.IsLoadingView, TimeSpan.FromSeconds(10)));
+            Sections(vm)[0].IsExpanded = false;
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+
+            SizeTheViewport(window, 5 * slot + 20, frame); // still years
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+
+            var laidOut = Descendants((ListBox)window.FindName("ItemsList")).OfType<ListBoxItem>().Where(i => i.IsVisible)
+                .Select(i => Math.Round(i.TranslatePoint(new Point(0, 0), window).X)).Distinct().Count();
+            Assert.Equal(2, Sections(vm).Count);
+            Assert.Equal(5, laidOut);
+            Assert.Equal(laidOut, window.ColumnsPerRow());
         });
     }
 

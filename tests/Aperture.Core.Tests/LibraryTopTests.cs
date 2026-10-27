@@ -249,4 +249,43 @@ public class LibraryTopTests
             }
         });
     }
+
+    [Fact]
+    public void ALibrarysCount_IsReportedAgainAsItsItemsChange()
+    {
+        // The library list shows the open library's count as it changes: indexing new photos reports it (round 24).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            using var more = new TempDir();
+            foreach (var file in new[] { "a.jpg", "b.jpg", "c.jpg" })
+                TestImages.Write(Path.Combine(photos.Path, file), 64, 48);
+            foreach (var file in new[] { "d.jpg", "e.jpg" })
+                TestImages.Write(Path.Combine(more.Path, file), 64, 48);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromSeconds(30) };
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3, TimeSpan.FromSeconds(10)));
+                var reported = new List<int?>();
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainViewModel.LoadedItemCount))
+                        reported.Add(vm.LoadedItemCount);
+                };
+
+                vm.AddFolder(more.Path, includeSubfolders: true);
+
+                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing && reported.Contains(5), TimeSpan.FromSeconds(30)), $"reported: {string.Join(", ", reported)}");
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
 }

@@ -27,17 +27,30 @@ public sealed class SectionVm : ObservableObject
     }
 
     private bool _isExpanded = true;
+
+    /// <summary>Whether the section's tiles show. Setting it — the header's toggle, the keyboard — is the user's toggle.</summary>
     public bool IsExpanded
     {
         get => _isExpanded;
-        set => SetProperty(ref _isExpanded, value);
+        set
+        {
+            if (SetProperty(ref _isExpanded, value))
+                Toggled = true;
+        }
     }
 
     /// <summary>
-    /// How the build that made this section would have left it (the newest ~2 screens expanded): a section whose
-    /// <see cref="IsExpanded"/> differs has been toggled.
+    /// Whether the user has expanded or collapsed this section — here, or in the section it was carried on from —
+    /// rather than leaving it as a build set it. Only toggled sections are remembered for other places and groupings.
     /// </summary>
-    public bool ExpandedByDefault { get; set; }
+    public bool Toggled { get; private set; }
+
+    /// <summary>How a build leaves the section, before anything shows it: a toggle only if carried on from one.</summary>
+    internal void Start(bool expanded, bool toggled)
+    {
+        _isExpanded = expanded;
+        Toggled = toggled;
+    }
 
     /// <summary>True when the keyboard cursor is on this section's header.</summary>
     private bool _isCursor;

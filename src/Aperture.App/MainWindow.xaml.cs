@@ -18,10 +18,10 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
-        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid
-        // is resized, and when its room changes inside it (its first layout; its scrollbar coming or going, which
-        // GroupingWidth allows for either way).
-        ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(GroupingWidth());
+        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width whenever the
+        // grid's viewport changes width — a resize, its first layout, its scrollbar coming or going (which GroupingWidth
+        // allows for either way). ScrollChanged comes once the viewer is laid out, when its viewport and its scrollbar
+        // agree; the grid's SizeChanged comes before, with the old viewport beside the new scrollbar.
         ItemsList.AddHandler(System.Windows.Controls.ScrollViewer.ScrollChangedEvent, new System.Windows.Controls.ScrollChangedEventHandler((_, e) =>
         {
             if (e.ViewportWidthChange != 0)
@@ -550,14 +550,14 @@ public partial class MainWindow : Window
     private System.Windows.Controls.ScrollViewer? GridScroll() =>
         _gridScroll ??= FindDescendant<System.Windows.Controls.ScrollViewer>(ItemsList);
 
-    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    private static T? FindDescendant<T>(DependencyObject root, Func<T, bool>? where = null) where T : DependencyObject
     {
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
         {
             var child = VisualTreeHelper.GetChild(root, i);
-            if (child is T match)
+            if (child is T match && (where is null || where(match)))
                 return match;
-            if (FindDescendant<T>(child) is { } found)
+            if (FindDescendant(child, where) is { } found)
                 return found;
         }
         return null;
@@ -1343,30 +1343,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Width the wrap panel actually laid out against. ScrollViewer.ViewportWidth
-    /// already excludes the vertical scrollbar — do not subtract padding/12 again
-    /// (that was the 0.8.4 off-by-one: 4 visual columns, nav used 3).
-    /// </summary>
-    /// <summary>
-    /// The width the date grouping is chosen for: the grid's viewport with its scrollbar showing, whether or not it is. A
-    /// regroup can bring the scrollbar in or take it away; were this width to follow it, the grouping could change back,
-    /// and again. The viewport, not a section's wrap panel: a collapsed section's panel keeps its old width.
+    /// The width the date grouping is chosen for: the grid's viewport as it is with its scrollbar showing, whether or not
+    /// it is — the scroll viewer's own width less its padding and a scrollbar, never the viewport itself. A regroup can
+    /// bring the scrollbar in or take it away; were this width to follow it, the grouping could change back, and again.
+    /// Nor a section's wrap panel: a collapsed section's keeps its old width.
     /// </summary>
     private double GroupingWidth()
     {
-        var scroll = GridScroll();
-        var width = scroll is { ViewportWidth: > 1 }
-            ? scroll.ViewportWidth
+        var width = GridScroll() is { ActualWidth: > 1 } scroll
+            ? scroll.ActualWidth - scroll.Padding.Left - scroll.Padding.Right
             : ItemsList.ActualWidth - ItemsList.Padding.Left - ItemsList.Padding.Right;
-        if (scroll?.ComputedVerticalScrollBarVisibility != System.Windows.Visibility.Visible)
-            width -= SystemParameters.VerticalScrollBarWidth;
-        return Math.Max(1, width);
+        return Math.Max(1, width - SystemParameters.VerticalScrollBarWidth);
     }
 
+    /// <summary>
+    /// Width the wrap panel actually laid out against. ScrollViewer.ViewportWidth
+    /// already excludes the vertical scrollbar — do not subtract padding/12 again
+    /// (that was the 0.8.4 off-by-one: 4 visual columns, nav used 3). The first
+    /// shown section's panel: a collapsed section's keeps the width it last had.
+    /// </summary>
     private double WrapViewportWidth()
     {
-        if (FindDescendant<WpfToolkit.Controls.VirtualizingWrapPanel>(ItemsList)
-            is { ActualWidth: > 1 } panel)
+        if (FindDescendant<WpfToolkit.Controls.VirtualizingWrapPanel>(ItemsList, p => p.IsVisible && p.ActualWidth > 1)
+            is { } panel)
             return panel.ActualWidth;
 
         var sv = GridScroll();
@@ -1539,7 +1538,8 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private int ColumnsPerRow()
+    /// <summary>How many tiles the grid lays out across, for keyboard navigation. Internal for tests.</summary>
+    internal int ColumnsPerRow()
     {
         var (_, _, slotW, _) = MeasureTileSlot();
         return TileSpatialNavigation.FitColumns(WrapViewportWidth(), slotW);

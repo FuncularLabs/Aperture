@@ -1900,6 +1900,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private DateGroupings? _groupings;
 
     private SectionExpansion _expansion = SectionExpansion.None; // the user's section toggles, per grouping
+    private string? _viewPlace; // the folder or search the view that's up shows (LocationKey); null until one is up
 
     /// <summary>
     /// How many tiles fit across the width the view reports, at the current zoom (each tile's slot is its size plus 20 px
@@ -1908,12 +1909,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public int TilesPerRow => _gridWidth <= 0 ? 1 : Math.Max(1, (int)Math.Floor(_gridWidth / (TileSize + 20)));
 
-    /// <summary>Counts every view build asked for, as it's asked for (before its debounce). For tests.</summary>
+    /// <summary>
+    /// Counts the startup build and each debounced rebuild asked for, as it's asked for — before its debounce (not the
+    /// immediate rebuilds while photos stream in). For tests.
+    /// </summary>
     internal int BuildGeneration => _buildGeneration;
 
     /// <summary>
-    /// The view reports the width its tiles wrap in (with room for a scrollbar, shown or not); if that groups the dates
-    /// differently, they're regrouped.
+    /// The view reports the width the grouping is for: its tiles' room beside a scrollbar, whether or not one shows. If
+    /// that groups the dates differently, they're regrouped.
     /// </summary>
     public void SetGridWidth(double width)
     {
@@ -1932,11 +1936,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RequestBuildView();
     }
 
-    // The user's section toggles, remembered for each grouping, with the view's own as they are now. A section left as its
-    // build set it isn't a toggle: a section collapsed only because it was older stays out of other folders' views.
+    // The user's section toggles, remembered for each grouping, with the view's own as they are now. Only toggles: a
+    // section collapsed only because it was older (or kept open by a rebuild) stays out of other places' views.
     private SectionExpansion CurrentToggles() => _expansion = _mode is { } mode
-        ? _expansion.With(mode, _sections.Where(kv => kv.Value.IsExpanded != kv.Value.ExpandedByDefault)
-            .ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
+        ? _expansion.With(mode, _sections.Where(kv => kv.Value.Toggled).ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
         : _expansion;
 
     // --- Window layout persistence ------------------------------------------
@@ -2163,13 +2166,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
         Dictionary<string, Annotation> Annotations, SectionExpansion Toggles,
-        (BucketMode? Mode, Dictionary<long, bool> Expanded) View,
-        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow);
+        (BucketMode? Mode, string? Place, Dictionary<long, (bool Expanded, bool Toggled)> Sections) View,
+        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow, string Place);
 
     // Mode and Groupings: the date grouping chosen, and the section sizes it was chosen from (null without date sections).
+    // Place: the folder or search it shows (LocationKey).
     private sealed record ViewBuild(
         List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections,
-        BucketMode? Mode, DateGroupings? Groupings);
+        BucketMode? Mode, DateGroupings? Groupings, string Place);
 
     /// <summary>Snapshots everything the compute needs — must run on the UI thread.</summary>
     private BuildInputs CaptureBuildInputs() => new(
@@ -2181,11 +2185,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         GroupByDate,
         _annotations,
         CurrentToggles(),
-        (_mode, _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded)),
+        (_mode, _viewPlace, _sections.ToDictionary(kv => kv.Key, kv => (kv.Value.IsExpanded, kv.Value.Toggled))),
         _showImages,
         _showVideos,
         _tilePool,
-        TilesPerRow);
+        TilesPerRow,
+        LocationKey);
 
     /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
     private ViewBuild ComputeView(BuildInputs input)
@@ -2219,10 +2224,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             groupings = DateGroupings.Of(media.Select(r => r.Item.BestDate).ToList());
             mode = groupings.ChooseMode(input.TilesPerRow);
-            // The view's own grouping: every section as it is now (so one the user is looking at stays open as photos
-            // stream in above it). Another grouping: the user's toggles in it.
-            var expansion = mode == input.View.Mode ? input.View.Expanded : input.Toggles.For(mode.Value);
-            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, expansion, sections, input.Pool, mode.Value);
+            // The view as it is — the same place in the same grouping (photos streaming in, a sort, a resize): every
+            // section as it is now, so one the user is looking at stays open as photos arrive above it. Anything else
+            // (another folder, a search, another grouping): only the user's toggles, as remembered for that grouping.
+            var carried = mode == input.View.Mode && input.View.Place == input.Place
+                ? input.View.Sections
+                : input.Toggles.For(mode.Value).ToDictionary(kv => kv.Key, kv => (Expanded: kv.Value, Toggled: true));
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, carried, sections, input.Pool, mode.Value);
         }
         else
         {
@@ -2230,7 +2238,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             tiles = media.Select(r => GetOrReuseTile(input.Pool, r, input.Format, Ann(r))).ToList();
         }
 
-        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, mode, groupings);
+        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, mode, groupings, input.Place);
     }
 
     /// <summary>Identifies the current view (folder or search) for per-location scroll memory.</summary>
@@ -2262,6 +2270,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _sections[key] = section;
         _mode = build.Mode;
         _groupings = build.Groupings;
+        _viewPlace = build.Place;
 
         // Bind each committed tile to its committed section here, on the UI thread — never off-thread,
         // where a reused tile could be shared with a superseded concurrent build and race.
@@ -2494,14 +2503,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Pure sectioned build, grouped by <paramref name="mode"/>: creates fresh <see cref="SectionVm"/>s (safe to build off
-    /// the UI thread since they aren't bound yet), restoring prior expansion from
-    /// <paramref name="expansion"/> (that grouping's) and defaulting genuinely-new sections to expanded
-    /// for roughly the newest two screens. Populates <paramref name="sections"/>.
+    /// the UI thread since they aren't bound yet), carrying each section's state on from <paramref name="carried"/> and
+    /// defaulting the others to expanded for roughly the newest two screens. Populates <paramref name="sections"/>.
     /// </summary>
     private List<TileVm> BuildSectionedPure(
         List<LibraryRow> rows, string format, IReadOnlyList<Aperture.Core.Settings.SortLevel> levels,
-        Func<LibraryRow, Annotation> ann, IReadOnlyDictionary<long, bool> expansion, Dictionary<long, SectionVm> sections,
-        Dictionary<long, TileVm> pool, BucketMode mode)
+        Func<LibraryRow, Annotation> ann, IReadOnlyDictionary<long, (bool Expanded, bool Toggled)> carried,
+        Dictionary<long, SectionVm> sections, Dictionary<long, TileVm> pool, BucketMode mode)
     {
         var bucketByItem = new Dictionary<long, DateBucket>(rows.Count);
         foreach (var r in rows)
@@ -2536,10 +2544,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var section in order)
         {
             section.Count = counts[section.Key];
-            section.ExpandedByDefault = cumulative < ExpandTargetItems; // default: expand the newest ~2 screens
-            section.IsExpanded = expansion.TryGetValue(section.Key, out var wasExpanded)
-                ? wasExpanded                       // preserve the user's toggle across rebuilds
-                : section.ExpandedByDefault;
+            if (carried.TryGetValue(section.Key, out var was))
+                section.Start(was.Expanded, was.Toggled);                  // as the user, or the view, left it
+            else
+                section.Start(cumulative < ExpandTargetItems, toggled: false); // default: expand the newest ~2 screens
             cumulative += section.Count;
         }
 
