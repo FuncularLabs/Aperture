@@ -1948,9 +1948,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_closing || additions.Count == 0)
             return;
-        FinishFirstRunIfShowing(); // a folder has been chosen: don't keep offering Pictures etc. as well
         foreach (var folder in additions)
             AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
+        // Folders are in: stop offering Pictures etc. Only now, so an add that fails leaves the offer for next time.
+        FinishFirstRunIfShowing();
     }
 
     /// <summary>The subfolder question Add folder and a drop ask: the dialog. Settable for tests only.</summary>

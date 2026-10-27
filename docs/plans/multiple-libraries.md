@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 18, after review round 18 of Paul's first trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 19, after review round 19 of Paul's first trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -578,7 +578,7 @@ Design:
 |---|---|---|---|
 | F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed — once; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne`; `BackgroundRefreshTests.AFolderAddedBeforeTheStartupReconcile_IsIndexedOnce`, `…AFolderRemovedBeforeTheStartupReconcile_IsNotIndexedOrWatched`, `…AFolderAddedAfterTheLibraryHasClosed_IsIgnored`, `…AddingFoldersToAClosedLibrary_AsksNothingAndAddsNothing`, `…ALibrarySwitchWhileTheSubfolderQuestionIsOpen_AddsNothing` (a real view model, STA) | ask for the location again; raise the hand-over before the switch; drop the free-folder search; let the reconcile read the folders after its delay; let it index a folder removed meanwhile; add to a closed library, ask a closed library's question, or add after a switch during the question |
 | F2 | Every library listed by name, the open one marked; a switch moves the mark; Remove/Delete disabled on the open one; Rename works on any library; the list collapses | `CatalogBarViewModelTests.Libraries_ListEveryLibraryByName_MarkingTheOpenOne`, `…_FollowASwitch`, `RemoveAndDelete_AreDisabledForTheOpenLibrary`, `Rename_RenamesTheLibraryItIsGiven`, `IsExpanded_StartsOpen_AndToggles` | list only the others; enable Remove on the open one; rename the open one regardless |
-| F3 | No tile binding goes through the window or the view-model proxy — written anywhere in the tile's XAML, or reached through a style, template or resource it uses; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy` (the objects the real tile builds and reaches), `…TheBindingWalk_FindsABindingInEveryPlaceItWalks` (the walk's completeness: a window binding planted in each place it walks), `…TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy` (anything written in the tile's XAML, wherever it sits), `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; bind the image brush, an effect, or a template, trigger or based-on style's binding through the proxy or the window; drop `Inherits` |
+| F3 | No tile binding goes through the window or the view-model proxy — written in the tile's XAML (in the usual spellings), or in the objects the tile builds and the keyed styles, templates and resources it uses (implicit styles from outside the tile and DynamicResource references aren't checked; the tile uses neither); the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy` (the objects the real tile builds and reaches), `…TheBindingWalk_FindsABindingInEveryPlaceItWalks` (the walk's completeness: a window binding planted in each of its 29 places, one per branch), `…TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy` (what is written in the tile's XAML, wherever it sits), `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; bind the image brush, an effect, a gradient stop, or a template, trigger, resource or based-on style's binding through the proxy or the window; write such a binding where the walk doesn't go (the text check alone); drop any branch of the walk (the completeness test); drop `Inherits` |
 | F4 | One question per add, for new folders only; Yes by default; cancel adds nothing; folders already added or gone are skipped without asking | `FolderAdditionsTests` (4), `AddFolderDialogTests` (2) | ask per folder; ask when nothing is new; default to No |
 | F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4); `MainWindowTemplateTests.TheTitle_IsTheProductThenTheLibraryThenTheFolder` (the window's own bindings, in order) | drop the library; swap the order — in the converter and in the window's bindings |
 | F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; nested hidden folders each count everything inside them; a folder is hidden in its own root only, and the tree lists only its own root's folders; a hidden folder in an unticked root counts nothing; showing ignores case beyond ASCII; the node reports a tick or untick once | `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; count a nested hidden folder twice, or an item for one hidden folder only; ignore the hidden folder's root, or the row's; match in SQL (ASCII-only NOCASE); report a non-change |
@@ -648,8 +648,8 @@ is indexed once; the test is deterministic); NOT CLEAN on two Lows.
 One fresh non-author review of the round-17 fixes (f78c716..06018d2): the code was correct; NOT CLEAN on three
 Lows, all test gaps. The binding walk had now been found narrower than its claim three rounds running (B F-3 in
 round 16, F-1 in 17, R18-1 in 18), so — as the house rule says after two in a row — the test was redesigned, not
-widened again: what is written in the tile's XAML is checked as text, which no future placement can slip past,
-and the walk's claim is limited to what it walks, each place with a planted binding.
+widened again: what is written in the tile's XAML is checked as text, wherever it sits (in the usual spellings —
+revision 19), and the walk's claim is limited to what it walks, each place with a planted binding.
 
 | # | Finding | Severity | Blame | Fix, and the test that now fails without it |
 |---|---|---|---|---|
@@ -660,6 +660,22 @@ and the walk's claim is limited to what it walks, each place with a planted bind
 | N-b | The removed-folder test waited a fixed 800 ms | Nit | TEST-GAP | It now waits for a second, kept folder's reconcile (a positive control), then checks the removed one never started |
 | N-c | Test runs leave temp folders | Nit | — | Pre-existing (`TempDir` cleanup is best effort); not this layer |
 | N-d | R17's kill is the exception itself | Nit | — | That is the defect's symptom; kept |
+
+### Revision 19 — what changed after review round 19
+
+One fresh non-author review of the round-18 fixes (06018d2..a33b66c): the production code was correct; NOT CLEAN on
+one Low — the fourth round on the binding walk's claim. This time the claim is closed at its root: every branch of
+the walk now has a planted binding (so deleting any branch fails the completeness test), and the prose says
+exactly what the two checks cover and what they don't.
+
+| # | Finding | Severity | Blame | Fix, and the test that now fails without it |
+|---|---|---|---|---|
+| R19-1 | Seven walk branches had no planted binding (MultiDataTrigger setters, a template held as a resource, merged dictionaries, a content element's resources, a non-Freezable object a property holds, a set template's DataTemplate triggers and resources); the doc comment also claimed an effect | Low | TEST-GAP | `…TheBindingWalk_FindsABindingInEveryPlaceItWalks` plants 29 bindings — one in each branch, an effect included — and requires exactly those 29 |
+| N-1 | The text check can be fooled by unusual spellings (`AncestorType="{x:Type Window}"` as a property element; `{StaticResource ResourceKey=Vm}`; a `</DataTemplate>` in a comment), so "anything written … wherever it sits" overclaimed | Nit | PLAN-GAP | F3 and the test now say "in the usual spellings"; the walk catches the first two in the objects themselves |
+| N-2 | Implicit styles from the grid's resources and DynamicResource references reach a tile but aren't checked | Nit | PLAN-GAP | Stated as a limit in F3 and the walk's doc comment; the tile uses neither |
+| N-3 | The shared add now marked first run done before adding the folders (a failed add would have lost the offer for the next launch) | Nit | HOUSE-RULE | First run is marked done after the folders are added, as before this branch |
+| N-4 | F3's mutation column didn't list the text check, resources or collections | Nit | PLAN-GAP | Listed |
+| N-5 | a33b66c's message says "each of the 21 places it claims" | Nit | — | Carried |
 
 ## Out of scope (future)
 

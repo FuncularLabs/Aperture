@@ -17,13 +17,16 @@ namespace Aperture.Core.Tests;
 public class MainWindowTemplateTests
 {
     /// <summary>
-    /// The bindings in the objects <paramref name="template"/> builds and reaches: on an element, or on a Freezable it
-    /// holds (a brush, an effect, a gradient stop or a transform in a collection); inside a MultiBinding or
-    /// PriorityBinding; in a Style (its setters — whose values may themselves be styles, templates or objects — its
-    /// triggers' conditions and setters, its resources, and the style it's based on); in the template's own triggers
-    /// and resources; in an element's resources; and in a template an element sets (loaded and walked the same way).
-    /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these places. What
-    /// is written in the tile's XAML is also checked as text (<see cref="TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy"/>).
+    /// The bindings in the objects <paramref name="template"/> builds and reaches. On each element or content element:
+    /// its bindings (a MultiBinding's or PriorityBinding's parts included); a Freezable it holds (a brush, an effect)
+    /// and the items of a Freezable collection (gradient stops, transforms); any other object it holds (a ToolTip
+    /// object); its style; a template it sets; and its resources. In a style: its setters (and a setter's value that is
+    /// a style, a template or an object), its triggers, its resources, and the style it's based on. In a template: its
+    /// own triggers and resources, and what it builds. In triggers: DataTrigger and MultiDataTrigger bindings, and
+    /// every trigger's setters. In resources: styles, templates, objects, and merged dictionaries.
+    /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these. Not walked:
+    /// styles that apply implicitly from outside the template (the grid's or window's resources) and DynamicResource
+    /// references — the tile uses neither.
     /// </summary>
     private static List<(string Where, Binding Binding)> BindingsIn(DataTemplate template)
     {
@@ -183,7 +186,7 @@ public class MainWindowTemplateTests
     public void TheBindingWalk_FindsABindingInEveryPlaceItWalks()
     {
         // The walk's completeness, separate from today's tile: one window binding planted in each place the walk claims
-        // to reach (see BindingsIn), every one of which must be found.
+        // to reach (see BindingsIn) — every branch of the walk has one — and every one must be found, once.
         Sta.Run(() =>
         {
             const string Window = "RelativeSource={RelativeSource AncestorType=Window}";
@@ -198,7 +201,13 @@ public class MainWindowTemplateTests
                   <StackPanel x:Name="b" Tag="{Binding DataContext.Element, {{Window}}}">
                     <StackPanel.Resources>
                       <SolidColorBrush x:Key="r" Color="{Binding DataContext.ElementResources, {{Window}}}" />
+                      <ControlTemplate x:Key="t" TargetType="Button">
+                        <Border Tag="{Binding DataContext.ResourceTemplate, {{Window}}}" />
+                      </ControlTemplate>
                     </StackPanel.Resources>
+                    <StackPanel.Effect>
+                      <DropShadowEffect BlurRadius="{Binding DataContext.Effect, {{Window}}}" />
+                    </StackPanel.Effect>
                     <StackPanel.Background>
                       <ImageBrush ImageSource="{Binding DataContext.Brush, {{Window}}}" />
                     </StackPanel.Background>
@@ -242,6 +251,18 @@ public class MainWindowTemplateTests
                       </Style>
                     </StackPanel.Style>
                     <Border>
+                      <Border.Resources>
+                        <ResourceDictionary>
+                          <ResourceDictionary.MergedDictionaries>
+                            <ResourceDictionary>
+                              <SolidColorBrush x:Key="m" Color="{Binding DataContext.MergedDictionary, {{Window}}}" />
+                            </ResourceDictionary>
+                          </ResourceDictionary.MergedDictionaries>
+                        </ResourceDictionary>
+                      </Border.Resources>
+                      <Border.ToolTip>
+                        <ToolTip Tag="{Binding DataContext.NonFreezableObject, {{Window}}}" />
+                      </Border.ToolTip>
                       <Border.BorderBrush>
                         <LinearGradientBrush>
                           <GradientStop Color="{Binding DataContext.GradientStop, {{Window}}}" Offset="0" />
@@ -249,6 +270,11 @@ public class MainWindowTemplateTests
                       </Border.BorderBrush>
                     </Border>
                     <TextBlock>
+                      <Run Text="x">
+                        <Run.Resources>
+                          <SolidColorBrush x:Key="c" Color="{Binding DataContext.ContentElementResources, {{Window}}}" />
+                        </Run.Resources>
+                      </Run>
                       <TextBlock.Tag>
                         <PriorityBinding>
                           <Binding Path="DataContext.Priority" RelativeSource="{RelativeSource AncestorType=Window}" />
@@ -256,6 +282,16 @@ public class MainWindowTemplateTests
                       </TextBlock.Tag>
                     </TextBlock>
                     <ContentControl>
+                      <ContentControl.ContentTemplate>
+                        <DataTemplate>
+                          <Border />
+                          <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.SetTemplateTrigger, {{Window}}}" Value="1">
+                              <Setter Property="Opacity" Value="0.5" />
+                            </DataTrigger>
+                          </DataTemplate.Triggers>
+                        </DataTemplate>
+                      </ContentControl.ContentTemplate>
                       <ContentControl.Style>
                         <Style TargetType="ContentControl">
                           <Setter Property="Template">
@@ -276,6 +312,9 @@ public class MainWindowTemplateTests
                     <Button>
                       <Button.Template>
                         <ControlTemplate TargetType="Button">
+                          <ControlTemplate.Resources>
+                            <SolidColorBrush x:Key="tr" Color="{Binding DataContext.SetTemplateResources, {{Window}}}" />
+                          </ControlTemplate.Resources>
                           <TextBlock>
                             <TextBlock.Text>
                               <MultiBinding StringFormat="{}{0}">
@@ -300,7 +339,7 @@ public class MainWindowTemplateTests
                       <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding DataContext.Condition, {{Window}}}" Value="1" />
                       </MultiDataTrigger.Conditions>
-                      <Setter TargetName="b" Property="Opacity" Value="0.5" />
+                      <Setter TargetName="b" Property="Opacity" Value="{Binding DataContext.MultiDataTriggerSetter, {{Window}}}" />
                     </MultiDataTrigger>
                   </DataTemplate.Triggers>
                 </DataTemplate>
@@ -313,7 +352,9 @@ public class MainWindowTemplateTests
                 "Element", "Brush", "TransformInACollection", "GradientStop", "ElementResources", "TemplateResources",
                 "BasedOn", "StyleResources", "StyleSetter", "SetterStyle", "SetterTemplate", "SetterObject",
                 "TriggerSetter", "MultiTriggerSetter", "StyleTrigger", "Priority", "Multi", "ControlTrigger",
-                "TemplateTrigger", "TemplateTriggerSetter", "Condition",
+                "TemplateTrigger", "TemplateTriggerSetter", "Condition", "MultiDataTriggerSetter", "Effect",
+                "ResourceTemplate", "MergedDictionary", "ContentElementResources", "NonFreezableObject",
+                "SetTemplateTrigger", "SetTemplateResources",
             ];
             Assert.All(places, place =>
                 Assert.Contains(found, offender => offender.Contains($"<- DataContext.{place} ", StringComparison.Ordinal)));
@@ -324,8 +365,10 @@ public class MainWindowTemplateTests
     [Fact]
     public void TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy()
     {
-        // Whatever the walk reaches, a binding written anywhere in the tile's own XAML — a resource, a trigger, a gradient
-        // stop, a place no walk thought of — is in this text.
+        // Whatever the walk reaches, a binding written in the tile's own XAML — a resource, a trigger, a gradient stop, an
+        // input binding, a place the walk doesn't visit — is in this text. It looks for the usual spellings (an
+        // AncestorType of Window, the Vm proxy as a StaticResource or DynamicResource, a DataContext. path); the walk
+        // checks the objects themselves.
         var xaml = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Aperture.App", "MainWindow.xaml"));
         var tile = TileTemplateText(xaml);
 
