@@ -58,6 +58,19 @@ public static class FolderTree
             .ToList();
     }
 
+    /// <summary>
+    /// How many of a root's items are hidden: the items of its outermost hidden folders (a hidden folder inside
+    /// another hidden one is already counted in it). A root's count in the tree leaves these out.
+    /// </summary>
+    public static int HiddenItemCount(IReadOnlyList<HiddenFolder> hidden, long rootId)
+    {
+        var ofRoot = hidden.Where(h => h.RootId == rootId).ToList();
+        return ofRoot
+            .Where(h => !ofRoot.Any(outer => !ReferenceEquals(outer, h) && IsUnder(h.RelDir, outer.RelDir)
+                                             && !h.RelDir.Equals(outer.RelDir, StringComparison.OrdinalIgnoreCase)))
+            .Sum(h => h.ItemCount);
+    }
+
     private static bool IsUnder(string dir, string relDir) =>
         relDir.Length == 0
         || dir.Equals(relDir, StringComparison.OrdinalIgnoreCase)

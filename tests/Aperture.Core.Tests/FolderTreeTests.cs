@@ -82,6 +82,22 @@ public class FolderTreeTests
     }
 
     [Fact]
+    public void HiddenItemCount_CountsEachHiddenItemOnce_ForItsOwnRoot()
+    {
+        HiddenFolder[] hidden =
+        [
+            new(Root, "Trip", 5),            // holds Trip\Day 1's 2 items too
+            new(Root, @"Trip\Day 1", 2),
+            new(Root, "Trip 2", 4),          // a sibling, not inside "Trip"
+            new(OtherRoot, "Work", 9),
+        ];
+
+        Assert.Equal(9, FolderTree.HiddenItemCount(hidden, Root));
+        Assert.Equal(9, FolderTree.HiddenItemCount(hidden, OtherRoot));
+        Assert.Equal(0, FolderTree.HiddenItemCount([], Root));
+    }
+
+    [Fact]
     public void AFolderBothSeenAndHidden_IsListedOnce_AsHidden()
     {
         var rows = Rows(@"trip\x.jpg"); // a stale row the caller still holds

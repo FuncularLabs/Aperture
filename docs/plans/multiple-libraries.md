@@ -186,7 +186,7 @@ The folder pane lists the libraries under a **LIBRARIES** header (`CatalogBarVie
 | 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 4b | One window (revision 11) | `SingleInstanceTests` (13), `RelaunchTests` (16) — real kernel objects and real child processes |
-| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (10), `FolderTreeTests` (7), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (2), `AddFolderDialogTests` (2), `TileLayoutTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
+| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (10), `FolderTreeTests` (8), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (2), `AddFolderDialogTests` (2), `TileLayoutTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -566,7 +566,8 @@ Design:
 - **F5** — title: `Aperture Image Browser vX — <library> — <folder>`, or `— <library>` at the top of a library;
   with `APERTURE_DATA_DIR` there's no library name.
 - **F6** — a subfolder's checkbox hides it, exactly as a top-level folder's checkbox does: its photos and
-  videos, and those of every folder inside it, leave Everything, the grid and the counts above it; the folder
+  videos, and those of every folder inside it, leave Everything, the grid and the counts above it (the root's
+  too); the folder
   stays listed, unticked, with its own count, so it can be shown again. Hidden folders are kept per library in a
   new `hidden_folders` table (created on open, so an existing library just gets an empty one; a version
   without it ignores it). They are still indexed. A hidden folder whose items have all gone (renamed or deleted
@@ -579,7 +580,7 @@ Design:
 | F3 | No tile binding goes through the window or the view-model proxy; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; drop `Inherits` |
 | F4 | One question per add, for new folders only; Yes by default; cancel adds nothing; folders already added or gone are skipped without asking | `FolderAdditionsTests` (4), `AddFolderDialogTests` (2) | ask per folder; ask when nothing is new; default to No |
 | F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4) | drop the library; swap the order |
-| F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; the node reports a tick or untick once | `HiddenFoldersTests` (10), `FolderTreeTests` (7), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; report a non-change |
+| F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; the node reports a tick or untick once | `HiddenFoldersTests` (10), `FolderTreeTests` (8), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; count a nested hidden folder twice; report a non-change |
 
 `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` remain exempt from the coverage floor (ruling of
 2026-10-25): the wiring there — the checkbox calling `SetFolderShown`, App handing New library's folder to the

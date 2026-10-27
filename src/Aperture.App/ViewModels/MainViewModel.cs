@@ -2227,9 +2227,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var rootVm in Roots)
         {
             var subs = Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootVm.Id, "");
+            // The root's count leaves out its hidden subfolders, as its subfolders' counts do.
+            var count = Math.Max(0, rootVm.Count - Core.Library.FolderTree.HiddenItemCount(_hiddenFolders, rootVm.Id));
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
-                rootVm, rootVm.Count, LoadChildNodes, OnNodeExpandedChanged));
+                rootVm, count, LoadChildNodes, OnNodeExpandedChanged));
         }
         RestoreExpansion();
     }
