@@ -181,7 +181,7 @@ public partial class App : Application
         }
     });
 
-    // CatalogService raises its events on the caller's context, and the switcher calls it from the UI
+    // CatalogService raises its events on the caller's context, and the libraries in the nav call it from the UI
     // thread — so this normally runs inline. The marshal is a guard: a window can only be touched on its own thread.
     private void OnUiThread(Action action)
     {

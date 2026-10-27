@@ -375,6 +375,7 @@ public sealed class LibraryService : IDisposable
         lock (_indexLock)
         {
             ObjectDisposedException.ThrowIf(_shuttingDown, this);
+            IndexStarting?.Invoke(root);
 
             var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, ct);
             // The token is observed inside IndexRoot (per-file + per-batch); it is deliberately NOT passed
@@ -506,6 +507,9 @@ public sealed class LibraryService : IDisposable
             _watchers.Clear();
         }
     }
+
+    /// <summary>Test seam: runs as <see cref="IndexRootAsync"/> starts an index of a root, on the caller's thread.</summary>
+    internal Action<Root>? IndexStarting { get; set; }
 
     /// <summary>Test seam: runs on the thread that closes this library (its database, watchers and lock), as it starts.</summary>
     internal Action? TearingDown { get; set; }

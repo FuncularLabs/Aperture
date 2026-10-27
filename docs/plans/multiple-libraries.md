@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 15, Paul's first trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 16, after review round 16 of Paul's first trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -186,7 +186,7 @@ The folder pane lists the libraries under a **LIBRARIES** header (`CatalogBarVie
 | 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 4b | One window (revision 11) | `SingleInstanceTests` (13), `RelaunchTests` (16) — real kernel objects and real child processes |
-| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (10), `FolderTreeTests` (8), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (2), `AddFolderDialogTests` (2), `TileLayoutTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
+| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (3), `AddFolderDialogTests` (2), `TileLayoutTests` (1), `BackgroundRefreshTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -554,7 +554,8 @@ Design:
 - **F1** — New library asks for the folder to put in the library, not where to keep Aperture's files: name →
   folder → "Include subfolders?" (Yes by default) → the library's own files go in `%LOCALAPPDATA%\Aperture
   Libraries\<name>`, or the next free `<name> (n)` → switch → the folder is added and indexed at once, as Add
-  folder does. Cancelling at any step creates nothing. (Choosing where a new library's files go is gone; Open
+  folder does — once (revision 16: the startup reconcile covers only the folders the library opened with).
+  Cancelling at any step creates nothing. (Choosing where a new library's files go is gone; Open
   library… still adds a library from anywhere.)
 - **F2** — libraries are listed in the pane (§3). The collapsed state lasts the session. Only the open library
   shows a count: counting another would mean opening it.
@@ -566,31 +567,68 @@ Design:
 - **F5** — title: `Aperture Image Browser vX — <library> — <folder>`, or `— <library>` at the top of a library;
   with `APERTURE_DATA_DIR` there's no library name.
 - **F6** — a subfolder's checkbox hides it, exactly as a top-level folder's checkbox does: its photos and
-  videos, and those of every folder inside it, leave Everything, the grid and the counts above it (the root's
-  too); the folder
-  stays listed, unticked, with its own count, so it can be shown again. Hidden folders are kept per library in a
+  videos, and those of every folder inside it, leave Everything, the grid and the counts above it (a ticked
+  root's too — an unticked root shows nothing, so its count stays everything in it); the folder stays listed,
+  unticked, with its own count, so it can be shown again. Hidden folders are kept per library in a
   new `hidden_folders` table (created on open, so an existing library just gets an empty one; a version
   without it ignores it). They are still indexed. A hidden folder whose items have all gone (renamed or deleted
   on disk) isn't listed.
 
 | AC | Behaviour | Tests | Mutation each must kill |
 |---|---|---|---|
-| F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne` | ask for the location again; raise the hand-over before the switch; drop the free-folder search |
+| F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed — once; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne`; `BackgroundRefreshTests.AFolderAddedBeforeTheStartupReconcile_IsIndexedOnce` (a real view model, STA) | ask for the location again; raise the hand-over before the switch; drop the free-folder search; let the reconcile read the folders after its delay |
 | F2 | Every library listed by name, the open one marked; a switch moves the mark; Remove/Delete disabled on the open one; Rename works on any library; the list collapses | `CatalogBarViewModelTests.Libraries_ListEveryLibraryByName_MarkingTheOpenOne`, `…_FollowASwitch`, `RemoveAndDelete_AreDisabledForTheOpenLibrary`, `Rename_RenamesTheLibraryItIsGiven`, `IsExpanded_StartsOpen_AndToggles` | list only the others; enable Remove on the open one; rename the open one regardless |
-| F3 | No tile binding goes through the window or the view-model proxy; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; drop `Inherits` |
+| F3 | No tile binding goes through the window or the view-model proxy — on an element, a brush or effect, a style or trigger, or a template it sets; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; bind the image brush or an effect through the proxy or the window; drop `Inherits` |
 | F4 | One question per add, for new folders only; Yes by default; cancel adds nothing; folders already added or gone are skipped without asking | `FolderAdditionsTests` (4), `AddFolderDialogTests` (2) | ask per folder; ask when nothing is new; default to No |
-| F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4) | drop the library; swap the order |
-| F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; the node reports a tick or untick once | `HiddenFoldersTests` (10), `FolderTreeTests` (8), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; count a nested hidden folder twice; report a non-change |
+| F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4); `MainWindowTemplateTests.TheTitle_IsTheProductThenTheLibraryThenTheFolder` (the window's own bindings, in order) | drop the library; swap the order — in the converter and in the window's bindings |
+| F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; nested hidden folders each count everything inside them; a folder is hidden in its own root only, and the tree lists only its own root's folders; a hidden folder in an unticked root counts nothing; showing ignores case beyond ASCII; the node reports a tick or untick once | `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; count a nested hidden folder twice, or an item for one hidden folder only; ignore the hidden folder's root, or the row's; match in SQL (ASCII-only NOCASE); report a non-change |
 
 `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` remain exempt from the coverage floor (ruling of
 2026-10-25): the wiring there — the checkbox calling `SetFolderShown`, App handing New library's folder to the
-new view model, the drop and first-run questions — is checked by reading and by Paul's live check.
+new view model, the drop and first-run questions, the tile menu finding its tile — is checked by reading and by
+Paul's live check (the reconcile's snapshot is tested, above).
 
-Live check (Paul): create a library with New library… and one folder — it's listed under LIBRARIES, the folder
-appears under FOLDERS and its thumbnails stream in; click between libraries several times (each switch about as
-quick as the first); collapse LIBRARIES; right-click the open library (Remove and Delete are greyed out); the
-title shows the library's name; untick a subfolder — its photos leave Everything — and tick it again; drop a
-folder on the window — it asks about subfolders.
+Live check (Paul): create a library with New library… and one folder — it's listed under LIBRARIES with its
+count, the folder appears under FOLDERS and its thumbnails stream in, and Pause on the folder stops it; click
+between libraries several times (each switch about as quick as the first); click the open library — it shows
+everything in it; collapse LIBRARIES; right-click a library and rename it; right-click the open library (Remove
+and Delete are greyed out); the title shows the library's name; untick a subfolder — its photos leave Everything
+— and tick it again; drop a folder on the window — it asks about subfolders, and Explorer isn't stuck while it
+does; right-click a tile, and press the menu key (or Shift+F10) on a selected tile — the tile menu acts on that
+tile ("Open with" lists its apps); right-click empty canvas or a date header — no menu. (The first-run panel's
+"Include subfolders" box only shows for a brand-new Default library or an empty `APERTURE_DATA_DIR` folder;
+check it only if that's handy.)
+
+### Revision 16 — what changed after review round 16
+
+Two non-author reviews of 3d13e9d..091f0b6 — behaviour, regressions and leaks (A); proof and prose (B). Both were
+NOT CLEAN on one Medium; every finding A raised, B raised too (×2).
+
+| # | Finding | Severity | Blame | Fix, and the test that now fails without it |
+|---|---|---|---|---|
+| A1 / B F-1 ×2 | New library's folder was indexed twice at once: the startup reconcile (2.5 s after the switch) took the folder New library had just handed over, while that folder's own index was running. The second run overwrote the first's pause/cancel handle, so Pause stopped only one run and the folder then read "paused" while indexing on | Medium | AC-GAP | F1 now says "once". The reconcile covers the folders the library opened with, read before its delay. `BackgroundRefreshTests.AFolderAddedBeforeTheStartupReconcile_IsIndexedOnce` — a real view model, driven as App drives it (fails with 2 starts if the reconcile reads the folders after its delay) |
+| A2 / B F-2 ×2 | The title's order and library name live in the window's MultiBinding, which no test read | Low | TEST-GAP | `MainWindowTemplateTests.TheTitle_IsTheProductThenTheLibraryThenTheFolder` (swapping or renaming a binding in the XAML fails it) |
+| B F-3 | The tile-template test walked only elements' own plain bindings: not brushes, effects, styles, triggers, MultiBindings or templates | Low | TEST-GAP | The walk covers them all, and asserts it reaches the image brush (binding the brush, or an effect, through the proxy or the window fails it) |
+| A3 / B F-4 ×2 | The hidden-folder filter and counts were never tested with two roots, or with nested hidden folders together | Low | TEST-GAP | `HiddenFoldersTests.HidingAFolder_HidesItInItsOwnRootOnly`, `…NestedHiddenFolders_EachCountEverythingInsideThem` |
+| B F-5 | `FolderTree.Subfolders` was never given another root's rows | Low | TEST-GAP | `FolderTreeTests.AnotherFoldersRows_AreNotListedHere` |
+| A5 / B F-6 ×2 | "A root's count leaves out its hidden subfolders" was false for an unticked root | Low | AC-GAP | F6 and the comment now say "a ticked root's"; an unticked root shows nothing, so it still counts everything in it. `HiddenFoldersTests.AHiddenFolderInAnUntickedFolder_CountsNothing` pins what the count rests on |
+| A4 / B F-7 ×2 | Dropping folders showed the subfolder question inside the drop, so Explorer waited until it was answered | Low | OTHER (UI work inside an OLE callback) | The drop posts the add, which asks once the drop has returned. In the exempt `MainWindow.xaml.cs`: checked by reading, and in the live check |
+| B F-8 | Some revision-15 behaviour had neither a test nor a live-check step | Low | PLAN-GAP | The live check above lists them |
+| B N1 | The plan named a "forget to persist" mutation the runner didn't have | Nit | PLAN-GAP | Added to round 16's mutation run |
+| B N2 | Stale "switcher" wording in `MainViewModel.Catalog` and App | Nit | HOUSE-RULE | Reworded |
+| B N3 | Showing a folder again matched it in SQL, where NOCASE folds only ASCII; hiding matched it in .NET | Nit | HOUSE-RULE | Showing finds the folder as hiding does, then deletes it by id. `HiddenFoldersTests.ShowingAFolderAgain_IgnoresCaseBeyondAscii` |
+| B N4 | README left out the `<name> (2)` fallback | Nit | PLAN-GAP | Added |
+| B N5 | 921ae4c's message gives harness timings without saying so | Nit | — | Carried (commit messages aren't rewritten); this plan says where the numbers come from |
+
+Refuted or confirmed safe by the reviews: the tile menu's `Closed` handler clears its tile only after the clicked
+command has run; Shift+F10 opens the tile menu on a focused tile; empty canvas and section headers get none; no
+per-view-model handler is left on the session-long library list; the hand-over reaches the new library's view
+model; every add path asks once.
+
+Pre-existing, not introduced here (flagged, not fixed in this branch): a second index of a folder can still start
+while one runs if the user changes "Include subfolders" on it, or a file-watcher event fires, mid-index — the same
+pause/cancel bookkeeping problem, in 0.8.9 as well. Revision 16 removes the trigger this branch added (New
+library's hand-over), not the general race.
 
 ## Out of scope (future)
 

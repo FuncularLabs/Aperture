@@ -89,8 +89,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private List<string> _availableTags = [];
 
     /// <summary>
-    /// The catalog switcher (active library + switch/new/open/rename/remove), or <c>null</c> when a single
-    /// catalog is pinned (APERTURE_DATA_DIR) and switching is hidden. Owned by App and shared across rebuilds.
+    /// The libraries in the nav (every library, the open one marked; switch/new/open/rename/remove/delete), or
+    /// <c>null</c> when a single library is pinned (APERTURE_DATA_DIR) and none are listed. Owned by App and shared
+    /// across rebuilds.
     /// </summary>
     public CatalogBarViewModel? Catalog { get; }
 
@@ -1826,14 +1827,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return bytes is null ? null : ImageLoading.Decode(bytes, 0);
     }
 
-    /// <summary>Kick a background reconcile of every root, then watch it. Cached rows are already on screen.</summary>
+    /// <summary>
+    /// Kick a background reconcile of every root the library opened with, then watch it. Cached rows are already on
+    /// screen. A folder added meanwhile (Add folder, a drop, New library's folder) is being indexed by its add, so it
+    /// isn't indexed again alongside.
+    /// </summary>
     public async void StartBackgroundRefresh()
     {
+        var roots = Roots.ToList(); // before the delay: the folders this library opened with
         // Give the window a moment to paint and the on-screen tiles to load (or regenerate) their
         // thumbnails before a full reconcile starts contending for disk + CPU. Without this, indexing
         // tens of thousands of files immediately starves the visible tiles and they sit blank.
-        await Task.Delay(StartupReconcileDelayMs);
-        foreach (var rootVm in Roots.ToList())
+        await Task.Delay(StartupReconcileDelay);
+        foreach (var rootVm in roots.Where(Roots.Contains)) // not one removed meanwhile
             _ = IndexRootAsync(rootVm.Model, watchAfter: true);
 
         // Enforce the thumbnail cache cap once per session, off the UI thread. Auto-sized to the
@@ -2004,8 +2010,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private const int BuildDebounceMs = 140;
 
-    /// <summary>How long startup waits before the first full reconcile, so visible thumbnails load uncontended.</summary>
-    private const int StartupReconcileDelayMs = 2500;
+    /// <summary>
+    /// How long startup waits before the first full reconcile, so visible thumbnails load uncontended. Settable for
+    /// tests only.
+    /// </summary>
+    internal TimeSpan StartupReconcileDelay { get; set; } = TimeSpan.FromMilliseconds(2500);
 
     /// <summary>True while an async rebuild is running — drives the right-pane spinner.</summary>
     public bool IsLoadingView
@@ -2227,7 +2236,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var rootVm in Roots)
         {
             var subs = Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootVm.Id, "");
-            // The root's count leaves out its hidden subfolders, as its subfolders' counts do.
+            // A ticked root's count leaves out its hidden subfolders, as its subfolders' counts do. (An unticked root
+            // shows nothing in the union, so it still counts everything in it — hidden subfolders included.)
             var count = Math.Max(0, rootVm.Count - Core.Library.FolderTree.HiddenItemCount(_hiddenFolders, rootVm.Id));
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,

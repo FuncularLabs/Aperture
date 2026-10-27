@@ -118,6 +118,60 @@ public class HiddenFoldersTests
     }
 
     [Fact]
+    public void NestedHiddenFolders_EachCountEverythingInsideThem()
+    {
+        using var f = new Fixture();
+
+        f.Service.SetFolderShown(f.Root.Id, "Trip", shown: false);
+        f.Service.SetFolderShown(f.Root.Id, @"Trip\Day 1", shown: false);
+
+        var counts = f.Service.GetContents().Hidden.ToDictionary(h => h.RelDir, h => h.ItemCount);
+        Assert.Equal(3, counts["Trip"]);          // t1, t2 and Day 1's d1
+        Assert.Equal(1, counts[@"Trip\Day 1"]);  // d1, counted here too
+    }
+
+    [Fact]
+    public void HidingAFolder_HidesItInItsOwnRootOnly()
+    {
+        using var f = new Fixture();
+        using var other = new TempDir();
+        TestImages.Write(Path.Combine(other.Path, "Trip", "o.jpg"), 64, 48); // a "Trip" folder in another root
+        var otherRoot = f.Service.AddRoot(other.Path, "Other");
+        f.Service.IndexRoot(otherRoot);
+
+        f.Service.SetFolderShown(f.Root.Id, "Trip", shown: false);
+
+        Assert.Contains(f.Service.GetContents().Rows, r => r.Item.RootId == otherRoot.Id && r.Item.RelPath == @"Trip\o.jpg");
+        var hidden = Assert.Single(f.Service.GetContents().Hidden);
+        Assert.Equal((f.Root.Id, 3), (hidden.RootId, hidden.ItemCount)); // the other root's Trip isn't counted either
+    }
+
+    [Fact]
+    public void AHiddenFolderInAnUntickedFolder_CountsNothing()
+    {
+        // An unticked root shows nothing in the union, so its tree count stays everything in it (its hidden subfolders
+        // included); the hidden count the tree subtracts is only for items the union would otherwise show.
+        using var f = new Fixture();
+        f.Service.SetFolderShown(f.Root.Id, "Trip", shown: false);
+
+        f.Service.SetIncluded(f.Root.Id, false);
+
+        Assert.Equal(0, Assert.Single(f.Service.GetContents().Hidden).ItemCount);
+        Assert.Empty(f.Service.GetContents().Rows);
+    }
+
+    [Fact]
+    public void ShowingAFolderAgain_IgnoresCaseBeyondAscii()
+    {
+        using var f = new Fixture();
+        f.Service.SetFolderShown(f.Root.Id, "Été", shown: false);
+
+        f.Service.SetFolderShown(f.Root.Id, "ÉTÉ", shown: true);
+
+        Assert.Empty(f.Service.GetContents().Hidden);
+    }
+
+    [Fact]
     public void CaseAndSeparators_DontMatter_AndHidingTwiceKeepsOneEntry()
     {
         using var f = new Fixture();

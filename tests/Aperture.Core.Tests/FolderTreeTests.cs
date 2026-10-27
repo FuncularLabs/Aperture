@@ -73,6 +73,15 @@ public class FolderTreeTests
     }
 
     [Fact]
+    public void AnotherFoldersRows_AreNotListedHere()
+    {
+        List<LibraryRow> rows = [Row(@"2024\x.jpg"), Row(@"Work\y.jpg", OtherRoot), Row(@"2024\z.jpg", OtherRoot)];
+
+        Assert.Equal("2024|2024|1|flat|shown", Show(FolderTree.Subfolders(rows, [], Root, "")));
+        Assert.Equal("Work|Work|1|flat|shown; 2024|2024|1|flat|shown", Show(FolderTree.Subfolders(rows, [], OtherRoot, "")));
+    }
+
+    [Fact]
     public void AnotherFoldersHiddenFolders_AreNotListedHere()
     {
         var rows = Rows("a.jpg");

@@ -96,8 +96,8 @@ library is open):
 - Your first library, **Default**, lives in `%LOCALAPPDATA%\Aperture`.
 - **New library…** (the **+** beside LIBRARIES) asks for a name and a folder of photos and
   videos to put in it, and keeps the new library's own files in
-  `%LOCALAPPDATA%\Aperture Libraries\<name>`. **Open library…** adds a library that already
-  exists, wherever it is.
+  `%LOCALAPPDATA%\Aperture Libraries\<name>` (or `<name> (2)`, and so on, if that folder is
+  taken). **Open library…** adds a library that already exists, wherever it is.
 - The list of your libraries is `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`.
 
 **Delete library files** (right-click a library you aren't in) deletes only Aperture's own files

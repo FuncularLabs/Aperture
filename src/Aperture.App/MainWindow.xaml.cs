@@ -661,8 +661,10 @@ public partial class MainWindow : Window
             return;
         var folders = ((string[])e.Data.GetData(DataFormats.FileDrop))
             .Where(System.IO.Directory.Exists).ToArray();
+        // Once the drop has returned: adding asks about subfolders, and a dialog shown inside the drop would keep the
+        // window the folders were dragged from (Explorer) waiting until it was answered.
         if (folders.Length > 0)
-            ViewModel?.AddFolders(folders);
+            Dispatcher.BeginInvoke(new Action(() => ViewModel?.AddFolders(folders)));
     }
 
     private void OnQuickLookBackgroundClick(object sender, MouseButtonEventArgs e)
