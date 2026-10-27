@@ -318,13 +318,47 @@ public class MainWindowShownTests
             var (requested, applied) = (vm.BuildGeneration, 0);
             vm.ViewApplied += () => applied++;
 
-            window.Height += 100; // taller than the years (by 20 px): the scrollbar goes; the window stays within a 768-high desktop
+            window.Height += 90; // taller than the years (by 10 px): the scrollbar goes; the window stays within a 768-high desktop
             Settle();
             Sta.PumpUntil(() => false, TimeSpan.FromSeconds(1));
 
             Assert.False(ScrollbarShown(window));
             Assert.Equal(5, vm.TilesPerRow);
             Assert.True(requested == vm.BuildGeneration && applied == 0, $"builds asked for: {vm.BuildGeneration - requested}, applied: {applied}");
+        });
+    }
+
+    [Fact]
+    public void ANarrowerTallerGrid_InOneLayout_IsReported()
+    {
+        // Round 26's probe: in one layout pass the grid narrows by a scrollbar's width (the folder pane widens) as the
+        // window grows past the years, so the scrollbar goes and the viewport keeps its width — only the grid's own
+        // SizeChanged tells the view model: five across becomes four, by month.
+        WithWindow(QuarterYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var bar = SystemParameters.VerticalScrollBarWidth;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth - (ScrollbarShown(window) ? bar : 0);
+            void Settle() => Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            SizeTheViewport(window, 5 * slot + 5 + bar, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 2, TimeSpan.FromSeconds(10)));
+            Settle();
+            window.Height += GridScroll(window).ExtentHeight - 80 - GridScroll(window).ViewportHeight;
+            Settle();
+            Assert.True(ScrollbarShown(window));
+            Assert.Equal(5, vm.TilesPerRow);
+            var viewport = GridScroll(window).ViewportWidth;
+            var nav = (ColumnDefinition)window.FindName("NavColumn");
+
+            nav.Width = new GridLength(nav.ActualWidth + bar); // put off to the next layout…
+            window.Height += 90;                               // …which this one does: both in one pass
+
+            Assert.False(ScrollbarShown(window));                     // as that pass left it (the months it regroups
+            Assert.Equal(viewport, GridScroll(window).ViewportWidth); // to are taller): no viewport change to report it
+            Assert.Equal(4, vm.TilesPerRow);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 6, TimeSpan.FromSeconds(5)), $"{Sections(vm).Count} sections");
+            Settle();
+            Assert.Equal(4, vm.TilesPerRow); // and it stays: by month, with the scrollbar back or not
         });
     }
 

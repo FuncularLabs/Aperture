@@ -41,7 +41,7 @@ public sealed class SectionVm : ObservableObject
 
     /// <summary>
     /// Whether the user has expanded or collapsed this section — here, or in the section it was carried on from —
-    /// rather than leaving it as a build set it. Only toggled sections are remembered for other places and groupings.
+    /// rather than leaving it as a build set it. Only toggled sections are remembered for other views and groupings.
     /// </summary>
     public bool Toggled { get; private set; }
 

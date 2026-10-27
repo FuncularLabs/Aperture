@@ -960,6 +960,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             _library.Settings.Update(s => s.IncludeVideos = value);
             OnPropertyChanged();
+            _shownChanges++;
             foreach (var rootVm in Roots.ToList())
                 _ = IndexRootAsync(rootVm.Model, watchAfter: false);
         }
@@ -1903,8 +1904,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string? _viewShows; // what the view that's up shows (ViewKey); null until one is up
 
     // What a view shows, for carrying its sections' states on to the next build: its folder (or search) and search text,
-    // and the Pictures/Videos filter. Not LocationKey, which keys scroll memory by place alone.
-    private string ViewKey => $"{LocationKey}|{_searchText.Trim()}|{_showImages}|{_showVideos}";
+    // the Pictures/Videos filter, and which folders and files the library shows (a count each such change of the user's
+    // adds to). Every change the user makes to those is another view; photos arriving or a sort change isn't. Not
+    // LocationKey, which keys scroll memory by place alone. Internal for tests.
+    internal string ViewKey => $"{LocationKey}|{_searchText.Trim()}|{_showImages}|{_showVideos}|{_shownChanges}";
+
+    // The user changed which folders or files the library shows: a folder added, removed, ticked or unticked, its
+    // subfolders taken in or left out, a subfolder shown or hidden, videos indexed or not.
+    private int _shownChanges;
 
     /// <summary>
     /// How many tiles fit across the width the view reports, at the current zoom (each tile's slot is its size plus 20 px
@@ -2013,6 +2020,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_closing || additions.Count == 0)
             return;
+        _shownChanges++;
         foreach (var folder in additions)
             AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
         // Folders are in: stop offering Pictures etc. Only now, so an add that fails leaves the offer for next time.
@@ -2049,6 +2057,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (rootVm is null)
             return;
         var wasCurrent = _location.RootId == rootVm.Id;
+        _shownChanges++;
         _library.RemoveRoot(rootVm.Id);
         Roots.Remove(rootVm);
         if (wasCurrent)
@@ -2061,6 +2070,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OnRootIncludedChanged(RootVm rootVm, bool included)
     {
+        _shownChanges++;
         _library.SetIncluded(rootVm.Id, included);
         LoadRows();
         RequestBuildView();
@@ -2073,6 +2083,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void OnRootRecursiveChanged(RootVm rootVm, bool recursive)
     {
+        _shownChanges++;
         _library.SetRecursive(rootVm.Id, recursive);
         _library.StopWatching(rootVm.Id);
         _ = IndexRootAsync(rootVm.Model, watchAfter: true);
@@ -2230,8 +2241,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             mode = groupings.ChooseMode(input.TilesPerRow);
             // The view as it is — showing the same thing in the same grouping (photos streaming in, a sort change):
             // every section as it is now, so one the user is looking at stays open as photos arrive above it. Anything
-            // else (another folder, another search, another Pictures/Videos filter, another grouping): only the user's
-            // toggles, as remembered for that grouping.
+            // else (another folder, another search, another Pictures/Videos filter, another choice of folders or files,
+            // another grouping): only the user's toggles, as remembered for that grouping.
             var carried = mode == input.View.Mode && input.View.Shows == input.Shows
                 ? input.View.Sections
                 : input.Toggles.For(mode.Value).ToDictionary(kv => kv.Key, kv => (Expanded: kv.Value, Toggled: true));
@@ -2409,6 +2420,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void OnFolderShownChanged(FolderNodeVm node, bool shown)
     {
+        _shownChanges++;
         _library.SetFolderShown(node.RootId, node.RelDir, shown);
         _ui.Post(_ =>
         {

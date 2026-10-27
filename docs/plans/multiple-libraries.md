@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 25, review round 25 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 26, review round 26 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -850,7 +850,7 @@ Everything's count appears once the library is read.
 
 ### Revision 25 — what changed after review round 25
 
-Two non-author lenses over `3cdb56c..7c64c90`: no High or Medium; two Lows, both found by both lenses, and nits. Every
+Two non-author lenses over `3cdb56c..7c64c90`: no High or Medium; three Lows, all found by both lenses, and nits. Every
 round-24 finding verified dispositioned; R24-2 to R24-7 resolved; R24-1 partial (below).
 
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
@@ -875,7 +875,35 @@ Corrected record: only round 22's fc181dd says `Value` and `Maximum` both bind t
 of revision 24 can't run (both reports come after layout) — dropped.
 
 Live check (Paul), in addition: search for something, then for something narrower showing only an older year — it
-opens; collapse a year, go to two other folders in turn — it stays collapsed in each.
+opens; collapse a year, go to two other folders that have that year in turn — it stays collapsed in each.
+
+### Revision 26 — what changed after review round 26
+
+One non-author lens over `7c64c90..391784e` (behaviour and proof): no High or Medium; four Lows, seven nits. R25-2
+resolved; R25-1 and R25-3 partial (below); every R25 mutation re-run and killed at its assertion.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R26-1 Low | The restored `SizeChanged` report had no test: in one layout the grid can narrow by a scrollbar's width as the scrollbar goes, leaving the viewport's width as it was (no `ScrollChanged`). | TEST-GAP | The grid's `SizeChanged` is now the only report (the `ScrollChanged` one was an equivalent mutant: the scroll viewer's width changes only with the grid's, and is laid out when `SizeChanged` comes) | `MainWindowShownTests.ANarrowerTallerGrid_InOneLayout_IsReported` (the lens's probe) | no `SizeChanged` report; it reads the wrap panel |
+| R26-2 Low | `ViewKey`'s Videos half was untested (only Pictures was). | TEST-GAP | — | `GridGroupingTests.EveryChangeTheUserMakesToWhatsShown_IsAnotherView` | the Videos filter not in the key |
+| R26-3 Low | The folders' checkboxes changed what the view shows without changing `ViewKey`: unticking a folder left Everything's only section collapsed by default. Enumerating the siblings: a folder added or removed, its subfolders taken in or left out, a subfolder hidden, videos indexed or not. | AC-GAP | `ViewKey` takes a count each of those user changes adds to (`_shownChanges`): every change the user makes to what's shown is another view; photos arriving and a sort change aren't | `GridGroupingTests.UntickingAFolder_GetsOnlyTheUsersToggles` (the lens's probe), `EveryChangeTheUserMakesToWhatsShown_IsAnotherView` (each change, and a sort change that isn't one) | each of the six changes not counted |
+| R26-4 Low | Revision 25's race write-up understated it: the failing read (`HiddenFolderStore.GetAll`) is this branch's, and it comes about a second after the union read — on every library switch, while the window takes input — so this branch widened the window; and the deferred thumbnail prune (`LibraryService.PruneThumbnailCache` → `ItemStore.TotalCount` on the thread pool, a minute in) is a second off-thread user of the provider (in 0.8.9 too): a tag save under way then can end Aperture as well (read in the code, not run). | PLAN-GAP | Record corrected (below) | — | — |
+
+The provider race, corrected, for Paul: the library's one FunkyORM provider is shared between threads, and a transaction
+opened on it on the UI thread (removing a folder, saving tags) is seen by an off-thread read — the startup read (two
+reads on this branch, the second about a second after the first, on every switch) or the deferred prune — which then
+throws, ending Aperture. The mechanism is in 0.8.9; this branch widened the startup window. One lock around the
+provider covers both readers (a reader's own provider for the startup read alone would miss the prune). Also in that
+window, from 0.8.9: the startup read assigns its rows before checking it's still current, so a folder removed during it
+can come back in the view (and its count) until the next data change. Both for Paul to schedule.
+
+G5, amended again: … another folder, search, Pictures/Videos filter, choice of folders or files, or grouping gets only
+the user's toggles. Nits taken: the width-report comments; `SectionVm.Toggled`'s summary ("other views"); the
+scrollbar-away test's window within 768 px (it reached 771); revision 25's header (three Lows); the live check names
+folders that have the year. Not taken: "Beach" and "beach" are different views (as `CommitSearch` already treats them).
+
+Live check (Paul), in addition: untick one of two folders on Everything — an older year that was collapsed only by
+default, now the newest, opens.
 
 ## Out of scope (future)
 

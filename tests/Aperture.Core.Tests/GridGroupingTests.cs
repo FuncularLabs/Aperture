@@ -528,4 +528,76 @@ public class GridGroupingTests
             Assert.False(Section(vm, "2019").IsExpanded, "the user's toggle stopped at the first folder it was carried to");
         });
     }
+
+    // --- Round 26: the folders' checkboxes change what's shown too ---
+
+    [Fact]
+    public void UntickingAFolder_GetsOnlyTheUsersToggles()
+    {
+        // The reviewer's probe: Everything over N (70 photos, 2020) and O (5, 2019, collapsed by default); untick N and
+        // 2019, now the newest, opens.
+        WithFolders([("N", [.. Enumerable.Repeat(In2020, 70)]), ("O", [.. Enumerable.Repeat(In2019, 5)])], (vm, _, _) =>
+        {
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+
+            vm.Roots.Single(r => r.Alias == "N").IsIncluded = false;
+            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "the default-collapsed 2019 was carried into Everything without N");
+        });
+    }
+
+    [Fact]
+    public void EveryChangeTheUserMakesToWhatsShown_IsAnotherView()
+    {
+        // What the carry compares: each of these is another view (photos arriving, or a sort change, isn't).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            using var more = new TempDir();
+            Photos(photos.Path, [In2020]);
+            Photos(Path.Combine(photos.Path, "Trip"), [In2019]);
+            Photos(more.Path, [In2019]);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && vm.FolderTree.Count == 1, Wait));
+                var root = vm.Roots.Single();
+                var node = vm.FolderTree.Single();
+                node.IsExpanded = true; // its subfolders load
+                var trip = node.Children.Single(c => c.Name == "Trip");
+
+                void IsAnotherView(string what, Action change)
+                {
+                    var before = vm.ViewKey;
+                    change();
+                    Assert.True(before != vm.ViewKey, $"{what} kept the view");
+                }
+                var kept = vm.ViewKey;
+                vm.SortPreset = vm.SortLabels.First(label => label != vm.SortPreset); // a sort change keeps the view
+                Assert.Equal(kept, vm.ViewKey);
+
+                IsAnotherView("hiding videos", () => vm.ShowVideos = false);
+                IsAnotherView("hiding pictures", () => vm.ShowImages = false);
+                IsAnotherView("hiding a subfolder", () => trip.IsShown = false);
+                IsAnotherView("leaving subfolders out", () => root.IsRecursive = false);
+                IsAnotherView("not indexing videos", () => vm.IncludeVideos = false);
+                IsAnotherView("adding a folder", () => vm.AddFolder(more.Path, includeSubfolders: true));
+                IsAnotherView("unticking a folder", () => root.IsIncluded = false);
+                IsAnotherView("removing a folder", () => vm.RemoveRootCommand.Execute(vm.Roots.Single(r => r.Path == more.Path)));
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
 }
