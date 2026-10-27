@@ -19,6 +19,26 @@
         <!-- Carries the view model into ContextMenu popups (which can't see the Window via RelativeSource). -->
         <mvvm:BindingProxy x:Key="Vm" Data="{Binding}" />
 
+        <!-- The indexing card's spinner (a Path with a RotateTransform): it turns while it's shown, and only then — an
+             animation started once runs on while hidden, keeping an idle Aperture busy. -->
+        <Style x:Key="IndexingSpinner" TargetType="Path">
+            <Style.Triggers>
+                <Trigger Property="IsVisible" Value="True">
+                    <Trigger.EnterActions>
+                        <BeginStoryboard x:Name="Spin">
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 From="0" To="360" Duration="0:0:1.1" RepeatBehavior="Forever" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </Trigger.EnterActions>
+                    <Trigger.ExitActions>
+                        <RemoveStoryboard BeginStoryboardName="Spin" />
+                    </Trigger.ExitActions>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Segoe MDL2 icon for select context-menu entries (like VS Solution Explorer decorates some, not all).
              Foreground via DynamicResource: this style is declared before the Ink brush, and StaticResource
              can't forward-reference (it would resolve to UnsetValue and crash the menu on open). -->
@@ -1145,23 +1165,14 @@
                     <DropShadowEffect Color="#000000" BlurRadius="14" ShadowDepth="2" Opacity="0.45" />
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
-                    <!-- Spinner: an arc that turns for as long as the card is shown -->
-                    <Path Width="26" Height="26" Stretch="None" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5"
+                    <!-- Spinner: an arc that turns while the card is shown (IndexingSpinner) -->
+                    <Path Style="{StaticResource IndexingSpinner}" Width="26" Height="26" Stretch="None"
+                          VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5"
                           Data="M 13,2 A 11,11 0 1 1 2,13" Stroke="{StaticResource Accent}" StrokeThickness="3"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round">
                         <Path.RenderTransform>
                             <RotateTransform />
                         </Path.RenderTransform>
-                        <Path.Triggers>
-                            <EventTrigger RoutedEvent="Loaded">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                         From="0" To="360" Duration="0:0:1.1" RepeatBehavior="Forever" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                        </Path.Triggers>
                     </Path>
                     <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="Indexing" Foreground="{StaticResource CanvasInk}" FontSize="14" FontWeight="SemiBold" />
@@ -1169,7 +1180,7 @@
                                    Opacity="0.85" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" />
                         <ProgressBar Height="4" MinWidth="240" Foreground="{StaticResource Accent}" Background="#3A3E46"
                                      BorderThickness="0"
-                                     Value="{Binding IndexValue}" Maximum="{Binding IndexMax}"
+                                     Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"
                                      IsIndeterminate="{Binding IndexIndeterminate}" />
                     </StackPanel>
                 </StackPanel>

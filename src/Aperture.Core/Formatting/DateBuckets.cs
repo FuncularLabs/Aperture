@@ -29,53 +29,13 @@ public static class DateBuckets
     /// </summary>
     public const double MinRowFill = 0.5;
 
-    // Coarsest first, so ties favour fewer, broader sections.
-    private static readonly BucketMode[] CoarseToFine = [BucketMode.Year, BucketMode.Month, BucketMode.Week, BucketMode.Day];
-
     /// <summary>
     /// Picks the granularity for <paramref name="dates"/> in a grid <paramref name="tilesPerRow"/> tiles across: among those
     /// whose sections fill at least <see cref="MinRowFill"/> of their rows on average, the one whose section count is
     /// nearest <see cref="TargetSections"/>; if none does, the one that fills its rows best. Coarser wins a tie.
     /// </summary>
-    public static BucketMode ChooseMode(IReadOnlyList<DateTime> dates, int tilesPerRow)
-    {
-        if (dates.Count == 0)
-            return BucketMode.Year;
-        var across = Math.Max(1, tilesPerRow);
-
-        BucketMode? nearest = null;
-        var nearestDistance = int.MaxValue;
-        var fullest = BucketMode.Year;
-        var fullestFill = -1.0;
-        foreach (var mode in CoarseToFine)
-        {
-            var sizes = SectionSizes(dates, mode);
-            var fill = sizes.Average(n => n / (Math.Ceiling(n / (double)across) * across));
-            if (fill > fullestFill)
-            {
-                fullestFill = fill;
-                fullest = mode;
-            }
-            var distance = Math.Abs(sizes.Count - TargetSections);
-            if (fill >= MinRowFill && distance < nearestDistance)
-            {
-                nearestDistance = distance;
-                nearest = mode;
-            }
-        }
-        return nearest ?? fullest;
-    }
-
-    private static List<int> SectionSizes(IReadOnlyList<DateTime> dates, BucketMode mode)
-    {
-        var sizes = new Dictionary<long, int>();
-        foreach (var date in dates)
-        {
-            var key = Bucket(date, mode).Key;
-            sizes[key] = sizes.GetValueOrDefault(key) + 1;
-        }
-        return [.. sizes.Values];
-    }
+    public static BucketMode ChooseMode(IReadOnlyList<DateTime> dates, int tilesPerRow) =>
+        DateGroupings.Of(dates).ChooseMode(tilesPerRow);
 
     /// <summary>Maps a date to its bucket. Keys increase with time so newest sorts first when descending.</summary>
     public static DateBucket Bucket(DateTime date, BucketMode mode)
@@ -101,5 +61,67 @@ public static class DateBuckets
     {
         var diff = ((int)date.DayOfWeek - (int)DayOfWeek.Monday + 7) % 7;
         return date.Date.AddDays(-diff);
+    }
+}
+
+/// <summary>
+/// The sizes of the sections each granularity makes of a set of dates — all <see cref="DateBuckets.ChooseMode"/> weighs, so
+/// a grid that changes width can choose again without the dates, and leave its view alone when the choice stands.
+/// </summary>
+public sealed class DateGroupings
+{
+    // Coarsest first, so ties favour fewer, broader sections.
+    private static readonly BucketMode[] CoarseToFine = [BucketMode.Year, BucketMode.Month, BucketMode.Week, BucketMode.Day];
+
+    private readonly Dictionary<BucketMode, int[]> _sizes;
+
+    private DateGroupings(Dictionary<BucketMode, int[]> sizes) => _sizes = sizes;
+
+    /// <summary>Measures how <paramref name="dates"/> group by each granularity.</summary>
+    public static DateGroupings Of(IReadOnlyList<DateTime> dates) =>
+        new(CoarseToFine.ToDictionary(mode => mode, mode => SectionSizes(dates, mode)));
+
+    /// <summary>How many sections <paramref name="mode"/> makes of the dates.</summary>
+    public int SectionCount(BucketMode mode) => _sizes[mode].Length;
+
+    /// <summary>The granularity for a grid <paramref name="tilesPerRow"/> tiles across (see <see cref="DateBuckets.ChooseMode"/>).</summary>
+    public BucketMode ChooseMode(int tilesPerRow)
+    {
+        if (_sizes[BucketMode.Year].Length == 0)
+            return BucketMode.Year; // no dates
+        var across = Math.Max(1, tilesPerRow);
+
+        BucketMode? nearest = null;
+        var nearestDistance = int.MaxValue;
+        var fullest = BucketMode.Year;
+        var fullestFill = -1.0;
+        foreach (var mode in CoarseToFine)
+        {
+            var sizes = _sizes[mode];
+            var fill = sizes.Average(n => n / (Math.Ceiling(n / (double)across) * across));
+            if (fill > fullestFill)
+            {
+                fullestFill = fill;
+                fullest = mode;
+            }
+            var distance = Math.Abs(sizes.Length - DateBuckets.TargetSections);
+            if (fill >= DateBuckets.MinRowFill && distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearest = mode;
+            }
+        }
+        return nearest ?? fullest;
+    }
+
+    private static int[] SectionSizes(IReadOnlyList<DateTime> dates, BucketMode mode)
+    {
+        var sizes = new Dictionary<long, int>();
+        foreach (var date in dates)
+        {
+            var key = DateBuckets.Bucket(date, mode).Key;
+            sizes[key] = sizes.GetValueOrDefault(key) + 1;
+        }
+        return [.. sizes.Values];
     }
 }

@@ -476,7 +476,9 @@ public class MainWindowTemplateTests
             var window = new MainWindow();
 
             var card = Assert.IsAssignableFrom<FrameworkElement>(window.FindName("IndexingCard"));
-            Assert.Equal("IsIndexing", BindingOperations.GetBinding(card, UIElement.VisibilityProperty)?.Path.Path);
+            var shown = BindingOperations.GetBinding(card, UIElement.VisibilityProperty);
+            Assert.Equal("IsIndexing", shown?.Path.Path);
+            Assert.Same(window.FindResource("BoolToVis"), shown!.Converter); // shown while indexing, not the other way round
             Assert.Equal(VerticalAlignment.Bottom, card.VerticalAlignment); // a card over the grid, not a sheet across it
             var parts = LogicalDescendants(card).ToList();
             Assert.Contains(parts.OfType<TextBlock>(), t => BindingOperations.GetBinding(t, TextBlock.TextProperty)?.Path.Path == "IndexingText");

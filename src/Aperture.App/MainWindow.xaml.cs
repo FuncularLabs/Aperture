@@ -18,8 +18,14 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
-        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode).
+        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid
+        // is resized, and when its scrollbar comes or goes, which narrows or widens the tiles' room without a resize.
         ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(WrapViewportWidth());
+        ItemsList.AddHandler(System.Windows.Controls.ScrollViewer.ScrollChangedEvent, new System.Windows.Controls.ScrollChangedEventHandler((_, e) =>
+        {
+            if (e.ViewportWidthChange != 0)
+                ViewModel?.SetGridWidth(WrapViewportWidth());
+        }));
     }
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;

@@ -37,6 +37,41 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void ItemCount_OfNone_IsReadBackAsNone_NotAsUnknown()
+    {
+        using var dir = new TempDir();
+        var registry = new CatalogRegistry(RegistryPath(dir));
+        var work = registry.Add("Work", dir.Combine("work"));
+
+        Assert.True(registry.SetItemCount(work.Id, 0));
+
+        Assert.Equal(0, new CatalogRegistry(RegistryPath(dir)).List().Single().ItemCount);
+    }
+
+    [Fact]
+    public void SetItemCount_WhenTheListCannotBeSaved_ReturnsFalse_AndKeepsTheLastCount()
+    {
+        using var dir = new TempDir();
+        var path = RegistryPath(dir);
+        var registry = new CatalogRegistry(path);
+        var work = registry.Add("Work", dir.Combine("work"));
+        registry.SetItemCount(work.Id, 12);
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.False(registry.SetItemCount(work.Id, 2445));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.Equal(12, registry.List().Single().ItemCount);
+        Assert.Equal(12, new CatalogRegistry(path).List().Single().ItemCount);
+    }
+
+    [Fact]
     public void ItemCount_SurvivesAnotherWindowsChange()
     {
         using var dir = new TempDir();

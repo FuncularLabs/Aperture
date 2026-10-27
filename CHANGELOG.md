@@ -26,7 +26,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - Adding folders — with Add folder, by dropping them on the window, or from the first-run
   panel — asks whether to include their subfolders (Yes unless you say otherwise).
 - While Aperture indexes, a card at the bottom of the grid shows what it's indexing and how far it
-  has got, and a folder's count in the tree climbs as its photos are added.
+  has got, and a top-level folder's count in the tree climbs as its photos are added.
 - If the library you used last can't be opened (for example, it's on a drive that isn't
   connected yet), Aperture opens another one for now — Default, if it's there — and tells you
   why, instead of failing to start. It tries your library again at the next launch.
@@ -44,7 +44,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   back and forth no longer gets slower each time.
 - Date sections (day, week, month or year) are chosen to suit the window as well as the photos:
   sparse photos in a wide window are grouped by longer spans, so sections fill their rows instead
-  of leaving one photo a row. Resizing the window or zooming can change the grouping.
+  of leaving one photo a row. Resizing the window or zooming can change the grouping; a section you
+  collapsed stays collapsed when the grouping changes and changes back.
 
 ### Fixed
 - **Everything** in a library with a single folder showed only the photos directly in that folder,

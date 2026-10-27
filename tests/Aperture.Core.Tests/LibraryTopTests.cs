@@ -81,4 +81,76 @@ public class LibraryTopTests
             }
         });
     }
+
+    [Fact]
+    public void AFoldersCount_IsReadAtMostOnceAnInterval()
+    {
+        // Each read counts the whole folder, so one per saved batch would add up on a big folder (round 22).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            for (var i = 0; i < 600; i++) // batches saved (and reported) at 200, 400 and 600
+                TestImages.Write(Path.Combine(photos.Path, $"p{i:000}.jpg"), 32, 24);
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library))
+            {
+                StartupReconcileDelay = TimeSpan.FromSeconds(30),
+                IndexCountInterval = TimeSpan.FromHours(1),
+            };
+            try
+            {
+                vm.AddFolder(photos.Path, includeSubfolders: true);
+                var node = Assert.Single(vm.FolderTree);
+                var seenWhileIndexing = new List<int>();
+                node.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
+                        seenWhileIndexing.Add(node.Count);
+                };
+
+                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));
+
+                Assert.Contains(200, seenWhileIndexing); // the first report is read at once
+                Assert.DoesNotContain(400, seenWhileIndexing); // the next, within the interval, isn't
+                Assert.Equal(600, Assert.Single(vm.FolderTree).Count); // the end is
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void ALibrarysCount_IsUnknownUntilItsItemsAreRead()
+    {
+        // The library list records the count of a library being left: one left before its items were read must keep
+        // the count it had, not get 0 (round 22).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            foreach (var file in new[] { "a.jpg", "b.jpg", "c.jpg" })
+                TestImages.Write(Path.Combine(photos.Path, file), 64, 48);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var vm = new MainViewModel(library, new ThumbnailService(library));
+            try
+            {
+                Assert.Equal(0, vm.TotalItemCount);
+                Assert.Null(vm.LoadedItemCount); // the read's result waits for this thread's dispatcher
+
+                Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3, TimeSpan.FromSeconds(10)), $"{vm.LoadedItemCount}");
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
 }

@@ -54,7 +54,10 @@ public sealed class FolderNodeVm : ObservableObject
     public bool IsRoot { get; }
     public bool HasChildren { get; }
 
-    /// <summary>How many items the folder holds (all levels). Rises while the folder is being indexed.</summary>
+    /// <summary>
+    /// How many items the folder holds (all levels). A top-level folder's rises while it's indexed; a subfolder's is
+    /// counted when the tree is built.
+    /// </summary>
     public int Count
     {
         get => _count;

@@ -610,6 +610,18 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task RecordItemCount_OfALibraryNotYetRead_KeepsItsLastCount()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        service.RecordItemCount(1234);
+
+        service.RecordItemCount(null); // left (or closed) before its items were read: no count yet, which isn't none
+
+        Assert.Equal(1234, new CatalogRegistry(RegistryPath(outer)).List().Single(c => c.Id == service.ActiveCatalog!.Id).ItemCount);
+    }
+
+    [Fact]
     public async Task CreateLibraryAsync_CreatesItsOwnFolder_RegistersIt_AndSwitches()
     {
         using var outer = new TempDir();

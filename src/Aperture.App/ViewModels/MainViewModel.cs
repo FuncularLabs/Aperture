@@ -175,6 +175,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         try
         {
             (_allRows, _hiddenFolders) = await Task.Run(_library.GetContents);
+            _rowsRead = true;
         }
         catch (Exception) when (_closing)
         {
@@ -746,6 +747,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Item count across all included folders — the badge on the "Everything" library node.</summary>
     public int TotalItemCount => _allRows.Count;
+
+    private bool _rowsRead; // until the library's items are first read, TotalItemCount is 0 whatever the library holds
+
+    /// <summary>
+    /// <see cref="TotalItemCount"/> once the library's items have been read; <c>null</c> before then, when the library's
+    /// count isn't known (the library list keeps the one it had).
+    /// </summary>
+    public int? LoadedItemCount => _rowsRead ? _allRows.Count : null;
 
     /// <summary>The grouped, sorted, filtered view the grid binds to.</summary>
     public ICollectionView? ItemsView => _view.View;
@@ -1883,7 +1892,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private double _gridWidth;
-    private bool _viewApplied; // a view is up; until then a new width just waits for the first build to pick it up
+
+    // The grouping of the view that's up, and the section sizes it was chosen from: null until a view is up, and while the
+    // view has no date sections. Enough to tell whether another width groups the dates differently.
+    private BucketMode? _mode;
+    private DateGroupings? _groupings;
+
+    private SectionExpansion _expansion = SectionExpansion.None; // the user's section toggles, per grouping
 
     /// <summary>
     /// How many tiles fit across the grid at the current zoom (each tile's slot is its size plus 20 px of margin, as the
@@ -1891,7 +1906,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public int TilesPerRow => _gridWidth <= 0 ? 1 : Math.Max(1, (int)Math.Floor(_gridWidth / (TileSize + 20)));
 
-    /// <summary>The view reports the width its tiles wrap in; a change in how many fit across regroups the dates.</summary>
+    /// <summary>The view reports the width its tiles wrap in; if that groups the dates differently, they're regrouped.</summary>
     public void SetGridWidth(double width)
     {
         var across = TilesPerRow;
@@ -1899,13 +1914,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RegroupIfTheRowChanged(across);
     }
 
-    // Only once a view is up: a request before then would supersede the startup build (and its folder tree), and that
-    // build picks up the width anyway — or, if it was already computing, regroups as it's applied (ApplyView).
+    // Rebuilds only when the grouping changes: a rebuild resets the keyboard cursor and the selection and shows the
+    // spinner, so a resize or zoom that keeps the grouping leaves the view alone. And only once a view is up (_groupings is
+    // set as it's applied): a request before then would supersede the startup build (and its folder tree), and that build
+    // picks up the width anyway — or, if it was already computing, regroups as it's applied (ApplyView).
     private void RegroupIfTheRowChanged(int across)
     {
-        if (_viewApplied && TilesPerRow != across && GroupByDate && !_closing)
+        if (TilesPerRow != across && !_closing && _groupings is { } groupings && groupings.ChooseMode(TilesPerRow) != _mode)
             RequestBuildView();
     }
+
+    // The section toggles to build with: those remembered for each grouping, with the view's own as they are now.
+    private SectionExpansion CurrentExpansion() => _expansion = _mode is { } mode
+        ? _expansion.With(mode, _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
+        : _expansion;
 
     // --- Window layout persistence ------------------------------------------
 
@@ -2060,6 +2082,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void LoadRows()
     {
         (_allRows, _hiddenFolders) = _library.GetContents();
+        _rowsRead = true;
         OnPropertyChanged(nameof(TotalItemCount));
     }
 
@@ -2128,11 +2151,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private sealed record BuildInputs(
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
-        Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion,
+        Dictionary<string, Annotation> Annotations, SectionExpansion Expansion,
         bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow);
 
+    // Mode and Groupings: the date grouping chosen, and the section sizes it was chosen from (null without date sections).
     private sealed record ViewBuild(
-        List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections, int TilesPerRow);
+        List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections,
+        BucketMode? Mode, DateGroupings? Groupings);
 
     /// <summary>Snapshots everything the compute needs — must run on the UI thread.</summary>
     private BuildInputs CaptureBuildInputs() => new(
@@ -2143,7 +2168,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _location, // the top of the library is everything in it, however many folders it has
         GroupByDate,
         _annotations,
-        _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded),
+        CurrentExpansion(),
         _showImages,
         _showVideos,
         _tilePool,
@@ -2175,9 +2200,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var useSections = input.GroupByDate && input.Sort.Grouped && media.Count > 0;
         var sections = new Dictionary<long, SectionVm>();
         List<TileVm> tiles;
+        BucketMode? mode = null;
+        DateGroupings? groupings = null;
         if (useSections)
         {
-            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections, input.Pool, input.TilesPerRow);
+            groupings = DateGroupings.Of(media.Select(r => r.Item.BestDate).ToList());
+            mode = groupings.ChooseMode(input.TilesPerRow);
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion.For(mode.Value), sections, input.Pool, mode.Value);
         }
         else
         {
@@ -2185,7 +2214,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             tiles = media.Select(r => GetOrReuseTile(input.Pool, r, input.Format, Ann(r))).ToList();
         }
 
-        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, input.TilesPerRow);
+        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, mode, groupings);
     }
 
     /// <summary>Identifies the current view (folder or search) for per-location scroll memory.</summary>
@@ -2215,6 +2244,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _sections.Clear();
         foreach (var (key, section) in build.Sections)
             _sections[key] = section;
+        _mode = build.Mode;
+        _groupings = build.Groupings;
 
         // Bind each committed tile to its committed section here, on the UI thread — never off-thread,
         // where a reused tile could be shared with a superseded concurrent build and race.
@@ -2245,10 +2276,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         ViewApplied?.Invoke();
 
-        // Built for another width (the grid was resized or zoomed while this was computed, or before the first view
-        // was up): group again for this one.
-        _viewApplied = true;
-        if (GroupByDate && build.TilesPerRow != TilesPerRow && !_closing)
+        // Built for another width (the grid was resized or zoomed while this was computed, or before the first view was
+        // up) that groups the dates differently: group again for this one.
+        if (build.Groupings is { } groupings && groupings.ChooseMode(TilesPerRow) != build.Mode && !_closing)
             RequestBuildView();
     }
 
@@ -2408,24 +2438,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         node.IsSelected = true;
     }
 
-    /// <summary>Resolves single-root "home" to that root's top level.</summary>
-    /// <summary>All rows under the current location, recursively (for search).</summary>
-    private List<LibraryRow> ScopeRecursive(List<LibraryRow> rows)
-    {
-        var loc = _location;
-        if (loc.RootId is null)
-            return rows;
-        var rootId = loc.RootId.Value;
-        var relDir = loc.RelDir;
-        return rows.Where(r => r.Item.RootId == rootId && IsUnder(GetDir(r.Item.RelPath), relDir)).ToList();
-    }
-
     private static string GetDir(string relPath) => Path.GetDirectoryName(relPath) ?? "";
-
-    private static bool IsUnder(string dir, string relDir) =>
-        relDir.Length == 0
-        || dir.Equals(relDir, StringComparison.OrdinalIgnoreCase)
-        || dir.StartsWith(relDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private void BuildBreadcrumb()
     {
@@ -2464,18 +2477,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             : new TileVm(r, Thumbnails, format, ann);
 
     /// <summary>
-    /// Pure sectioned build: creates fresh <see cref="SectionVm"/>s (safe to build off
+    /// Pure sectioned build, grouped by <paramref name="mode"/>: creates fresh <see cref="SectionVm"/>s (safe to build off
     /// the UI thread since they aren't bound yet), restoring prior expansion from
-    /// <paramref name="expansion"/> and defaulting genuinely-new sections to expanded
+    /// <paramref name="expansion"/> (that grouping's) and defaulting genuinely-new sections to expanded
     /// for roughly the newest two screens. Populates <paramref name="sections"/>.
     /// </summary>
     private List<TileVm> BuildSectionedPure(
         List<LibraryRow> rows, string format, IReadOnlyList<Aperture.Core.Settings.SortLevel> levels,
-        Func<LibraryRow, Annotation> ann, Dictionary<long, bool> expansion, Dictionary<long, SectionVm> sections,
-        Dictionary<long, TileVm> pool, int tilesPerRow)
+        Func<LibraryRow, Annotation> ann, IReadOnlyDictionary<long, bool> expansion, Dictionary<long, SectionVm> sections,
+        Dictionary<long, TileVm> pool, BucketMode mode)
     {
-        var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList(), tilesPerRow);
-
         var bucketByItem = new Dictionary<long, DateBucket>(rows.Count);
         foreach (var r in rows)
             bucketByItem[r.Item.Id] = DateBuckets.Bucket(r.Item.BestDate, mode);
@@ -2757,17 +2768,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IndexMax = p.Total;
             IndexValue = p.Processed;
         }
+        else
+        {
+            IndexIndeterminate = true;
+        }
 
-        // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done.
-        if (p.Phase == IndexPhase.Indexing)
+        // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done. At most
+        // once an interval, though: each read counts the whole folder, and a run that changes nothing reports its batches
+        // all at once.
+        if (p.Phase == IndexPhase.Indexing && CountIsDue(rootId))
         {
             rootVm.Count = _library.CountForRoot(rootId);
             if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
                 node.Count = TreeCount(rootVm);
-        }
-        else
-        {
-            IndexIndeterminate = true;
         }
         UpdateIndexingText();
 
@@ -2782,6 +2795,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 BuildViewImmediate();
             }
         }
+    }
+
+    /// <summary>
+    /// How often, at most, a folder's count is read again while it's indexed (the count at the end is always read).
+    /// Settable for tests only.
+    /// </summary>
+    internal TimeSpan IndexCountInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    private readonly Dictionary<long, long> _countReadAt = []; // root id → when its count was last read while indexing
+
+    private bool CountIsDue(long rootId)
+    {
+        var now = Environment.TickCount64;
+        if (_countReadAt.TryGetValue(rootId, out var last) && now - last < IndexCountInterval.TotalMilliseconds)
+            return false;
+        _countReadAt[rootId] = now;
+        return true;
     }
 
     private void UpdateIndexingText()

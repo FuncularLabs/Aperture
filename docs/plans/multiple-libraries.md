@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 21, Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 22, review round 22 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -142,8 +142,8 @@ The folder pane lists the libraries under a **LIBRARIES** header (`CatalogBarVie
 
 - The header collapses and expands the list (for this session). Its **+** menu has **New library…** and
   **Open library…**.
-- Every library is listed by name. The open one is marked and shows its item count; clicking it shows
-  everything in it (what "Everything" did). Clicking another library switches to it.
+- Every library is listed by name, with its item count (the open one's live; the others' as they were when
+  last open — revision 21). The open one is marked; clicking it shows everything in it (what "Everything" did). Clicking another library switches to it.
 - Right-click a library: **Rename…**, **Remove from list**, **Delete library files…**. Remove and Delete are
   disabled on the open library; the delete confirmation says exactly what is deleted and that photos are not.
 - **New library…** asks for a name (not empty, usable as a folder name, not already taken), then for the
@@ -701,10 +701,11 @@ his screenshot showed a fifth:
    whatever balances the tiles across and down.
 5. (From the screenshot.) His Funcular library has one folder, `D:\func`, holding 2,445 items in subfolders; its
    Everything showed 12 — the photos directly in `D:\func` — and the status bar said "12 items". Since July (b0ad1bd,
-   when the top level showed folder tiles) "Everything" in a library with exactly one folder has meant that folder's
+   when the top level showed folder tiles, for exactly one ticked folder; f5efeb9 the next day, for exactly one
+   folder) "Everything" in a library with one folder has meant that folder's
    own top level; 0.8.9 does it too. Every new library now starts with one folder, so it shows at once — and it breaks
-   §3's "clicking it shows everything in it". (It also made item 4 look worse: twelve photos made twelve one-photo
-   days.)
+   §3's "clicking it shows everything in it". (It also made item 4 look worse: its twelve photos fell on eleven days,
+   nearly one photo a section.)
 
 Design:
 
@@ -730,9 +731,9 @@ Design:
 |---|---|---|---|
 | G1 | Everything shows every item of a one-folder library, its subfolders' included; the folder itself shows only its own | `LibraryTopTests.EverythingInAOneFolderLibrary_ShowsAllOfIt` (a real view model, STA) | resolve the top of a one-folder library to that folder again |
 | G2 | The grid has an indexing card, shown while indexing, with the indexing text and a progress bar bound to the indexing progress | `MainWindowTemplateTests.TheGrid_ShowsAnIndexingCardWhileIndexing` (real `MainWindow`) | unbind the card's visibility; drop its text or progress bar |
-| G3 | A library's last count is recorded, kept across another window's changes, read back, ignored if invalid; an old list reads as no count; recording for an unknown library changes nothing; the open library's count is recorded through the service; the list shows each library's count | `CatalogRegistryTests` (5 new), `CatalogServiceTests.RecordItemCount_KeepsTheOpenLibrarysCount`, `CatalogBarViewModelTests.Libraries_CarryEachLibrarysLastCount` | don't save the count; drop it on a re-read; don't sanitize it; record it for the wrong library; leave it off the list |
+| G3 | A library's last count is recorded, kept across another window's changes, read back, ignored if negative; an old list reads as no count; recording for an unknown library changes nothing; the open library's count is recorded through the service; the list shows each library's count | `CatalogRegistryTests` (5 new), `CatalogServiceTests.RecordItemCount_KeepsTheOpenLibrarysCount`, `CatalogBarViewModelTests.Libraries_CarryEachLibrarysLastCount` | don't save the count; drop it on a re-read; don't sanitize it; record it for the wrong library; leave it off the list |
 | G4 | A folder's tree count rises while it's being indexed | `LibraryTopTests.AFoldersCount_RisesWhileItIsIndexed` (250 files: 200 seen before the end); `FolderNodeVmTests.Count_ReportsAChange` | update the count only at the end; don't raise the change |
-| G5 | Sparse sections in a wide grid group coarser; sections that fill their rows keep the nearest-twelve choice; a narrow grid keeps the old choice; no dates gives years | `FormattingTests` (4 new, 2 updated) | ignore tiles per row; weight the fill by section size; let the finer grouping win when none qualifies and two fill their rows equally; drop the row-fill rule |
+| G5 | Sparse sections in a wide grid group coarser; sections that fill their rows keep the nearest-twelve choice; a narrow grid keeps the old choice; no dates gives years | `FormattingTests` (5 new, 2 updated) | ignore tiles per row; weight the fill by section size; let the finer grouping win when none qualifies and two fill their rows equally; drop the row-fill rule |
 
 `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` stay exempt from the coverage floor: App recording the
 open library's count (on switching away and on exit) and the window telling the view model its width are checked by
@@ -741,6 +742,46 @@ reading and by the live check.
 Live check (Paul): open Funcular — Everything shows all 2,445, grouped by year or month, not one photo a row; switch to
 Main and back — both libraries show a count; add a large folder (or New library) — a card at the bottom of the grid
 shows the indexing, and the folder's count in the tree climbs; narrow the window or zoom in — the grouping may get finer.
+
+### Revision 22 — what changed after review round 22
+
+Two non-author lenses over `7f17409..0e1f2be` found one High, three Medium and seven Low findings (`[×2]`: both found it).
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R22-1 High | The indexing card's progress bar bound `Value` and `Maximum` two-way (a `RangeBase` default) to read-only properties, so the window failed as it was shown: Aperture couldn't start. No test showed the window bound to a view model. | TEST-GAP | `Mode=OneWay`, as the status pill already has | `MainWindowShownTests.TheWindow_OpensOnALibrary_ShowingEachLibrarysCount` (the real window, shown off screen, over a real library and library list) | bind them two-way again |
+| R22-2 Medium [×2] | The card's spinner started on `Loaded` and turned for good, hidden or not: a constant CPU cost in an idle Aperture. | HOUSE-RULE | The `IndexingSpinner` style turns it while it's visible and removes the animation when it's hidden | `MainWindowShownTests.TheIndexingSpinner_TurnsOnlyWhileItIsShown`; the shown-window test (the card uses the style; idle, it doesn't turn) | keep the animation when hidden; start it on `Loaded` again |
+| R22-3 Medium [×2] | A library left (or Aperture closed) before its items were read was recorded as 0 items. | AC-GAP | The view model's `LoadedItemCount` is null until the items are read, and `RecordItemCount(null)` keeps the last count | `LibraryTopTests.ALibrarysCount_IsUnknownUntilItsItemsAreRead`, `CatalogServiceTests.RecordItemCount_OfALibraryNotYetRead_KeepsItsLastCount` | known before the read; never marked read; record null as 0 |
+| R22-4 Medium | Every zoom step, and every change in how many tiles fit across, rebuilt the whole view (the spinner shown, the keyboard cursor and the view model's selection reset) even when the grouping stayed. | PLAN-GAP | A build keeps the section sizes it chose from (`DateGroupings`); a new width or zoom rebuilds only if it chooses another grouping | `GridGroupingTests` (a real view model): `TheGridsWidth_ChoosesTheGrouping`, `AWidthThatKeepsTheGrouping_LeavesTheViewAlone`, `ZoomingIntoAnotherGrouping_Regroups`, `AViewBuiltForAnOlderWidth_RegroupsAsItIsApplied`; `FormattingTests.Groupings_*` (2) | regroup on any change in tiles across; one tile across always; no regroup on a resize, on a zoom, or as an older build is applied |
+| R22-5 Low | A regroup lost the user's section toggles (collapse 2023, narrow the window to months, widen it to years: 2023 is expanded again), and a day and the week starting on it share a key. | PLAN-GAP | Toggles are kept per grouping (`SectionExpansion`) | `SectionExpansionTests` (3), `GridGroupingTests.ASectionsToggle_OutlastsARegroupAndBack` | one memory for every grouping; only the view's own toggles |
+| R22-6 Low | Each saved batch's folder count counts the whole folder on the UI thread, and a run that changes nothing reports its batches together: a 100,000-item folder would freeze the window for about a second at each launch. | OTHER (performance) | Read at most once a second per folder while it's indexed; the count at the end is always read | `LibraryTopTests.AFoldersCount_IsReadAtMostOnceAnInterval` (600 files, an hour's interval: 200 seen, 400 not) | read on every report |
+| R22-7 Low | G5's AC proved only `ChooseMode`; the width and zoom that feed it were untested. | AC-GAP | G5 amended (below) | as R22-4 | as R22-4 |
+| R22-8 Low | The other libraries' count text in the list was untested. | TEST-GAP | — | the shown-window test reads both rows: "Default (3)" (live, not its recorded 7) and "Work (42)" | show the recorded count on the open library too; bind it to another property |
+| R22-9 Low | `SetItemCount`'s revert after a failed save was untested. | TEST-GAP | — | `CatalogRegistryTests.SetItemCount_WhenTheListCannotBeSaved_ReturnsFalse_AndKeepsTheLastCount` | drop the revert |
+| R22-10 Low | The AC table gave `FormattingTests` 4 new tests; there were 5. | PLAN-GAP | Corrected | — | — |
+| R22-11 Low [×2] | `EffectiveLocation`'s summary was left on `ScopeRecursive`, which had no callers. | HOUSE-RULE | `ScopeRecursive` and its helper `IsUnder` deleted | — (dead code) | — |
+
+G5, amended: … no dates gives years; the grid's width and zoom choose the grouping; a width or zoom that keeps the grouping
+leaves the view alone; a view built for an older width regroups as it's applied if the new width groups differently; a
+section's toggle survives a regroup and back.
+
+Nits taken: the "at least half" boundary is pinned (`FormattingTests.Buckets_HalfFullRows_Qualify`, kills `>=` → `>`);
+the card's visibility converter is asserted; the progress fraction's `else` is back on the fraction; the window also
+reports its width when the grid's scrollbar comes or goes; a count of 0 reads back as 0
+(`CatalogRegistryTests.ItemCount_OfNone_IsReadBackAsNone_NotAsUnknown`); a test comment's "one a fortnight";
+`FolderNodeVm.Count` and the CHANGELOG say only top-level folders climb; §3, revision 21's record and G3's "invalid"
+corrected. Carried: during an index without streaming, a folder's tree count includes items in its hidden subfolders until
+the end; a hand-edited count that isn't a whole number makes the list unreadable, as `lastOpenedTicks` already does; the
+open library's own count in the list stays put during an index without streaming. For Paul (design, unchanged): the card
+also shows for the launch reconcile and for re-indexes the watcher starts, and when the grid is scrolled to the end it
+covers the middle of the last row.
+
+`MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` stay exempt: App recording `LoadedItemCount`, and the window
+reporting its width on a resize and when the scrollbar comes or goes, are checked by reading and by the live check.
+
+Live check (Paul), in addition to revision 21's: Aperture starts and switches libraries; with nothing indexing, the card
+is hidden and Aperture idles; zooming that keeps the grouping doesn't flash "Loading…"; collapse a year, narrow the
+window until it groups by month, widen it again — the year is still collapsed.
 
 ## Out of scope (future)
 

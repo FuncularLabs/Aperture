@@ -118,7 +118,7 @@ public class FormattingTests
     [Fact]
     public void Buckets_RowFill_IsAveragedPerSection_NotPerPhoto()
     {
-        // Eleven one-photo days (one a fortnight, early 2022 and 2023) and one day of 500: twelve days, twelve weeks. By
+        // Eleven one-photo days (two or three weeks apart, early 2022 and 2023) and one day of 500: twelve days, twelve weeks. By
         // photo those rows are 80 % full, but eleven of the twelve sections are a single tile in a 12-across row; by year
         // (6, 5 and 500 photos) the rows are well filled.
         var singles = new[]
@@ -136,6 +136,36 @@ public class FormattingTests
     public void Buckets_NoDates_GiveYears()
     {
         Assert.Equal(BucketMode.Year, DateBuckets.ChooseMode([], tilesPerRow: 12));
+    }
+
+    [Fact]
+    public void Buckets_HalfFullRows_Qualify()
+    {
+        // One photo a month for a year, two across: each month fills exactly half its row — enough — and twelve months
+        // are the nearest twelve.
+        var dates = Enumerable.Range(1, 12).Select(month => new DateTime(2020, month, 15)).ToList();
+
+        Assert.Equal(BucketMode.Month, DateBuckets.ChooseMode(dates, tilesPerRow: 2));
+    }
+
+    [Fact]
+    public void Groupings_ChooseAgainForAnotherWidth_WithoutTheDates()
+    {
+        var groupings = DateGroupings.Of(TwelveSparseDays());
+
+        Assert.Equal([1, 6, 6, 12],
+            new[] { BucketMode.Year, BucketMode.Month, BucketMode.Week, BucketMode.Day }.Select(groupings.SectionCount));
+        Assert.Equal(BucketMode.Day, groupings.ChooseMode(tilesPerRow: 1));
+        Assert.Equal(BucketMode.Year, groupings.ChooseMode(tilesPerRow: 12));
+    }
+
+    [Fact]
+    public void Groupings_OfNoDates_GiveYears()
+    {
+        var groupings = DateGroupings.Of([]);
+
+        Assert.Equal(0, groupings.SectionCount(BucketMode.Day));
+        Assert.Equal(BucketMode.Year, groupings.ChooseMode(tilesPerRow: 1));
     }
 
     [Fact]

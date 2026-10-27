@@ -182,13 +182,14 @@ public partial class App : Application
         }
     });
 
-    // The open library's count, for the library list while it isn't open. Best effort: it must never stop a switch or exit.
+    // The open library's count, for the library list while it isn't open — unless its items haven't been read yet (a switch
+    // or exit straight after opening it), when it keeps the count it had. Best effort: it must never stop a switch or exit.
     private void RecordItemCount()
     {
         try
         {
             if (_catalog is not null && _viewModel is not null)
-                _catalog.RecordItemCount(_viewModel.TotalItemCount);
+                _catalog.RecordItemCount(_viewModel.LoadedItemCount);
         }
         catch (Exception ex)
         {
