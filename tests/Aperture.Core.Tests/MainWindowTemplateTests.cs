@@ -17,21 +17,25 @@ namespace Aperture.Core.Tests;
 public class MainWindowTemplateTests
 {
     /// <summary>
-    /// The bindings in the objects <paramref name="template"/> builds and reaches. On each element or content element:
-    /// its bindings (a MultiBinding's or PriorityBinding's parts included); a Freezable it holds (a brush, an effect)
-    /// and the items of a Freezable collection (gradient stops, transforms); any other object it holds (a ToolTip
-    /// object); its style; a template it sets; and its resources. In a style: its setters (and a setter's value that is
-    /// a style, a template or an object), its triggers, its resources, and the style it's based on. In a template: its
-    /// own triggers and resources, and what it builds. In triggers: DataTrigger and MultiDataTrigger bindings, and
-    /// every trigger's setters. In resources: styles, templates, objects, and merged dictionaries.
-    /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these. Not walked:
-    /// styles that apply implicitly from outside the template (the grid's or window's resources) and DynamicResource
-    /// references — the tile uses neither.
+    /// The bindings in the objects <paramref name="template"/> builds and reaches, and in the grid's item-container
+    /// style (<paramref name="containerStyle"/>, which every tile's container gets). On each element or content
+    /// element: its bindings (a MultiBinding's or PriorityBinding's parts included); a Freezable or any other object it
+    /// holds (a brush, an effect, a ToolTip object), and the items of a Freezable collection (gradient stops,
+    /// transforms); its style; a template it sets; and its resources. In a style: its setters (and a setter's value
+    /// that is a style, a template or an object), its triggers, its resources, and the style it's based on. In a
+    /// template: its own triggers and resources, and what it builds. In triggers: DataTrigger and MultiDataTrigger
+    /// bindings, and every trigger's setters. In resources: styles, templates, objects, and merged dictionaries.
+    /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these places, so
+    /// removing any part of the walk that finds bindings fails it; the <c>seen</c> checks only stop repeats and loops.
+    /// Not walked: styles that apply implicitly from outside the template (the grid's or window's resources),
+    /// DynamicResource references, and InputBindings — the tile uses none of them.
     /// </summary>
-    private static List<(string Where, Binding Binding)> BindingsIn(DataTemplate template)
+    private static List<(string Where, Binding Binding)> BindingsIn(DataTemplate template, Style? containerStyle = null)
     {
         var found = new List<(string, Binding)>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        if (containerStyle is not null)
+            VisitStyle(containerStyle, "container");
         VisitTriggers(template.Triggers, "template<triggers>");
         VisitResources(template.Resources, "template<resources>");
         Visit((DependencyObject)template.LoadContent(), "template");
@@ -48,8 +52,6 @@ public class MainWindowTemplateTests
                 var at = $"{where}.{property.Name}";
                 if (BindingOperations.GetBindingBase(node, property) is { } bound)
                     Add(bound, at);
-                else if (values.Current.Value is Freezable freezable)
-                    Visit(freezable, at);
                 else if (values.Current.Value is Style style)
                     VisitStyle(style, at);
                 else if (values.Current.Value is FrameworkTemplate template)
@@ -186,7 +188,7 @@ public class MainWindowTemplateTests
     public void TheBindingWalk_FindsABindingInEveryPlaceItWalks()
     {
         // The walk's completeness, separate from today's tile: one window binding planted in each place the walk claims
-        // to reach (see BindingsIn) — every branch of the walk has one — and every one must be found, once.
+        // to reach (see BindingsIn) — each part of the walk that finds bindings has one — and every one must be found.
         Sta.Run(() =>
         {
             const string Window = "RelativeSource={RelativeSource AncestorType=Window}";
@@ -345,7 +347,13 @@ public class MainWindowTemplateTests
                 </DataTemplate>
                 """);
 
-            var found = Offenders(BindingsIn(template));
+            var container = (Style)System.Windows.Markup.XamlReader.Parse($$"""
+                <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="ListBoxItem">
+                  <Setter Property="Tag" Value="{Binding DataContext.ContainerStyle, {{Window}}}" />
+                </Style>
+                """);
+
+            var found = Offenders(BindingsIn(template, container));
 
             string[] places =
             [
@@ -354,7 +362,7 @@ public class MainWindowTemplateTests
                 "TriggerSetter", "MultiTriggerSetter", "StyleTrigger", "Priority", "Multi", "ControlTrigger",
                 "TemplateTrigger", "TemplateTriggerSetter", "Condition", "MultiDataTriggerSetter", "Effect",
                 "ResourceTemplate", "MergedDictionary", "ContentElementResources", "NonFreezableObject",
-                "SetTemplateTrigger", "SetTemplateResources",
+                "SetTemplateTrigger", "SetTemplateResources", "ContainerStyle",
             ];
             Assert.All(places, place =>
                 Assert.Contains(found, offender => offender.Contains($"<- DataContext.{place} ", StringComparison.Ordinal)));
@@ -421,7 +429,7 @@ public class MainWindowTemplateTests
             var template = (DataTemplate)grid.Resources[new DataTemplateKey(typeof(TileVm))];
             var tile = (DependencyObject)template.LoadContent();
 
-            var bindings = BindingsIn(template);
+            var bindings = BindingsIn(template, grid.ItemContainerStyle);
             var offenders = Offenders(bindings);
             var sizeBindings = bindings.Count(b => b.Binding.RelativeSource?.Mode == RelativeSourceMode.Self
                 && (b.Binding.Path?.Path.Contains("TileLayout.Size", StringComparison.Ordinal) == true
