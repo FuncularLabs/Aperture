@@ -210,6 +210,49 @@ public class GridGroupingTests
     }
 
     [Fact]
+    public void ASectionLeftOpen_StaysOpenAsPhotosArriveAboveIt()
+    {
+        // A rebuild in the view's own grouping keeps every section as it is (round 23): 2019, open by default while 2020
+        // holds 50 photos, stays open when 20 more arrive in 2020 and push it past the newest ~2 screens.
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            void Photo(int i, DateTime date)
+            {
+                var path = Path.Combine(photos.Path, $"p{i:000}.jpg");
+                TestImages.Write(path, 32, 24);
+                File.SetLastWriteTimeUtc(path, date.AddMinutes(i));
+            }
+            var in2020 = new DateTime(2020, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+            var in2019 = new DateTime(2019, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+            for (var i = 0; i < 55; i++)
+                Photo(i, i < 50 ? in2020 : in2019);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.Zero };
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+                Assert.True(Section(vm, "2019").IsExpanded); // 50 photos above it: within the newest ~2 screens
+
+                for (var i = 55; i < 75; i++)
+                    Photo(i, in2020);
+                vm.StartBackgroundRefresh(); // finds the 20 new photos
+                Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 70 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
+
+                Assert.True(Section(vm, "2019").IsExpanded);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
     public void ASectionCollapsedOnlyByDefault_IsntCarriedToAnotherFolder()
     {
         // Lens A (round 23). Folder A, by year: 2020's 70 photos open, 2019's 5 collapsed only because they come after the

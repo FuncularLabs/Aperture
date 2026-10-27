@@ -193,6 +193,26 @@ public class MainWindowShownTests
     }
 
     [Fact]
+    public void TheGroupingWidth_IsTheViewport_WhileTheScrollbarShows()
+    {
+        WithWindow(HalfYears, 96, (vm, window) =>
+        {
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            var slot = vm.TileSize + 20;
+            SizeTheViewport(window, 4 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12 && ScrollbarShown(window), TimeSpan.FromSeconds(10)), "twelve months, expanded, need a scrollbar");
+
+            SizeTheViewport(window, 5 * slot + 5 + SystemParameters.VerticalScrollBarWidth, frame); // beside the scrollbar: five slots and a few pixels
+
+            Assert.True(Sta.PumpUntil(() => vm.TilesPerRow == 5, TimeSpan.FromSeconds(5)), $"{vm.TilesPerRow} across");
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            Assert.True(ScrollbarShown(window)); // by year now, still taller than the window
+            Assert.Equal(5, vm.TilesPerRow);
+        });
+    }
+
+    [Fact]
     public void ARegroupThatBringsInTheScrollbar_Settles()
     {
         // Lens A's reproduction (round 23): by month, all but the newest collapsed, so no scrollbar; the viewport a few
