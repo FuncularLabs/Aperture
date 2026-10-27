@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 24, review round 24 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 25, review round 25 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -823,7 +823,7 @@ pixel apart across the boundary: no rebuild at rest). Seven Lows, two of them fo
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
 | R24-1 Low [×2] | R23-2 was partial: a toggle was inferred from a state differing from its build's default, so a default carried in from another folder in the same grouping, one kept by a rebuild, or one a sort change flipped read as the user's toggle and was remembered across groupings; and a default-collapsed section still went straight to the next folder grouped the same way (as in 0.8.9). | TEST-GAP | A toggle is recorded as it's made: `SectionVm.Toggled`, set by `IsExpanded`'s setter (the header's toggle, the keyboard); a build sets a section with `SectionVm.Start`. Only the view as it is — the same place (`LocationKey`) in the same grouping — carries every section's state on; another folder, a search or another grouping gets only the user's toggles | `SectionVmTests` (4); `GridGroupingTests.ASectionCollapsedOnlyByDefault_IsntCarriedStraightToAnotherFolder`, `AStateCarriedToAnotherFolder_DoesntBecomeAToggle`, `ASectionKeptOpenByARebuild_IsntRememberedAsAToggle` (lens B's probes P1–P3) | remember every section; a section carried on starts as a toggle; the user's change isn't a toggle; a build's state is; the view's states go to another folder |
-| R24-2 Low | The grid's `SizeChanged` came before layout, with the old viewport beside the new scrollbar: a height change that brought the scrollbar in or took it away asked for a rebuild in an unchanged grouping (revision 23). | TEST-GAP | The width is reported on `ScrollChanged` only (after layout), and `GroupingWidth` is the scroll viewer's width less its padding and a scrollbar — it never reads the viewport, so the scrollbar's real width at other display scales can't matter either (lens A's hardening) | `MainWindowShownTests.AHeightChangeThatBringsInTheScrollbar_AsksForNoBuild`, `AHeightChangeThatTakesTheScrollbarAway_AsksForNoBuild` (lens B's P4–P5) | report on `SizeChanged` again |
+| R24-2 Low | The grid's `SizeChanged` came before layout, with the old viewport beside the new scrollbar: a height change that brought the scrollbar in or took it away asked for a rebuild in an unchanged grouping (revision 23). | TEST-GAP | The width is reported on `ScrollChanged` only (after layout), and `GroupingWidth` is the scroll viewer's width less its padding and a scrollbar — it never reads the viewport, so the scrollbar's real width at other display scales can't matter either (lens A's hardening) | `MainWindowShownTests.AHeightChangeThatBringsInTheScrollbar_AsksForNoBuild`, `AHeightChangeThatTakesTheScrollbarAway_AsksForNoBuild` (lens B's P4–P5) | round 23's width (the viewport, less a scrollbar when none shows) reported on `SizeChanged` again — a `SizeChanged` report alone no longer matters (an equivalent mutant: the width never reads the viewport) |
 | R24-3 Low | Keyboard navigation's column count also came from the first section's wrap panel, which keeps its width once collapsed: Down went two rows (from 0.8.4; R23-3's sibling). | HOUSE-RULE | `WrapViewportWidth` reads the first shown section's panel | `MainWindowShownTests.TheKeyboardsColumns_FollowTheWindow_WithItsFirstSectionCollapsed` (against the columns laid out) | take the first panel, shown or not |
 | R24-4 Low | Everything's count read "(0)" until the library's items were read (from before this branch; R23-4's sibling). | HOUSE-RULE | It binds `LoadedItemCount`: blank until known | the shown-window test, before and after the read | bind `TotalItemCount` again |
 | R24-5 Low | The open library's count reported again as its items change (`LoadRows`) had no test. | TEST-GAP | — | `LibraryTopTests.ALibrarysCount_IsReportedAgainAsItsItemsChange` | don't report it after a re-read |
@@ -847,6 +847,35 @@ class 45 times under load with no failure, and nothing in this range touches wha
 Live check (Paul), in addition: go from a folder whose older year is collapsed by default to one with only that year —
 it opens; collapse the newest year, narrow the window, press Down from the next year's first photo — one row down;
 Everything's count appears once the library is read.
+
+### Revision 25 — what changed after review round 25
+
+Two non-author lenses over `3cdb56c..7c64c90`: no High or Medium; two Lows, both found by both lenses, and nits. Every
+round-24 finding verified dispositioned; R24-2 to R24-7 resolved; R24-1 partial (below).
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R25-1 Low [×2] | R24-1 was partial: "the view as it is" was keyed by `LocationKey`, which is `search` for every search, so a search refined (or replaced) by another carried every section's state on — a section collapsed only by default came up collapsed as the only section of the new results. The Pictures/Videos filter did the same. | TEST-GAP | The carry is keyed by what the view shows (`ViewKey`: the place, the search text and the Pictures/Videos filter); `LocationKey` still keys scroll memory by place. A filter change counts as another view (the owner may rule otherwise) | `GridGroupingTests.ASearchRefinedToAnother_GetsOnlyTheUsersToggles`, `ThePicturesAndVideosFilter_GetsOnlyTheUsersToggles` | any search the same view; the filter the same view |
+| R25-2 Low [×2] | Nothing tested that a user's toggle keeps travelling: that one carried to another place stays a toggle, and that a rebuild in its own place keeps it one. | TEST-GAP | — | `GridGroupingTests.AToggle_GoesOnThroughAFolderItWasCarriedTo` (A → C → D), `AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder` | a toggle carried on isn't one; a rebuild in place drops it |
+| R25-3 Low [×2] | R24-2's named mutation (report on `SizeChanged` again) was an equivalent mutant once the width stopped reading the viewport (the author found it from the runner, as did both lenses). | PLAN-GAP | R24-2's row names what the height tests kill: round 23's width reported on `SizeChanged`. And since a resize can leave the viewport's width unchanged (the scrollbar going as the grid narrows by its width — no `ScrollChanged`), the width is reported on the grid's `SizeChanged` again as well (harmless now, closing that edge) | — | — |
+
+Found while checking the observed-once failure (lens B, with its message): `BackgroundRefreshTests.AFolderRemovedBeforeTheStartupReconcile_IsNotIndexedOrWatched`
+failed with "The transaction object is not associated with the same connection object as this command" in
+`HiddenFolderStore.GetAll` ← `LibraryService.GetContents` ← `InitializeViewAsync`. The library's one FunkyORM provider is
+shared between threads: the startup read runs on the thread pool, and a transaction opened on the provider meanwhile on
+the UI thread (removing a folder — `RootStore.Remove` — or saving tags) is seen by the read. It ends Aperture (the
+startup read is `async void`). 0.8.9 has it too (its startup read went through the same provider), so it is not this
+branch's; for Paul to schedule — a reader's own provider for the startup read, or one lock around the provider. The test
+now waits for the startup read before it removes the folder, so it tests the reconcile delay it's about.
+
+Nits taken: comments on what reports the width (`SizeChanged` and `ScrollChanged`; "no ScrollChanged to tell it" on a
+switch) and on what counts as the view as it is (not "a resize": one that keeps the grouping doesn't rebuild); the
+scrollbar-away test's window stays within a 768-high desktop (it reached 811 px); runner labels match this plan's numbers.
+Corrected record: only round 22's fc181dd says `Value` and `Maximum` both bind two-way by default; the "Carried" fallback
+of revision 24 can't run (both reports come after layout) — dropped.
+
+Live check (Paul), in addition: search for something, then for something narrower showing only an older year — it
+opens; collapse a year, go to two other folders in turn — it stays collapsed in each.
 
 ## Out of scope (future)
 

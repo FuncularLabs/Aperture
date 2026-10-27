@@ -436,4 +436,96 @@ public class GridGroupingTests
                 Assert.False(Section(vm, "2019").IsExpanded, "D's 2019 opened by a state no user set");
             });
     }
+
+    // --- Lens B's probes (round 25): what is "the view as it is", and a toggle going on ---
+
+    [Fact]
+    public void ASearchRefinedToAnother_GetsOnlyTheUsersToggles()
+    {
+        // Every search had the same place; a search refined to one showing only 2019 opened it collapsed by default.
+        WithFolders([("A", OlderYearBelow)], (vm, goTo, _) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+            vm.SearchInput = "p0"; // p000–p074: both years
+            vm.CommitSearch();
+            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+
+            applied = 0;
+            vm.SearchInput = "p07"; // p070–p074: 2019 only
+            vm.CommitSearch();
+            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "the first search's default-collapsed 2019 was carried to the second");
+        });
+    }
+
+    [Fact]
+    public void ThePicturesAndVideosFilter_GetsOnlyTheUsersToggles()
+    {
+        // 70 photos in 2020, 5 videos in 2019 (collapsed by default); videos only: 2019, now the newest, opens.
+        WithFolders([("A", [.. Enumerable.Repeat(In2020, 70)])], (vm, goTo, dir) =>
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var path = Path.Combine(dir("A"), $"v{i}.mp4");
+                File.WriteAllText(path, "x"); // indexed by its extension
+                File.SetLastWriteTimeUtc(path, In2019.AddMinutes(i));
+            }
+            vm.StartBackgroundRefresh();
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Contains("2019") && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)), string.Join(", ", Sections(vm)));
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+
+            vm.ShowImages = false;
+            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "the default-collapsed 2019 was carried into the videos-only view");
+        });
+    }
+
+    [Fact]
+    public void AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder()
+    {
+        WithFolders([("X", OnlyThatYear), ("C", OnlyThatYear)], (vm, goTo, dir) =>
+        {
+            goTo("X");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            Section(vm, "2019").IsExpanded = false; // the user's toggle
+            Photos(dir("X"), Enumerable.Repeat(In2019, 2), start: 100);
+            vm.StartBackgroundRefresh();
+            Assert.True(Sta.PumpUntil(() => Section(vm, "2019").Count == 5 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
+            Assert.True(Section(vm, "2019").Toggled); // still the user's, after the rebuild
+
+            goTo("C");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.False(Section(vm, "2019").IsExpanded, "the user's toggle was lost by a rebuild in its own place");
+        });
+    }
+
+    [Fact]
+    public void AToggle_GoesOnThroughAFolderItWasCarriedTo()
+    {
+        WithFolders([("A", OnlyThatYear), ("C", OnlyThatYear), ("D", OnlyThatYear)], (vm, goTo, _) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            Section(vm, "2019").IsExpanded = false; // the user's toggle
+            goTo("C");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded);
+
+            goTo("D");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.False(Section(vm, "2019").IsExpanded, "the user's toggle stopped at the first folder it was carried to");
+        });
+    }
 }

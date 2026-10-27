@@ -1900,7 +1900,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private DateGroupings? _groupings;
 
     private SectionExpansion _expansion = SectionExpansion.None; // the user's section toggles, per grouping
-    private string? _viewPlace; // the folder or search the view that's up shows (LocationKey); null until one is up
+    private string? _viewShows; // what the view that's up shows (ViewKey); null until one is up
+
+    // What a view shows, for carrying its sections' states on to the next build: its folder (or search) and search text,
+    // and the Pictures/Videos filter. Not LocationKey, which keys scroll memory by place alone.
+    private string ViewKey => $"{LocationKey}|{_searchText.Trim()}|{_showImages}|{_showVideos}";
 
     /// <summary>
     /// How many tiles fit across the width the view reports, at the current zoom (each tile's slot is its size plus 20 px
@@ -1937,7 +1941,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     // The user's section toggles, remembered for each grouping, with the view's own as they are now. Only toggles: a
-    // section collapsed only because it was older (or kept open by a rebuild) stays out of other places' views.
+    // section collapsed only because it was older (or kept open by a rebuild) stays out of other views.
     private SectionExpansion CurrentToggles() => _expansion = _mode is { } mode
         ? _expansion.With(mode, _sections.Where(kv => kv.Value.Toggled).ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
         : _expansion;
@@ -2166,14 +2170,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
         Dictionary<string, Annotation> Annotations, SectionExpansion Toggles,
-        (BucketMode? Mode, string? Place, Dictionary<long, (bool Expanded, bool Toggled)> Sections) View,
-        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow, string Place);
+        (BucketMode? Mode, string? Shows, Dictionary<long, (bool Expanded, bool Toggled)> Sections) View,
+        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow, string Shows);
 
     // Mode and Groupings: the date grouping chosen, and the section sizes it was chosen from (null without date sections).
-    // Place: the folder or search it shows (LocationKey).
+    // Shows: what it shows (ViewKey).
     private sealed record ViewBuild(
         List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections,
-        BucketMode? Mode, DateGroupings? Groupings, string Place);
+        BucketMode? Mode, DateGroupings? Groupings, string Shows);
 
     /// <summary>Snapshots everything the compute needs — must run on the UI thread.</summary>
     private BuildInputs CaptureBuildInputs() => new(
@@ -2185,12 +2189,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         GroupByDate,
         _annotations,
         CurrentToggles(),
-        (_mode, _viewPlace, _sections.ToDictionary(kv => kv.Key, kv => (kv.Value.IsExpanded, kv.Value.Toggled))),
+        (_mode, _viewShows, _sections.ToDictionary(kv => kv.Key, kv => (kv.Value.IsExpanded, kv.Value.Toggled))),
         _showImages,
         _showVideos,
         _tilePool,
         TilesPerRow,
-        LocationKey);
+        ViewKey);
 
     /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
     private ViewBuild ComputeView(BuildInputs input)
@@ -2224,10 +2228,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             groupings = DateGroupings.Of(media.Select(r => r.Item.BestDate).ToList());
             mode = groupings.ChooseMode(input.TilesPerRow);
-            // The view as it is — the same place in the same grouping (photos streaming in, a sort, a resize): every
-            // section as it is now, so one the user is looking at stays open as photos arrive above it. Anything else
-            // (another folder, a search, another grouping): only the user's toggles, as remembered for that grouping.
-            var carried = mode == input.View.Mode && input.View.Place == input.Place
+            // The view as it is — showing the same thing in the same grouping (photos streaming in, a sort change):
+            // every section as it is now, so one the user is looking at stays open as photos arrive above it. Anything
+            // else (another folder, another search, another Pictures/Videos filter, another grouping): only the user's
+            // toggles, as remembered for that grouping.
+            var carried = mode == input.View.Mode && input.View.Shows == input.Shows
                 ? input.View.Sections
                 : input.Toggles.For(mode.Value).ToDictionary(kv => kv.Key, kv => (Expanded: kv.Value, Toggled: true));
             tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, carried, sections, input.Pool, mode.Value);
@@ -2238,7 +2243,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             tiles = media.Select(r => GetOrReuseTile(input.Pool, r, input.Format, Ann(r))).ToList();
         }
 
-        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, mode, groupings, input.Place);
+        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, mode, groupings, input.Shows);
     }
 
     /// <summary>Identifies the current view (folder or search) for per-location scroll memory.</summary>
@@ -2270,7 +2275,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _sections[key] = section;
         _mode = build.Mode;
         _groupings = build.Groupings;
-        _viewPlace = build.Place;
+        _viewShows = build.Shows;
 
         // Bind each committed tile to its committed section here, on the UI thread — never off-thread,
         // where a reused tile could be shared with a superseded concurrent build and race.

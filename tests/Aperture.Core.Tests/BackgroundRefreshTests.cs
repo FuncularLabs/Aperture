@@ -81,6 +81,9 @@ public class BackgroundRefreshTests
         Sta.Run(() =>
         {
             using var f = new Fixture(TimeSpan.FromMilliseconds(150), addedIsARootToo: true);
+            // The startup read first: a removal while it runs meets a known, separate race on the library's shared
+            // FunkyORM provider (plan revision 25, for Paul), not the reconcile delay this test is about.
+            Assert.True(Sta.PumpUntil(() => f.Vm.LoadedItemCount is not null, TimeSpan.FromSeconds(10)));
 
             f.Vm.StartBackgroundRefresh();
             f.Vm.RemoveRootCommand.Execute(f.Vm.Roots.Single(r => r.Path == f.Older.Path)); // removed during the delay

@@ -18,10 +18,11 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
-        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width whenever the
-        // grid's viewport changes width — a resize, its first layout, its scrollbar coming or going (which GroupingWidth
-        // allows for either way). ScrollChanged comes once the viewer is laid out, when its viewport and its scrollbar
-        // agree; the grid's SizeChanged comes before, with the old viewport beside the new scrollbar.
+        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid is
+        // resized, and whenever its viewport changes width — its first layout, its scrollbar coming or going (which
+        // GroupingWidth gives the same width either way). Both: a resize can leave the viewport's width as it was (the
+        // scrollbar going as the grid narrows by its width), and GroupingWidth never reads the viewport.
+        ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(GroupingWidth());
         ItemsList.AddHandler(System.Windows.Controls.ScrollViewer.ScrollChangedEvent, new System.Windows.Controls.ScrollChangedEventHandler((_, e) =>
         {
             if (e.ViewportWidthChange != 0)
@@ -58,7 +59,7 @@ public partial class MainWindow : Window
 
         _scrollByLocation.Clear();
         _lastLocationKey = vm.LocationKey;
-        vm.SetGridWidth(GroupingWidth()); // the grid keeps its size across a switch: no SizeChanged to tell it
+        vm.SetGridWidth(GroupingWidth()); // the grid keeps its size across a switch: no ScrollChanged to tell it
         vm.ViewApplying += OnViewApplying;
         vm.ViewApplied += OnViewApplied;
         vm.PropertyChanged += OnViewModelPropertyChanged;

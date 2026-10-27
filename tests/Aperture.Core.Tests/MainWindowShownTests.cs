@@ -318,7 +318,7 @@ public class MainWindowShownTests
             var (requested, applied) = (vm.BuildGeneration, 0);
             vm.ViewApplied += () => applied++;
 
-            window.Height += 140; // taller than the years: the scrollbar goes
+            window.Height += 100; // taller than the years (by 20 px): the scrollbar goes; the window stays within a 768-high desktop
             Settle();
             Sta.PumpUntil(() => false, TimeSpan.FromSeconds(1));
 
