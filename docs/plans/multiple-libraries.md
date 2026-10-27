@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 16, after review round 16 of Paul's first trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 17, after review round 17 of Paul's first trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -127,7 +127,7 @@ corresponds to `ActiveCatalog`.
   `async void` and an exception would end the app.
 - **Host (App + view model).** On `PreparingToSwitch`: `MainViewModel.PrepareForClose()` (stop new indexing,
   cancel running ones, drop the library subscription; queued work finishes quietly) and disable the window.
-  On `ActiveLibraryChanged`: refresh the switcher, build a new view model, rebind `DataContext`, re-enable.
+  On `ActiveLibraryChanged`: refresh the library list, build a new view model, rebind `DataContext`, re-enable.
   `MainWindow` moves its view-model event handlers to the new view model and forgets scroll positions,
   which are keyed by per-library root ids.
 - **Deferred: shared window geometry.** Window placement and folder-pane width are still stored per library
@@ -186,7 +186,7 @@ The folder pane lists the libraries under a **LIBRARIES** header (`CatalogBarVie
 | 3 | `CatalogService` + App/view-model rewiring | `CatalogServiceTests` (92) — includes events on a `SingleThreadContext` stand-in for the UI thread |
 | 4 | Switcher UI | `CatalogBarViewModelTests` (21) — a real `CatalogService`, scripted dialogs |
 | 4b | One window (revision 11) | `SingleInstanceTests` (13), `RelaunchTests` (16) — real kernel objects and real child processes |
-| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (3), `AddFolderDialogTests` (2), `TileLayoutTests` (1), `BackgroundRefreshTests` (1) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
+| 4c | Paul's first trial (revision 15) | `CatalogBarViewModelTests` (now 25), `CatalogServiceTests` (free folder), `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4), `FolderAdditionsTests` (4), `WindowTitleConverterTests` (4), `MainWindowTemplateTests` (4), `AddFolderDialogTests` (2), `TileLayoutTests` (1), `BackgroundRefreshTests` (3) — the WPF ones on an STA thread; switch timing in a scratch harness on a copy of a real library (not in CI) |
 | 5 | Manual verify | Create a second library, add a folder, switch back and forth (isolation); switch mid-index; open a missing folder; unplug a library's drive and relaunch; `APERTURE_DATA_DIR` still pins. **Not yet done.** |
 
 ## Revision 2 — what changed after review round 1 (2026-10-25)
@@ -576,9 +576,9 @@ Design:
 
 | AC | Behaviour | Tests | Mutation each must kill |
 |---|---|---|---|
-| F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed — once; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne`; `BackgroundRefreshTests.AFolderAddedBeforeTheStartupReconcile_IsIndexedOnce` (a real view model, STA) | ask for the location again; raise the hand-over before the switch; drop the free-folder search; let the reconcile read the folders after its delay |
+| F1 | New library: name → folder → subfolders → created under the libraries folder, switched to, folder handed over to be added and indexed — once; cancel at any step creates nothing; a failed create hands nothing over | `CatalogBarViewModelTests.NewLibrary_AsksForANameThenAFolderThenSubfolders_…`, `…_WithoutSubfolders_…`, `…_CancelledAtTheFolderOrTheSubfolderQuestion_CreatesNothing`, `…_ThatFails_HandsOverNothing`; `CatalogServiceTests.CreateLibrary_PassesOverATakenFolder_ForTheNextFreeOne`; `BackgroundRefreshTests.AFolderAddedBeforeTheStartupReconcile_IsIndexedOnce`, `…AFolderRemovedBeforeTheStartupReconcile_IsNotIndexedOrWatched`, `…AFolderAddedAfterTheLibraryHasClosed_IsIgnored` (a real view model, STA) | ask for the location again; raise the hand-over before the switch; drop the free-folder search; let the reconcile read the folders after its delay; let it index a folder removed meanwhile; add to a closed library |
 | F2 | Every library listed by name, the open one marked; a switch moves the mark; Remove/Delete disabled on the open one; Rename works on any library; the list collapses | `CatalogBarViewModelTests.Libraries_ListEveryLibraryByName_MarkingTheOpenOne`, `…_FollowASwitch`, `RemoveAndDelete_AreDisabledForTheOpenLibrary`, `Rename_RenamesTheLibraryItIsGiven`, `IsExpanded_StartsOpen_AndToggles` | list only the others; enable Remove on the open one; rename the open one regardless |
-| F3 | No tile binding goes through the window or the view-model proxy — on an element, a brush or effect, a style or trigger, or a template it sets; the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; bind the image brush or an effect through the proxy or the window; drop `Inherits` |
+| F3 | No tile binding goes through the window or the view-model proxy — on an element, a brush or effect, a style (its setters, triggers and the style it's based on), the template's own triggers, or a template it sets (with its triggers); the grid has one tile menu; the size set on the grid reaches every tile | `MainWindowTemplateTests.TheTileTemplate_BindsNothingThroughTheWindowOrTheProxy`, `…TheBindingWalk_FindsABindingWhereverATemplateCanHoldOne` (the walk's completeness, on a template with a window binding in each such place), `…TheGridHasOneTileMenu_ActingOnItsDataContext` (real `MainWindow`, STA); `TileLayoutTests.ASizeSetOnTheGrid_ReachesEveryTileInsideIt` | restore one `AncestorType=Window` size binding; put the menu back in the tile; bind the image brush, an effect, or a template, trigger or based-on style's binding through the proxy or the window; drop `Inherits` |
 | F4 | One question per add, for new folders only; Yes by default; cancel adds nothing; folders already added or gone are skipped without asking | `FolderAdditionsTests` (4), `AddFolderDialogTests` (2) | ask per folder; ask when nothing is new; default to No |
 | F5 | Title: product — library — folder; product — library at a library's top; no library name when pinned | `WindowTitleConverterTests` (4); `MainWindowTemplateTests.TheTitle_IsTheProductThenTheLibraryThenTheFolder` (the window's own bindings, in order) | drop the library; swap the order — in the converter and in the window's bindings |
 | F6 | Hiding a subfolder takes it and everything inside it out of the union and back on showing; persisted; counts reported; root removal forgets them; "Trip" hidden leaves "Trip 2"; case and separators don't matter; the root can't be hidden this way; an existing database gains the table; the tree lists a hidden folder unticked with its count and no children, keeps a folder that only leads to one, and drops one with no items; nested hidden folders each count everything inside them; a folder is hidden in its own root only, and the tree lists only its own root's folders; a hidden folder in an unticked root counts nothing; showing ignores case beyond ASCII; the node reports a tick or untick once | `HiddenFoldersTests` (14), `FolderTreeTests` (9), `FolderNodeVmTests` (4) | `StartsWith(dir)` without the separator; filter only the folder itself, not inside it; forget to persist; list the hidden folder's children; count a nested hidden folder twice, or an item for one hidden folder only; ignore the hidden folder's root, or the row's; match in SQL (ASCII-only NOCASE); report a non-change |
@@ -629,6 +629,19 @@ Pre-existing, not introduced here (flagged, not fixed in this branch): a second 
 while one runs if the user changes "Include subfolders" on it, or a file-watcher event fires, mid-index — the same
 pause/cancel bookkeeping problem, in 0.8.9 as well. Revision 16 removes the trigger this branch added (New
 library's hand-over), not the general race.
+
+### Revision 17 — what changed after review round 17
+
+One fresh non-author review of the round-16 fixes (091f0b6..f78c716): the Medium fix holds (New library's folder
+is indexed once; the test is deterministic); NOT CLEAN on two Lows.
+
+| # | Finding | Severity | Blame | Fix, and the test that now fails without it |
+|---|---|---|---|---|
+| F-1 | Round 16's B F-3 only partly fixed: the binding walk still missed a template's own triggers, values set by any trigger, and the style a style is based on — a per-tile trigger bound through the window, the shape that made switching slow, would have passed | Low | TEST-GAP | The walk follows all of them. `MainWindowTemplateTests.TheBindingWalk_FindsABindingWhereverATemplateCanHoldOne` plants a window binding in each place a template can keep one (eleven places) and requires every one found — so the pin no longer depends on today's tile using each place |
+| F-2 | The filter the round-16 fix needed — skip a folder removed during the reconcile's delay — had no test; without it the removed folder is scanned against a root that's gone, and a watcher stays armed on it | Low | TEST-GAP | `BackgroundRefreshTests.AFolderRemovedBeforeTheStartupReconcile_IsNotIndexedOrWatched` |
+| Observation | An add whose dialog (folder picker, subfolder question) was still open when a library switch closed the library reached the closed database; the exception would end the app. Add folder had it before this branch; drops joined it with their question | Low (outside the layer) | HOUSE-RULE (work started before a teardown checks it's still wanted) | Every add checks the view model isn't closing — before asking, and again after. `BackgroundRefreshTests.AFolderAddedAfterTheLibraryHasClosed_IsIgnored` |
+| N-1 | f78c716's message says "every binding in a tile" | Nit | — | Carried (true from this revision) |
+| N-2 | §2 still said "refresh the switcher" | Nit | HOUSE-RULE | Reworded |
 
 ## Out of scope (future)
 

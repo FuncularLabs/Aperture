@@ -1930,22 +1930,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void AddFolders(IEnumerable<string> paths)
     {
-        var additions = FolderAdditions.Plan(paths, Roots.Select(r => r.Path), AskIncludeSubfolders);
-        if (additions.Count > 0)
-            FinishFirstRunIfShowing();
-        foreach (var folder in additions)
-            AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
+        if (!_closing)
+            Add(FolderAdditions.Plan(paths, Roots.Select(r => r.Path), AskIncludeSubfolders));
     }
 
     /// <summary>
     /// Adds the folder New library was given (the user has already said whether to include its subfolders) and
     /// starts indexing it. Nothing happens if it's already a root.
     /// </summary>
-    public void AddFolder(string path, bool includeSubfolders)
+    public void AddFolder(string path, bool includeSubfolders) =>
+        Add(FolderAdditions.Plan([path], Roots.Select(r => r.Path), _ => includeSubfolders));
+
+    // A library switch can close this library while an add's dialog is still open (the folder picker, the subfolder
+    // question): once it's closing, the add is dropped — its database is gone, and an exception here would end the app.
+    private void Add(IReadOnlyList<FolderToAdd> additions)
     {
-        var additions = FolderAdditions.Plan([path], Roots.Select(r => r.Path), _ => includeSubfolders);
-        if (additions.Count > 0)
-            FinishFirstRunIfShowing(); // the new library already has its folder: don't offer Pictures etc. as well
+        if (_closing || additions.Count == 0)
+            return;
+        FinishFirstRunIfShowing(); // a folder has been chosen: don't keep offering Pictures etc. as well
         foreach (var folder in additions)
             AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
     }
