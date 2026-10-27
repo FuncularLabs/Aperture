@@ -19,6 +19,7 @@ public sealed class FolderNodeVm : ObservableObject
     private bool _isExpanded;
     private bool _isSelected;
     private bool _isShown = true;
+    private int _count;
 
     private FolderNodeVm() { } // placeholder only
 
@@ -36,7 +37,7 @@ public sealed class FolderNodeVm : ObservableObject
         IsRoot = isRoot;
         HasChildren = hasChildren;
         Root = root;
-        Count = count;
+        _count = count;
         _isShown = isShown;
         _loadChildren = loadChildren;
 
@@ -52,7 +53,13 @@ public sealed class FolderNodeVm : ObservableObject
     public string Name { get; } = "";
     public bool IsRoot { get; }
     public bool HasChildren { get; }
-    public int Count { get; }
+
+    /// <summary>How many items the folder holds (all levels). Rises while the folder is being indexed.</summary>
+    public int Count
+    {
+        get => _count;
+        set => SetProperty(ref _count, value);
+    }
 
     /// <summary>Non-null on root nodes — carries the include checkbox / rename / remove.</summary>
     public RootVm? Root { get; }

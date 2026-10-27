@@ -15,6 +15,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
     videos, adds that folder to the new library and starts indexing it. The library's own files
     go in `%LOCALAPPDATA%\Aperture Libraries`.
   - **Open library…** adds a library that already exists (a folder holding `aperture.db`).
+  - Every library shows its count: the open one as it changes, the others as they were when last
+    open.
   - Right-click a library to **Rename** it. **Remove from list** forgets a library you aren't in;
     its files stay where they are. **Delete library files** deletes Aperture's own files for a
     library you aren't in — its index, thumbnail cache, and settings — and never your photos or
@@ -23,6 +25,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   top-level folders: untick it to hide that folder, and everything inside it, from the library.
 - Adding folders — with Add folder, by dropping them on the window, or from the first-run
   panel — asks whether to include their subfolders (Yes unless you say otherwise).
+- While Aperture indexes, a card at the bottom of the grid shows what it's indexing and how far it
+  has got, and a folder's count in the tree climbs as its photos are added.
 - If the library you used last can't be opened (for example, it's on a drive that isn't
   connected yet), Aperture opens another one for now — Default, if it's there — and tells you
   why, instead of failing to start. It tries your library again at the next launch.
@@ -38,6 +42,13 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - The title bar shows the library's name before the folder's.
 - A large library opens several times faster, at launch and when you switch to it, and switching
   back and forth no longer gets slower each time.
+- Date sections (day, week, month or year) are chosen to suit the window as well as the photos:
+  sparse photos in a wide window are grouped by longer spans, so sections fill their rows instead
+  of leaving one photo a row. Resizing the window or zooming can change the grouping.
+
+### Fixed
+- **Everything** in a library with a single folder showed only the photos directly in that folder,
+  not those in its subfolders.
 
 ## [0.8.9] - 2026-10-23
 

@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 20, after review round 20 of Paul's first trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 21, Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -688,6 +688,59 @@ order checked through every failure point); NOT CLEAN on one Low, about the plan
 | F-2 | Two limits were unstated: the tiles' container style (`TileContainer`) wasn't checked at all, and InputBindings inside a template aren't walked | Nit | PLAN-GAP | The real-tile test now walks the grid's item-container style too (it has no bindings), with a planted case (30 places); InputBindings are stated as a limit — the tile has none |
 | F-3 | The first-run order isn't pinned by a test, and "as before this branch" holds for the first-run panel only | Nit | — | Worded precisely in revision 19's N-3 row; the order stays in the exempt view model, checked by reading |
 | — | b0b704f's message repeats "one in each branch of the walk" | Nit | — | Carried |
+
+## Revision 21 — Paul's second trial (2026-10-27)
+
+Round 21 was CLEAN at 7f17409 and Paul tried that build (`publish\trial-7f17409`). He reported four things, and
+his screenshot showed a fifth:
+
+1. The "indexing" pill is barely noticeable: an informative spinner in the main pane should make indexing obvious.
+2. Only the open library shows a count.
+3. A top-level folder's count changes only when indexing finishes — confusing, since indexing can take long.
+4. A sparse library wastes the screen: sections grow down but not across. Group by longer spans (by year, here) or
+   whatever balances the tiles across and down.
+5. (From the screenshot.) His Funcular library has one folder, `D:\func`, holding 2,445 items in subfolders; its
+   Everything showed 12 — the photos directly in `D:\func` — and the status bar said "12 items". Since July (b0ad1bd,
+   when the top level showed folder tiles) "Everything" in a library with exactly one folder has meant that folder's
+   own top level; 0.8.9 does it too. Every new library now starts with one folder, so it shows at once — and it breaks
+   §3's "clicking it shows everything in it". (It also made item 4 look worse: twelve photos made twelve one-photo
+   days.)
+
+Design:
+
+- **G1** — Everything (the top of a library) shows every item in the library's ticked folders, however many folders
+  it has; the folder in the tree still shows only its own photos, as every folder does. Search from the top searches
+  the whole library.
+- **G2** — while anything is being indexed, the grid shows a card at its bottom: a spinner, "Indexing", what is being
+  indexed (the folder and how far, as the pill says), and a progress bar (filling while files are indexed, sweeping
+  while it scans). It doesn't block the grid (only the card itself takes clicks). It is the pill's own information,
+  bigger, where the user is looking; the pill stays.
+- **G3** — every library in the list shows a count. The open one shows its live count, as now. The others show the
+  count they had when last open — Aperture records it in the library list when you switch away from a library and when
+  you close Aperture. A library not opened since this version shows no count until it has been.
+- **G4** — while a folder is indexed, its count in the tree rises as items are added (each time the indexer saves a
+  batch, every 200 files), not only at the end.
+- **G5** — the date grouping (day, week, month or year) takes the grid's width into account. A grouping qualifies if
+  its sections, on average, fill at least half of the rows they take (a section of 1 photo in a 12-across grid fills
+  1/12 of its row). Among the groupings that qualify, the one nearest twelve sections wins, as before; if none
+  qualifies, the one that fills its rows best. How many tiles fit across comes from the grid's width and the tile
+  size, so resizing the window or zooming can change the grouping. Paul's Funcular, 12 across: years.
+
+| AC | Behaviour | Tests | Mutation each must kill |
+|---|---|---|---|
+| G1 | Everything shows every item of a one-folder library, its subfolders' included; the folder itself shows only its own | `LibraryTopTests.EverythingInAOneFolderLibrary_ShowsAllOfIt` (a real view model, STA) | resolve the top of a one-folder library to that folder again |
+| G2 | The grid has an indexing card, shown while indexing, with the indexing text and a progress bar bound to the indexing progress | `MainWindowTemplateTests.TheGrid_ShowsAnIndexingCardWhileIndexing` (real `MainWindow`) | unbind the card's visibility; drop its text or progress bar |
+| G3 | A library's last count is recorded, kept across another window's changes, read back, ignored if invalid; an old list reads as no count; recording for an unknown library changes nothing; the open library's count is recorded through the service; the list shows each library's count | `CatalogRegistryTests` (5 new), `CatalogServiceTests.RecordItemCount_KeepsTheOpenLibrarysCount`, `CatalogBarViewModelTests.Libraries_CarryEachLibrarysLastCount` | don't save the count; drop it on a re-read; don't sanitize it; record it for the wrong library; leave it off the list |
+| G4 | A folder's tree count rises while it's being indexed | `LibraryTopTests.AFoldersCount_RisesWhileItIsIndexed` (250 files: 200 seen before the end); `FolderNodeVmTests.Count_ReportsAChange` | update the count only at the end; don't raise the change |
+| G5 | Sparse sections in a wide grid group coarser; sections that fill their rows keep the nearest-twelve choice; a narrow grid keeps the old choice; no dates gives years | `FormattingTests` (4 new, 2 updated) | ignore tiles per row; weight the fill by section size; prefer finer on a tie |
+
+`MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` stay exempt from the coverage floor: App recording the
+open library's count (on switching away and on exit) and the window telling the view model its width are checked by
+reading and by the live check.
+
+Live check (Paul): open Funcular — Everything shows all 2,445, grouped by year or month, not one photo a row; switch to
+Main and back — both libraries show a count; add a large folder (or New library) — a card at the bottom of the grid
+shows the indexing, and the folder's count in the tree climbs; narrow the window or zoom in — the grouping may get finer.
 
 ## Out of scope (future)
 

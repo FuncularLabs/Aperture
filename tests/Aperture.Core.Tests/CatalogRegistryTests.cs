@@ -25,6 +25,66 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void ItemCount_IsSavedAndReadBack()
+    {
+        using var dir = new TempDir();
+        var registry = new CatalogRegistry(RegistryPath(dir));
+        var work = registry.Add("Work", dir.Combine("work"));
+
+        Assert.True(registry.SetItemCount(work.Id, 2445));
+
+        Assert.Equal(2445, new CatalogRegistry(RegistryPath(dir)).List().Single().ItemCount);
+    }
+
+    [Fact]
+    public void ItemCount_SurvivesAnotherWindowsChange()
+    {
+        using var dir = new TempDir();
+        var mine = new CatalogRegistry(RegistryPath(dir));
+        var work = mine.Add("Work", dir.Combine("work"));
+        mine.SetItemCount(work.Id, 2445);
+
+        var theirs = new CatalogRegistry(RegistryPath(dir));
+        Assert.True(theirs.Rename(work.Id, "Office")); // re-reads the list, then saves it
+
+        var reread = new CatalogRegistry(RegistryPath(dir)).List().Single();
+        Assert.Equal(("Office", 2445), (reread.Name, reread.ItemCount));
+    }
+
+    [Fact]
+    public void ALibraryListWithoutCounts_ReadsAsNoCount()
+    {
+        using var dir = new TempDir();
+        File.WriteAllText(RegistryPath(dir),
+            "{\"catalogs\":[{\"id\":\"a\",\"name\":\"Work\",\"dir\":" + JsonSerializer.Serialize(dir.Combine("work")) + "}]}");
+
+        Assert.Null(new CatalogRegistry(RegistryPath(dir)).List().Single().ItemCount);
+    }
+
+    [Fact]
+    public void ANegativeCountInTheFile_IsIgnored()
+    {
+        using var dir = new TempDir();
+        File.WriteAllText(RegistryPath(dir),
+            "{\"catalogs\":[{\"id\":\"a\",\"name\":\"Work\",\"itemCount\":-5,\"dir\":" + JsonSerializer.Serialize(dir.Combine("work")) + "}]}");
+
+        Assert.Null(new CatalogRegistry(RegistryPath(dir)).List().Single().ItemCount);
+    }
+
+    [Fact]
+    public void SetItemCount_OfAnUnknownLibrary_ChangesNothing()
+    {
+        using var dir = new TempDir();
+        var registry = new CatalogRegistry(RegistryPath(dir));
+        registry.Add("Work", dir.Combine("work"));
+        var before = File.ReadAllText(RegistryPath(dir));
+
+        Assert.False(registry.SetItemCount("no-such-library", 7));
+
+        Assert.Equal(before, File.ReadAllText(RegistryPath(dir)));
+    }
+
+    [Fact]
     public void New_NoFile_IsEmpty()
     {
         using var dir = new TempDir();

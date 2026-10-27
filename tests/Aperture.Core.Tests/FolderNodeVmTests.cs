@@ -63,6 +63,20 @@ public class FolderNodeVmTests
     }
 
     [Fact]
+    public void Count_ReportsAChange()
+    {
+        var node = Node();
+        var changes = new List<string?>();
+        node.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+
+        node.Count = 200;
+        node.Count = 200; // no change
+
+        Assert.Equal(200, node.Count);
+        Assert.Equal([nameof(FolderNodeVm.Count)], changes);
+    }
+
+    [Fact]
     public void ANodeWithoutSubfolders_HasNothingToExpand()
     {
         var node = Node(hasChildren: false);

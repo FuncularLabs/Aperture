@@ -14,46 +14,67 @@ public enum BucketMode
 public readonly record struct DateBucket(long Key, string Label);
 
 /// <summary>
-/// Groups items into date sections. Granularity is chosen so the number of
-/// sections lands near a target (~12) — coarse enough to stay scannable, fine
-/// enough to be useful — rather than by a fixed density rule.
+/// Groups items into date sections. The granularity is chosen so sections don't leave their rows mostly empty in a grid
+/// of the given width, and — among those that don't — so the number of sections lands near a target (~12): coarse enough
+/// to stay scannable, fine enough to be useful.
 /// </summary>
 public static class DateBuckets
 {
-    /// <summary>Preferred number of sections. The coarsest granularity nearest this wins.</summary>
+    /// <summary>Preferred number of sections. Among qualifying granularities, the one nearest this wins (coarser on a tie).</summary>
     public const int TargetSections = 12;
 
-    // Coarsest first, so ties (equal distance to target) favour fewer, broader sections.
+    /// <summary>
+    /// How full a granularity's sections must be, on average, to qualify: each section's tiles over the tile slots of the
+    /// rows it takes (one tile in a 12-across grid fills 1/12 of its row), averaged over the sections.
+    /// </summary>
+    public const double MinRowFill = 0.5;
+
+    // Coarsest first, so ties favour fewer, broader sections.
     private static readonly BucketMode[] CoarseToFine = [BucketMode.Year, BucketMode.Month, BucketMode.Week, BucketMode.Day];
 
-    /// <summary>Picks the granularity whose section count is closest to <see cref="TargetSections"/>.</summary>
-    public static BucketMode ChooseMode(IReadOnlyList<DateTime> dates)
+    /// <summary>
+    /// Picks the granularity for <paramref name="dates"/> in a grid <paramref name="tilesPerRow"/> tiles across: among those
+    /// whose sections fill at least <see cref="MinRowFill"/> of their rows on average, the one whose section count is
+    /// nearest <see cref="TargetSections"/>; if none does, the one that fills its rows best. Coarser wins a tie.
+    /// </summary>
+    public static BucketMode ChooseMode(IReadOnlyList<DateTime> dates, int tilesPerRow)
     {
         if (dates.Count == 0)
             return BucketMode.Year;
+        var across = Math.Max(1, tilesPerRow);
 
-        var best = BucketMode.Year;
-        var bestDistance = int.MaxValue;
-
+        BucketMode? nearest = null;
+        var nearestDistance = int.MaxValue;
+        var fullest = BucketMode.Year;
+        var fullestFill = -1.0;
         foreach (var mode in CoarseToFine)
         {
-            var count = CountSections(dates, mode);
-            var distance = Math.Abs(count - TargetSections);
-            if (distance < bestDistance)
+            var sizes = SectionSizes(dates, mode);
+            var fill = sizes.Average(n => n / (Math.Ceiling(n / (double)across) * across));
+            if (fill > fullestFill)
             {
-                bestDistance = distance;
-                best = mode;
+                fullestFill = fill;
+                fullest = mode;
+            }
+            var distance = Math.Abs(sizes.Count - TargetSections);
+            if (fill >= MinRowFill && distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearest = mode;
             }
         }
-        return best;
+        return nearest ?? fullest;
     }
 
-    private static int CountSections(IReadOnlyList<DateTime> dates, BucketMode mode)
+    private static List<int> SectionSizes(IReadOnlyList<DateTime> dates, BucketMode mode)
     {
-        var keys = new HashSet<long>();
+        var sizes = new Dictionary<long, int>();
         foreach (var date in dates)
-            keys.Add(Bucket(date, mode).Key);
-        return keys.Count;
+        {
+            var key = Bucket(date, mode).Key;
+            sizes[key] = sizes.GetValueOrDefault(key) + 1;
+        }
+        return [.. sizes.Values];
     }
 
     /// <summary>Maps a date to its bucket. Keys increase with time so newest sorts first when descending.</summary>

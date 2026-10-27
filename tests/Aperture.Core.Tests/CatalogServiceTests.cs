@@ -597,6 +597,19 @@ public class CatalogServiceTests
     // --- New library: a dedicated folder ------------------------------------------------------
 
     [Fact]
+    public async Task RecordItemCount_KeepsTheOpenLibrarysCount()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+
+        service.RecordItemCount(1234);
+
+        Assert.Equal(1234, new CatalogRegistry(RegistryPath(outer)).List().Single(c => c.Id == service.ActiveCatalog!.Id).ItemCount);
+        Assert.Null(service.Registry.List().Single(c => c.Id == work.Id).ItemCount); // not the others
+    }
+
+    [Fact]
     public async Task CreateLibraryAsync_CreatesItsOwnFolder_RegistersIt_AndSwitches()
     {
         using var outer = new TempDir();

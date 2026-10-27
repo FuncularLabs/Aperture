@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using Aperture.App;
 using Aperture.App.Mvvm;
@@ -27,8 +28,9 @@ public class MainWindowTemplateTests
     /// bindings, and every trigger's setters. In resources: styles, templates, objects, and merged dictionaries.
     /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these places, so
     /// removing any part of the walk that finds bindings fails it; the <c>seen</c> checks only stop repeats and loops.
-    /// Not walked: styles that apply implicitly from outside the template (the grid's or window's resources),
-    /// DynamicResource references, and InputBindings — the tile uses none of them.
+    /// It looks only in the places listed — not, for example, at styles that apply implicitly from outside the template
+    /// (the grid's or window's resources), DynamicResource references, InputBindings, or an element's own triggers;
+    /// the tile and its container use none of them.
     /// </summary>
     private static List<(string Where, Binding Binding)> BindingsIn(DataTemplate template, Style? containerStyle = null)
     {
@@ -429,6 +431,7 @@ public class MainWindowTemplateTests
             var template = (DataTemplate)grid.Resources[new DataTemplateKey(typeof(TileVm))];
             var tile = (DependencyObject)template.LoadContent();
 
+            Assert.Same(window.FindResource("TileContainer"), grid.ItemContainerStyle); // the style every tile's container gets
             var bindings = BindingsIn(template, grid.ItemContainerStyle);
             var offenders = Offenders(bindings);
             var sizeBindings = bindings.Count(b => b.Binding.RelativeSource?.Mode == RelativeSourceMode.Self
@@ -463,6 +466,36 @@ public class MainWindowTemplateTests
             Assert.Equal("TileSize", BindingOperations.GetBinding(grid, TileLayout.SizeProperty)!.Path.Path); // set once, here
             window.Close();
         });
+    }
+
+    [Fact]
+    public void TheGrid_ShowsAnIndexingCardWhileIndexing()
+    {
+        Sta.Run(() =>
+        {
+            var window = new MainWindow();
+
+            var card = Assert.IsAssignableFrom<FrameworkElement>(window.FindName("IndexingCard"));
+            Assert.Equal("IsIndexing", BindingOperations.GetBinding(card, UIElement.VisibilityProperty)?.Path.Path);
+            Assert.Equal(VerticalAlignment.Bottom, card.VerticalAlignment); // a card over the grid, not a sheet across it
+            var parts = LogicalDescendants(card).ToList();
+            Assert.Contains(parts.OfType<TextBlock>(), t => BindingOperations.GetBinding(t, TextBlock.TextProperty)?.Path.Path == "IndexingText");
+            var bar = Assert.Single(parts.OfType<ProgressBar>(), p => BindingOperations.GetBinding(p, RangeBase.ValueProperty) is not null);
+            Assert.Equal("IndexValue", BindingOperations.GetBinding(bar, RangeBase.ValueProperty)!.Path.Path);
+            Assert.Equal("IndexMax", BindingOperations.GetBinding(bar, RangeBase.MaximumProperty)?.Path.Path);
+            Assert.Equal("IndexIndeterminate", BindingOperations.GetBinding(bar, ProgressBar.IsIndeterminateProperty)?.Path.Path);
+            window.Close();
+        });
+    }
+
+    private static IEnumerable<DependencyObject> LogicalDescendants(DependencyObject node)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(node).OfType<DependencyObject>())
+        {
+            yield return child;
+            foreach (var deeper in LogicalDescendants(child))
+                yield return deeper;
+        }
     }
 
     [Fact]

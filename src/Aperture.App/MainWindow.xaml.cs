@@ -18,6 +18,8 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
+        // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode).
+        ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(WrapViewportWidth());
     }
 
     private MainViewModel? ViewModel => DataContext as MainViewModel;
@@ -49,6 +51,7 @@ public partial class MainWindow : Window
 
         _scrollByLocation.Clear();
         _lastLocationKey = vm.LocationKey;
+        vm.SetGridWidth(WrapViewportWidth()); // the grid keeps its size across a switch: no SizeChanged to tell it
         vm.ViewApplying += OnViewApplying;
         vm.ViewApplied += OnViewApplied;
         vm.PropertyChanged += OnViewModelPropertyChanged;

@@ -1864,21 +1864,47 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void ZoomIn()
     {
         if (_zoom < ZoomSizes.Length - 1)
-        {
-            _zoom++;
-            OnPropertyChanged(nameof(TileSize));
-            _library.Settings.Update(s => s.DefaultZoom = _zoom);
-        }
+            Zoom(_zoom + 1);
     }
 
     public void ZoomOut()
     {
         if (_zoom > 0)
-        {
-            _zoom--;
-            OnPropertyChanged(nameof(TileSize));
-            _library.Settings.Update(s => s.DefaultZoom = _zoom);
-        }
+            Zoom(_zoom - 1);
+    }
+
+    private void Zoom(int zoom)
+    {
+        var across = TilesPerRow;
+        _zoom = zoom;
+        OnPropertyChanged(nameof(TileSize));
+        _library.Settings.Update(s => s.DefaultZoom = _zoom);
+        RegroupIfTheRowChanged(across);
+    }
+
+    private double _gridWidth;
+    private bool _viewApplied; // a view is up; until then a new width just waits for the first build to pick it up
+
+    /// <summary>
+    /// How many tiles fit across the grid at the current zoom (each tile's slot is its size plus 20 px of margin, as the
+    /// view measures it). The date grouping uses it (<see cref="DateBuckets.ChooseMode"/>); 1 until the view reports a width.
+    /// </summary>
+    public int TilesPerRow => _gridWidth <= 0 ? 1 : Math.Max(1, (int)Math.Floor(_gridWidth / (TileSize + 20)));
+
+    /// <summary>The view reports the width its tiles wrap in; a change in how many fit across regroups the dates.</summary>
+    public void SetGridWidth(double width)
+    {
+        var across = TilesPerRow;
+        _gridWidth = width;
+        RegroupIfTheRowChanged(across);
+    }
+
+    // Only once a view is up: a request before then would supersede the startup build (and its folder tree), and that
+    // build picks up the width anyway — or, if it was already computing, regroups as it's applied (ApplyView).
+    private void RegroupIfTheRowChanged(int across)
+    {
+        if (_viewApplied && TilesPerRow != across && GroupByDate && !_closing)
+            RequestBuildView();
     }
 
     // --- Window layout persistence ------------------------------------------
@@ -2103,10 +2129,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
         Dictionary<string, Annotation> Annotations, Dictionary<long, bool> Expansion,
-        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool);
+        bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow);
 
     private sealed record ViewBuild(
-        List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections);
+        List<TileVm> MediaTiles, List<IGridItem> Tiles, bool UseSections, Dictionary<long, SectionVm> Sections, int TilesPerRow);
 
     /// <summary>Snapshots everything the compute needs — must run on the UI thread.</summary>
     private BuildInputs CaptureBuildInputs() => new(
@@ -2114,13 +2140,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library.Settings.Current.CaptionFormat,
         CurrentSort,
         _searchText.Trim(),
-        EffectiveLocation(),
+        _location, // the top of the library is everything in it, however many folders it has
         GroupByDate,
         _annotations,
         _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded),
         _showImages,
         _showVideos,
-        _tilePool);
+        _tilePool,
+        TilesPerRow);
 
     /// <summary>Pure: builds tiles + fresh sections from the snapshot. Touches no shared/UI state, so it is thread-safe.</summary>
     private ViewBuild ComputeView(BuildInputs input)
@@ -2150,7 +2177,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         List<TileVm> tiles;
         if (useSections)
         {
-            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections, input.Pool);
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion, sections, input.Pool, input.TilesPerRow);
         }
         else
         {
@@ -2158,7 +2185,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             tiles = media.Select(r => GetOrReuseTile(input.Pool, r, input.Format, Ann(r))).ToList();
         }
 
-        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections);
+        return new ViewBuild(tiles, [.. tiles.Cast<IGridItem>()], useSections, sections, input.TilesPerRow);
     }
 
     /// <summary>Identifies the current view (folder or search) for per-location scroll memory.</summary>
@@ -2217,6 +2244,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UpdateWindowTitle();
 
         ViewApplied?.Invoke();
+
+        // Built for another width (the grid was resized or zoomed while this was computed, or before the first view
+        // was up): group again for this one.
+        _viewApplied = true;
+        if (GroupByDate && build.TilesPerRow != TilesPerRow && !_closing)
+            RequestBuildView();
     }
 
     /// <summary>Media files directly inside the given folder (non-recursive).</summary>
@@ -2243,15 +2276,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var rootVm in Roots)
         {
             var subs = Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootVm.Id, "");
-            // A ticked root's count leaves out its hidden subfolders, as its subfolders' counts do. (An unticked root
-            // shows nothing in the union, so it still counts everything in it — hidden subfolders included.)
-            var count = Math.Max(0, rootVm.Count - Core.Library.FolderTree.HiddenItemCount(_hiddenFolders, rootVm.Id));
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
-                rootVm, count, LoadChildNodes, OnNodeExpandedChanged));
+                rootVm, TreeCount(rootVm), LoadChildNodes, OnNodeExpandedChanged));
         }
         RestoreExpansion();
     }
+
+    // A ticked root's count leaves out its hidden subfolders, as its subfolders' counts do. (An unticked root shows
+    // nothing in the union, so it still counts everything in it — hidden subfolders included.)
+    private int TreeCount(RootVm rootVm) =>
+        Math.Max(0, rootVm.Count - Core.Library.FolderTree.HiddenItemCount(_hiddenFolders, rootVm.Id));
 
     /// <summary>
     /// Re-opens the folders the user left expanded — on launch and after every background rebuild —
@@ -2374,17 +2409,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Resolves single-root "home" to that root's top level.</summary>
-    private (long? RootId, string RelDir) EffectiveLocation()
-    {
-        if (_location.RootId is null && Roots.Count == 1)
-            return (Roots[0].Id, "");
-        return _location;
-    }
-
     /// <summary>All rows under the current location, recursively (for search).</summary>
     private List<LibraryRow> ScopeRecursive(List<LibraryRow> rows)
     {
-        var loc = EffectiveLocation();
+        var loc = _location;
         if (loc.RootId is null)
             return rows;
         var rootId = loc.RootId.Value;
@@ -2444,9 +2472,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private List<TileVm> BuildSectionedPure(
         List<LibraryRow> rows, string format, IReadOnlyList<Aperture.Core.Settings.SortLevel> levels,
         Func<LibraryRow, Annotation> ann, Dictionary<long, bool> expansion, Dictionary<long, SectionVm> sections,
-        Dictionary<long, TileVm> pool)
+        Dictionary<long, TileVm> pool, int tilesPerRow)
     {
-        var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList());
+        var mode = DateBuckets.ChooseMode(rows.Select(r => r.Item.BestDate).ToList(), tilesPerRow);
 
         var bucketByItem = new Dictionary<long, DateBucket>(rows.Count);
         foreach (var r in rows)
@@ -2722,12 +2750,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _ => "",
         };
 
-        // Drive the status-bar progress bar: a real fraction while indexing files, otherwise indeterminate.
+        // Drive the progress bars: a real fraction while indexing files, otherwise indeterminate.
         if (p.Phase == IndexPhase.Indexing && p.Total > 0)
         {
             IndexIndeterminate = false;
             IndexMax = p.Total;
             IndexValue = p.Processed;
+        }
+
+        // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done.
+        if (p.Phase == IndexPhase.Indexing)
+        {
+            rootVm.Count = _library.CountForRoot(rootId);
+            if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
+                node.Count = TreeCount(rootVm);
         }
         else
         {

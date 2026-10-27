@@ -17,6 +17,12 @@ public sealed class CatalogEntry
 
     /// <summary>When this catalog was last made active (UTC ticks); 0 if never opened yet.</summary>
     public long LastOpenedTicks { get; set; }
+
+    /// <summary>
+    /// How many items the library showed when it was last open (recorded as it's switched away from or Aperture closes),
+    /// for the library list; <c>null</c> if not recorded yet.
+    /// </summary>
+    public int? ItemCount { get; set; }
 }
 
 /// <summary>What <see cref="CatalogRegistry.RemoveAndDeleteFiles"/> did.</summary>
@@ -241,6 +247,23 @@ public sealed class CatalogRegistry
         if (Save())
             return true;
         entry.Name = previous;
+        return false;
+    });
+
+    /// <summary>
+    /// Records how many items a library shows, for the library list while it isn't open. Returns <c>false</c> if no
+    /// catalog has that id or the list couldn't be saved (the count is then left as it was).
+    /// </summary>
+    public bool SetItemCount(string id, int count) => Mutate(() =>
+    {
+        var entry = _catalogs.FirstOrDefault(c => c.Id == id);
+        if (entry is null)
+            return false;
+        var previous = entry.ItemCount;
+        entry.ItemCount = Math.Max(0, count);
+        if (Save())
+            return true;
+        entry.ItemCount = previous;
         return false;
     });
 
@@ -570,7 +593,11 @@ public sealed class CatalogRegistry
             if (catalogs.Any(x => x.Id == c.Id || SameDir(x.Dir, full)))
                 continue;
             var name = string.IsNullOrWhiteSpace(c.Name) ? Path.GetFileName(full) : c.Name;
-            catalogs.Add(new CatalogEntry { Id = c.Id, Name = name, Dir = full, LastOpenedTicks = c.LastOpenedTicks });
+            catalogs.Add(new CatalogEntry
+            {
+                Id = c.Id, Name = name, Dir = full, LastOpenedTicks = c.LastOpenedTicks,
+                ItemCount = c.ItemCount is >= 0 ? c.ItemCount : null, // a hand-edited negative count means nothing
+            });
         }
 
         // The library this window has open stays listed even if another window removed it meanwhile (its entry
@@ -717,5 +744,5 @@ public sealed class CatalogRegistry
     private static string NewId() => Guid.NewGuid().ToString("N");
 
     private static CatalogEntry Clone(CatalogEntry e) =>
-        new() { Id = e.Id, Name = e.Name, Dir = e.Dir, LastOpenedTicks = e.LastOpenedTicks };
+        new() { Id = e.Id, Name = e.Name, Dir = e.Dir, LastOpenedTicks = e.LastOpenedTicks, ItemCount = e.ItemCount };
 }

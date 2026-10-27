@@ -264,6 +264,16 @@ public sealed class CatalogService : IAsyncDisposable
     }
 
     /// <summary>
+    /// Records how many items the open library shows, so the library list can show it while the library isn't open.
+    /// Best effort: if the list can't be saved, the previous count stays.
+    /// </summary>
+    public void RecordItemCount(int count)
+    {
+        if (ActiveCatalog is { } active)
+            _registry.SetItemCount(active.Id, count);
+    }
+
+    /// <summary>
     /// Renames a library (trimmed; not empty; not another library's name, case-insensitive). Throws
     /// <see cref="CatalogException"/> if another window already removed it, or the list couldn't be saved.
     /// </summary>

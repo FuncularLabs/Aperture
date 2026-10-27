@@ -120,6 +120,19 @@ public class CatalogBarViewModelTests
     }
 
     [Fact]
+    public async Task Libraries_CarryEachLibrarysLastCount()
+    {
+        await using var f = new Fixture();
+        var work = f.AddLibrary("Work");
+        f.Service.Registry.SetItemCount(work.Id, 42);
+
+        f.Bar.Refresh();
+
+        Assert.Equal(42, f.Bar.Libraries.Single(l => l.Name == "Work").ItemCount);
+        Assert.Null(f.Bar.Libraries.Single(l => l.Name == "Default").ItemCount); // never recorded
+    }
+
+    [Fact]
     public async Task Libraries_WithOneLibrary_ListJustIt()
     {
         await using var f = new Fixture();

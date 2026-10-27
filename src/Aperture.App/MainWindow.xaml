@@ -709,6 +709,23 @@
                                                    Foreground="{StaticResource CanvasMuted}" FontSize="12"
                                                    VerticalAlignment="Center" Margin="5,0,0,0"
                                                    Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" />
+                                        <!-- Another library: the count it had when last open (none if not recorded yet). -->
+                                        <TextBlock Text="{Binding ItemCount, StringFormat= ({0:n0})}"
+                                                   Foreground="{StaticResource CanvasMuted}" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="5,0,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding ItemCount}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                 </Button>
                             </DataTemplate>
@@ -1115,6 +1132,46 @@
                                  Foreground="{StaticResource Accent}" Background="#3A3E46" BorderThickness="0" />
                     <TextBlock Text="Loading…" Foreground="{StaticResource CanvasInk}" FontSize="12"
                                Margin="10,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
+
+            <!-- While anything is indexed: what, and how far — the status pill's information, bigger, where the user is
+                 looking. A card at the bottom of the grid, not a sheet across it: the tiles above stay usable. -->
+            <Border x:Name="IndexingCard" Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="0,0,0,22" Panel.ZIndex="21" Background="#F0282B32" CornerRadius="10" Padding="18,12"
+                    MinWidth="320" MaxWidth="560"
+                    Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" BlurRadius="14" ShadowDepth="2" Opacity="0.45" />
+                </Border.Effect>
+                <StackPanel Orientation="Horizontal">
+                    <!-- Spinner: an arc that turns for as long as the card is shown -->
+                    <Path Width="26" Height="26" Stretch="None" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5"
+                          Data="M 13,2 A 11,11 0 1 1 2,13" Stroke="{StaticResource Accent}" StrokeThickness="3"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                        <Path.RenderTransform>
+                            <RotateTransform />
+                        </Path.RenderTransform>
+                        <Path.Triggers>
+                            <EventTrigger RoutedEvent="Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                         From="0" To="360" Duration="0:0:1.1" RepeatBehavior="Forever" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Path.Triggers>
+                    </Path>
+                    <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="Indexing" Foreground="{StaticResource CanvasInk}" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource CanvasInk}" FontSize="12"
+                                   Opacity="0.85" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" />
+                        <ProgressBar Height="4" MinWidth="240" Foreground="{StaticResource Accent}" Background="#3A3E46"
+                                     BorderThickness="0"
+                                     Value="{Binding IndexValue}" Maximum="{Binding IndexMax}"
+                                     IsIndeterminate="{Binding IndexIndeterminate}" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
                 </Grid>

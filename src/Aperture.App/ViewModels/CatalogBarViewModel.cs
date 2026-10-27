@@ -6,8 +6,11 @@ using Aperture.Core.Storage;
 
 namespace Aperture.App.ViewModels;
 
-/// <summary>A library as the nav lists it.</summary>
-public sealed record LibraryListItem(string Id, string Name, string Dir, bool IsActive);
+/// <summary>
+/// A library as the nav lists it. <see cref="ItemCount"/> is how many items it showed when last open (the open library
+/// shows its live count instead); <c>null</c> if not recorded yet.
+/// </summary>
+public sealed record LibraryListItem(string Id, string Name, string Dir, bool IsActive, int? ItemCount);
 
 /// <summary>The folder New library was asked to put in the new library, and whether with its subfolders.</summary>
 public sealed record NewLibraryFolder(string Path, bool IncludeSubfolders);
@@ -97,7 +100,7 @@ public sealed class CatalogBarViewModel : ObservableObject
         var activeId = _catalog.ActiveCatalog?.Id;
         Libraries = _catalog.Registry.List()
             .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Select(c => new LibraryListItem(c.Id, c.Name, c.Dir, c.Id == activeId))
+            .Select(c => new LibraryListItem(c.Id, c.Name, c.Dir, c.Id == activeId, c.ItemCount))
             .ToList();
         OnPropertyChanged(nameof(ActiveName));
         OnPropertyChanged(nameof(Libraries));

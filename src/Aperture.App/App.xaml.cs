@@ -154,6 +154,7 @@ public partial class App : Application
     /// </summary>
     private void OnPreparingToSwitch(object? sender, EventArgs e) => OnUiThread(() =>
     {
+        RecordItemCount(); // the library being left shows this count in the list until it's open again
         _viewModel?.PrepareForClose();
         if (_window is not null)
             _window.IsEnabled = false;
@@ -181,6 +182,20 @@ public partial class App : Application
         }
     });
 
+    // The open library's count, for the library list while it isn't open. Best effort: it must never stop a switch or exit.
+    private void RecordItemCount()
+    {
+        try
+        {
+            if (_catalog is not null && _viewModel is not null)
+                _catalog.RecordItemCount(_viewModel.TotalItemCount);
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+        }
+    }
+
     // CatalogService raises its events on the caller's context, and the libraries in the nav call it from the UI
     // thread — so this normally runs inline. The marshal is a guard: a window can only be touched on its own thread.
     private void OnUiThread(Action action)
@@ -194,6 +209,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         ReleaseWindow(); // a backstop: closing the window (Shutdown closes it too) has already given it up
+        RecordItemCount();
         _viewModel?.PrepareForClose();
 
         // Release the live library's DB handles. The catalog service owns it in the normal path; a pinned

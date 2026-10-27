@@ -40,7 +40,8 @@ on your machine — it never uploads anything or phones home.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and
   square, center-cropped tiles.
 - **Collapsible date sections** that auto-collapse older buckets, so you land on ~2
-  screenfuls instead of scrolling forever.
+  screenfuls instead of scrolling forever; grouped by day, week, month or year to suit both the
+  photos and the window's width.
 - **Tags & notes** per file — stored locally, keyed by path, and kept across re-indexing.
   Multi-select tagging; a tag manager; **import/export** as portable JSON to move
   annotations between machines.
