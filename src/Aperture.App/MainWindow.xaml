@@ -725,7 +725,8 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <TextBlock Text="{Binding Data.TotalItemCount, Source={StaticResource Vm}, StringFormat= ({0:n0})}"
+                                        <!-- The open library: its live count, once its items have been read (none until then). -->
+                                        <TextBlock Text="{Binding Data.LoadedItemCount, Source={StaticResource Vm}, StringFormat= ({0:n0}), TargetNullValue=''}"
                                                    Foreground="{StaticResource CanvasMuted}" FontSize="12"
                                                    VerticalAlignment="Center" Margin="5,0,0,0"
                                                    Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" />

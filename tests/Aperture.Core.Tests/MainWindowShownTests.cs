@@ -16,8 +16,10 @@ namespace Aperture.Core.Tests;
 
 /// <summary>
 /// The real <see cref="MainWindow"/>, shown (off screen), for what only a shown window does: its bindings resolve against a
-/// real view model — so a binding it can't make (two-way onto a read-only property) fails here as it would at launch —
-/// its list of libraries is laid out, and its animations run (round 22 of the multiple-libraries review).
+/// real view model, its list of libraries is laid out, and its animations run (round 22 of the multiple-libraries review).
+/// A binding the window can't make (two-way onto a read-only property) fails here as it would at launch — if it is made in
+/// this scenario: a library with a folder, photos and date sections, and a second library in the list. Elements made only
+/// in other states (the first-run panel, context menus, the preview pane's details) aren't reached.
 /// </summary>
 public class MainWindowShownTests
 {
@@ -76,16 +78,18 @@ public class MainWindowShownTests
             var window = OffScreen(new MainWindow { Width = 1200, Height = 800, DataContext = vm });
             try
             {
+                List<string> Counts() => [.. Descendants(window).OfType<TextBlock>()
+                    .Where(t => t.DataContext is LibraryListItem && t.IsVisible && t.Text.TrimStart().StartsWith('('))
+                    .Select(t => $"{((LibraryListItem)t.DataContext).Name} {t.Text.Trim()}")
+                    .Order()];
+
                 window.Show(); // a binding the window can't make with this view model throws here, or as it's laid out
+                Assert.Equal(["Work (42)"], Counts()); // the open library's items aren't read yet (that waits for this thread): no "(0)"
+
                 Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == 3 && !vm.IsLoadingView, TimeSpan.FromSeconds(10)));
                 Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300)); // layout and bindings settle
 
-                var counts = Descendants(window).OfType<TextBlock>()
-                    .Where(t => t.DataContext is LibraryListItem && t.IsVisible && t.Text.TrimStart().StartsWith('('))
-                    .Select(t => $"{((LibraryListItem)t.DataContext).Name} {t.Text.Trim()}")
-                    .Order()
-                    .ToList();
-                Assert.Equal(["Default (3)", "Work (42)"], counts);
+                Assert.Equal(["Default (3)", "Work (42)"], Counts());
 
                 var spinner = Assert.Single(Descendants((DependencyObject)window.FindName("IndexingCard")).OfType<ShapePath>());
                 Assert.Same(window.FindResource("IndexingSpinner"), spinner.Style);
@@ -98,6 +102,159 @@ public class MainWindowShownTests
                 vm.PrepareForClose();
                 service.DisposeAsync().AsTask().GetAwaiter().GetResult();
             }
+        });
+    }
+
+    // --- The width the date grouping is chosen for (round 23) ---
+
+    private static ScrollViewer GridScroll(Window window) =>
+        Descendants((ListBox)window.FindName("ItemsList")).OfType<ScrollViewer>().First();
+
+    private static bool ScrollbarShown(Window window) => GridScroll(window).ComputedVerticalScrollBarVisibility == Visibility.Visible;
+
+    private static List<SectionVm> Sections(MainViewModel vm) =>
+        vm.ItemsView?.Cast<object>().OfType<TileVm>().Select(t => t.Section).OfType<SectionVm>().Distinct().ToList() ?? [];
+
+    // Resizes the window until the grid's viewport would be `viewport` wide without a scrollbar. It steers by the scroll
+    // viewer's own width, which a scrollbar coming or going doesn't change; `frame` is what the viewer keeps beside its
+    // viewport when no scrollbar shows.
+    private static void SizeTheViewport(Window window, double viewport, double frame)
+    {
+        for (var i = 0; i < 8 && Math.Abs(GridScroll(window).ActualWidth - frame - viewport) > 0.5; i++)
+        {
+            window.Width += viewport + frame - GridScroll(window).ActualWidth;
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(250));
+        }
+        Assert.True(Math.Abs(GridScroll(window).ActualWidth - frame - viewport) <= 0.5, $"the viewport wouldn't size to {viewport}");
+    }
+
+    // A real window, shown off screen, over a library of one folder with photos taken on these dates (each with its own
+    // time), its tiles at `tileSize`.
+    private static void WithWindow(IEnumerable<DateTime> dates, double tileSize, Action<MainViewModel, MainWindow> body)
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            var i = 0;
+            foreach (var date in dates)
+            {
+                var path = Path.Combine(photos.Path, $"p{i:000}.jpg");
+                TestImages.Write(path, 32, 24);
+                File.SetLastWriteTimeUtc(path, date.AddMinutes(i++));
+            }
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            library.Settings.Update(s => s.NavWidth = 140); // the folder pane at its narrowest: a CI desktop is 1024 wide
+            var vm = new MainViewModel(library, new ThumbnailService(library));
+            while (vm.TileSize > tileSize)
+                vm.ZoomOut();
+            var window = OffScreen(new MainWindow { Width = 900, Height = 760, DataContext = vm });
+            try
+            {
+                window.Show();
+                Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && !vm.IsLoadingView, TimeSpan.FromSeconds(10)));
+                Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+                body(vm, window);
+            }
+            finally
+            {
+                window.Close();
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    // Two photos on the 15th of each month from January to June, in 2023 and 2024: twelve months of 2 up to four across
+    // (each fills half a row), two years of 12 from five.
+    private static readonly DateTime[] HalfYears =
+        [.. new[] { 2024, 2023 }.SelectMany(year => Enumerable.Range(1, 6).SelectMany(month => Enumerable.Repeat(new DateTime(year, month, 15, 12, 0, 0, DateTimeKind.Utc), 2)))];
+
+    // The same, January to March only: six months of 2 up to four across, two years of 6 from five.
+    private static readonly DateTime[] QuarterYears =
+        [.. new[] { 2024, 2023 }.SelectMany(year => Enumerable.Range(1, 3).SelectMany(month => Enumerable.Repeat(new DateTime(year, month, 15, 12, 0, 0, DateTimeKind.Utc), 2)))];
+
+    [Fact]
+    public void TheGroupingWidth_AllowsForTheScrollbar_ShownOrNot()
+    {
+        WithWindow(HalfYears.Take(3), 96, (vm, window) =>
+        {
+            Assert.False(ScrollbarShown(window)); // three tiles
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth;
+            var slot = vm.TileSize + 20;
+
+            SizeTheViewport(window, 4 * slot + 5, frame); // four slots and a few pixels: fewer than a scrollbar takes
+
+            Assert.False(ScrollbarShown(window));
+            Assert.Equal(3, vm.TilesPerRow); // four fit, but the grouping allows for a scrollbar
+        });
+    }
+
+    [Fact]
+    public void ARegroupThatBringsInTheScrollbar_Settles()
+    {
+        // Lens A's reproduction (round 23): by month, all but the newest collapsed, so no scrollbar; the viewport a few
+        // pixels past five slots. Were the width to follow the scrollbar: five across → years (taller than the viewport: a
+        // scrollbar) → four across → the collapsed months (shorter: none) → five across…, rebuilding for good.
+        WithWindow(QuarterYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            void Settle() => Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+
+            // How tall the collapsed months are, and the years.
+            SizeTheViewport(window, 4 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 6, TimeSpan.FromSeconds(10)), $"{Sections(vm).Count} sections at {vm.TilesPerRow} across");
+            foreach (var month in Sections(vm).Skip(1))
+                month.IsExpanded = false;
+            Settle();
+            var months = GridScroll(window).ExtentHeight;
+            SizeTheViewport(window, 5 * slot + 20, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 2, TimeSpan.FromSeconds(10)), $"{Sections(vm).Count} sections at {vm.TilesPerRow} across");
+            Settle();
+            var years = GridScroll(window).ExtentHeight;
+
+            // A viewport between the two: the years need a scrollbar, the collapsed months don't.
+            window.Height += (months + years) / 2 - GridScroll(window).ViewportHeight;
+            SizeTheViewport(window, 4 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 6, TimeSpan.FromSeconds(10)));
+            Settle();
+            Assert.InRange(GridScroll(window).ViewportHeight, months + 1, years - 1);
+            Assert.False(ScrollbarShown(window));
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+
+            SizeTheViewport(window, 5 * slot + 5, frame);
+            Sta.PumpUntil(() => false, TimeSpan.FromSeconds(1)); // any regroup the resize asked for is done
+            var before = applied;
+            Sta.PumpUntil(() => false, TimeSpan.FromSeconds(2));
+
+            Assert.Equal(0, applied - before);
+            Assert.Equal(4, vm.TilesPerRow);
+            Assert.Equal(6, Sections(vm).Count);
+        });
+    }
+
+    [Fact]
+    public void TheGrouping_FollowsTheWindow_WithItsFirstSectionCollapsed()
+    {
+        // Lens A (round 23): the width came from the first section's wrap panel, which keeps its width once collapsed.
+        WithWindow(HalfYears, 96, (vm, window) =>
+        {
+            var slot = vm.TileSize + 20;
+            var frame = GridScroll(window).ActualWidth - GridScroll(window).ViewportWidth
+                - (ScrollbarShown(window) ? SystemParameters.VerticalScrollBarWidth : 0);
+            SizeTheViewport(window, 4 * slot + 40, frame);
+            Assert.True(Sta.PumpUntil(() => vm.TilesPerRow == 4 && Sections(vm).Count == 12, TimeSpan.FromSeconds(10)));
+            Sections(vm)[0].IsExpanded = false;
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+
+            SizeTheViewport(window, 6 * slot + 40, frame);
+
+            Assert.True(Sta.PumpUntil(() => vm.TilesPerRow == 6, TimeSpan.FromSeconds(5)), $"{vm.TilesPerRow} across");
         });
     }
 

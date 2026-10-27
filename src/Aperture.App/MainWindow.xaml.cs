@@ -19,12 +19,13 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
         // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid
-        // is resized, and when its scrollbar comes or goes, which narrows or widens the tiles' room without a resize.
-        ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(WrapViewportWidth());
+        // is resized, and when its room changes inside it (its first layout; its scrollbar coming or going, which
+        // GroupingWidth allows for either way).
+        ItemsList.SizeChanged += (_, _) => ViewModel?.SetGridWidth(GroupingWidth());
         ItemsList.AddHandler(System.Windows.Controls.ScrollViewer.ScrollChangedEvent, new System.Windows.Controls.ScrollChangedEventHandler((_, e) =>
         {
             if (e.ViewportWidthChange != 0)
-                ViewModel?.SetGridWidth(WrapViewportWidth());
+                ViewModel?.SetGridWidth(GroupingWidth());
         }));
     }
 
@@ -57,7 +58,7 @@ public partial class MainWindow : Window
 
         _scrollByLocation.Clear();
         _lastLocationKey = vm.LocationKey;
-        vm.SetGridWidth(WrapViewportWidth()); // the grid keeps its size across a switch: no SizeChanged to tell it
+        vm.SetGridWidth(GroupingWidth()); // the grid keeps its size across a switch: no SizeChanged to tell it
         vm.ViewApplying += OnViewApplying;
         vm.ViewApplied += OnViewApplied;
         vm.PropertyChanged += OnViewModelPropertyChanged;
@@ -1346,6 +1347,22 @@ public partial class MainWindow : Window
     /// already excludes the vertical scrollbar — do not subtract padding/12 again
     /// (that was the 0.8.4 off-by-one: 4 visual columns, nav used 3).
     /// </summary>
+    /// <summary>
+    /// The width the date grouping is chosen for: the grid's viewport with its scrollbar showing, whether or not it is. A
+    /// regroup can bring the scrollbar in or take it away; were this width to follow it, the grouping could change back,
+    /// and again. The viewport, not a section's wrap panel: a collapsed section's panel keeps its old width.
+    /// </summary>
+    private double GroupingWidth()
+    {
+        var scroll = GridScroll();
+        var width = scroll is { ViewportWidth: > 1 }
+            ? scroll.ViewportWidth
+            : ItemsList.ActualWidth - ItemsList.Padding.Left - ItemsList.Padding.Right;
+        if (scroll?.ComputedVerticalScrollBarVisibility != System.Windows.Visibility.Visible)
+            width -= SystemParameters.VerticalScrollBarWidth;
+        return Math.Max(1, width);
+    }
+
     private double WrapViewportWidth()
     {
         if (FindDescendant<WpfToolkit.Controls.VirtualizingWrapPanel>(ItemsList)

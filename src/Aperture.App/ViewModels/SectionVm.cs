@@ -33,6 +33,12 @@ public sealed class SectionVm : ObservableObject
         set => SetProperty(ref _isExpanded, value);
     }
 
+    /// <summary>
+    /// How the build that made this section would have left it (the newest ~2 screens expanded): a section whose
+    /// <see cref="IsExpanded"/> differs has been toggled.
+    /// </summary>
+    public bool ExpandedByDefault { get; set; }
+
     /// <summary>True when the keyboard cursor is on this section's header.</summary>
     private bool _isCursor;
     public bool IsCursor

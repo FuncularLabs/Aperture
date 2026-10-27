@@ -184,6 +184,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_closing)
             return;
         OnPropertyChanged(nameof(TotalItemCount));
+        OnPropertyChanged(nameof(LoadedItemCount));
         if (generation != _buildGeneration)
             return; // a data-change rebuild already superseded startup
 
@@ -752,7 +753,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// <see cref="TotalItemCount"/> once the library's items have been read; <c>null</c> before then, when the library's
-    /// count isn't known (the library list keeps the one it had).
+    /// count isn't known (the library list shows none for it, and keeps the one it recorded).
     /// </summary>
     public int? LoadedItemCount => _rowsRead ? _allRows.Count : null;
 
@@ -1901,12 +1902,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private SectionExpansion _expansion = SectionExpansion.None; // the user's section toggles, per grouping
 
     /// <summary>
-    /// How many tiles fit across the grid at the current zoom (each tile's slot is its size plus 20 px of margin, as the
-    /// view measures it). The date grouping uses it (<see cref="DateBuckets.ChooseMode"/>); 1 until the view reports a width.
+    /// How many tiles fit across the width the view reports, at the current zoom (each tile's slot is its size plus 20 px
+    /// of margin, as the view measures it). The date grouping uses it (<see cref="DateBuckets.ChooseMode"/>); 1 until the
+    /// view reports a width.
     /// </summary>
     public int TilesPerRow => _gridWidth <= 0 ? 1 : Math.Max(1, (int)Math.Floor(_gridWidth / (TileSize + 20)));
 
-    /// <summary>The view reports the width its tiles wrap in; if that groups the dates differently, they're regrouped.</summary>
+    /// <summary>Counts every view build asked for, as it's asked for (before its debounce). For tests.</summary>
+    internal int BuildGeneration => _buildGeneration;
+
+    /// <summary>
+    /// The view reports the width its tiles wrap in (with room for a scrollbar, shown or not); if that groups the dates
+    /// differently, they're regrouped.
+    /// </summary>
     public void SetGridWidth(double width)
     {
         var across = TilesPerRow;
@@ -1924,9 +1932,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RequestBuildView();
     }
 
-    // The section toggles to build with: those remembered for each grouping, with the view's own as they are now.
-    private SectionExpansion CurrentExpansion() => _expansion = _mode is { } mode
-        ? _expansion.With(mode, _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
+    // The user's section toggles, remembered for each grouping, with the view's own as they are now. A section left as its
+    // build set it isn't a toggle: a section collapsed only because it was older stays out of other folders' views.
+    private SectionExpansion CurrentToggles() => _expansion = _mode is { } mode
+        ? _expansion.With(mode, _sections.Where(kv => kv.Value.IsExpanded != kv.Value.ExpandedByDefault)
+            .ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
         : _expansion;
 
     // --- Window layout persistence ------------------------------------------
@@ -2084,6 +2094,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         (_allRows, _hiddenFolders) = _library.GetContents();
         _rowsRead = true;
         OnPropertyChanged(nameof(TotalItemCount));
+        OnPropertyChanged(nameof(LoadedItemCount));
     }
 
     /// <summary>Rebuilds the grid synchronously from the cached rows (startup / one-off data changes).</summary>
@@ -2151,7 +2162,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private sealed record BuildInputs(
         List<LibraryRow> Rows, string Format, SortOption Sort, string Query,
         (long? RootId, string RelDir) Location, bool GroupByDate,
-        Dictionary<string, Annotation> Annotations, SectionExpansion Expansion,
+        Dictionary<string, Annotation> Annotations, SectionExpansion Toggles,
+        (BucketMode? Mode, Dictionary<long, bool> Expanded) View,
         bool ShowImages, bool ShowVideos, Dictionary<long, TileVm> Pool, int TilesPerRow);
 
     // Mode and Groupings: the date grouping chosen, and the section sizes it was chosen from (null without date sections).
@@ -2168,7 +2180,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _location, // the top of the library is everything in it, however many folders it has
         GroupByDate,
         _annotations,
-        CurrentExpansion(),
+        CurrentToggles(),
+        (_mode, _sections.ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded)),
         _showImages,
         _showVideos,
         _tilePool,
@@ -2206,7 +2219,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             groupings = DateGroupings.Of(media.Select(r => r.Item.BestDate).ToList());
             mode = groupings.ChooseMode(input.TilesPerRow);
-            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, input.Expansion.For(mode.Value), sections, input.Pool, mode.Value);
+            // The view's own grouping: every section as it is now (so one the user is looking at stays open as photos
+            // stream in above it). Another grouping: the user's toggles in it.
+            var expansion = mode == input.View.Mode ? input.View.Expanded : input.Toggles.For(mode.Value);
+            tiles = BuildSectionedPure(media, input.Format, input.Sort.Levels, Ann, expansion, sections, input.Pool, mode.Value);
         }
         else
         {
@@ -2520,9 +2536,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var section in order)
         {
             section.Count = counts[section.Key];
+            section.ExpandedByDefault = cumulative < ExpandTargetItems; // default: expand the newest ~2 screens
             section.IsExpanded = expansion.TryGetValue(section.Key, out var wasExpanded)
                 ? wasExpanded                       // preserve the user's toggle across rebuilds
-                : cumulative < ExpandTargetItems;   // default: expand the newest ~2 screens
+                : section.ExpandedByDefault;
             cumulative += section.Count;
         }
 
@@ -2798,7 +2815,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// How often, at most, a folder's count is read again while it's indexed (the count at the end is always read).
+    /// How often, at most, a folder's count is read again while it's indexed (its count is read again when its run ends).
     /// Settable for tests only.
     /// </summary>
     internal TimeSpan IndexCountInterval { get; set; } = TimeSpan.FromSeconds(1);

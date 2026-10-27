@@ -93,15 +93,67 @@ public class GridGroupingTests
         {
             vm.SetGridWidth(Across(vm, 12));
             Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020"]), Wait));
-            var rebuilt = 0;
-            vm.ViewApplied += () => rebuilt++;
+            var requested = vm.BuildGeneration;
 
             vm.SetGridWidth(Across(vm, 5)); // five across: still one year
 
             Assert.Equal(5, vm.TilesPerRow);
-            Sta.PumpUntil(() => rebuilt > 0, TimeSpan.FromSeconds(1)); // well past the rebuild's debounce
-            Assert.Equal(0, rebuilt);
+            Assert.Equal(requested, vm.BuildGeneration); // no rebuild asked for (a request counts at once, before its debounce)
             Assert.Equal(["2020"], Sections(vm));
+        });
+    }
+
+    [Fact]
+    public void AZoomThatKeepsTheGrouping_LeavesTheViewAlone()
+    {
+        WithLibrary(MonthlyIn2020, vm =>
+        {
+            vm.SetGridWidth(Across(vm, 12));
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020"]), Wait));
+            var (across, requested) = (vm.TilesPerRow, vm.BuildGeneration);
+
+            vm.ZoomOut(); // more across: still one year
+
+            Assert.True(vm.TilesPerRow > across, "the zoom was already at its smallest");
+            Assert.Equal(requested, vm.BuildGeneration);
+        });
+    }
+
+    [Fact]
+    public void AViewWithoutDateSections_IgnoresTheWidth()
+    {
+        WithLibrary(MonthlyIn2020, vm =>
+        {
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+            vm.GroupByDate = false; // grouped by month (one across) until now
+            Assert.True(Sta.PumpUntil(() => applied > 0, Wait));
+            var requested = vm.BuildGeneration;
+
+            vm.SetGridWidth(Across(vm, 12)); // would group by year, were the view grouped
+
+            Assert.Equal(requested, vm.BuildGeneration);
+        });
+    }
+
+    [Fact]
+    public void ASectionsToggle_OutlastsTurningSectionsOffAndOn()
+    {
+        WithLibrary(FourAYear, vm =>
+        {
+            vm.SetGridWidth(Across(vm, 12));
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2024", "2023", "2022"]), Wait), string.Join(", ", Sections(vm)));
+            Section(vm, "2023").IsExpanded = false;
+            var applied = 0;
+            vm.ViewApplied += () => applied++;
+
+            vm.GroupByDate = false;
+            Assert.True(Sta.PumpUntil(() => applied == 1, Wait));
+            vm.GroupByDate = true;
+            Assert.True(Sta.PumpUntil(() => applied == 2, Wait));
+
+            Assert.Equal(["2024", "2023", "2022"], Sections(vm));
+            Assert.False(Section(vm, "2023").IsExpanded);
         });
     }
 
@@ -154,6 +206,61 @@ public class GridGroupingTests
 
             Assert.False(Section(vm, "2023").IsExpanded);
             Assert.True(Section(vm, "2024").IsExpanded);
+        });
+    }
+
+    [Fact]
+    public void ASectionCollapsedOnlyByDefault_IsntCarriedToAnotherFolder()
+    {
+        // Lens A (round 23). Folder A, by year: 2020's 70 photos open, 2019's 5 collapsed only because they come after the
+        // newest ~2 screens. Folder B, by month. Folder C, only 2019: its one section opens, as a folder's newest does —
+        // A's 2019 wasn't the user's toggle, so it isn't remembered for years.
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var a = new TempDir();
+            using var b = new TempDir();
+            using var c = new TempDir();
+            void Photos(TempDir folder, IEnumerable<DateTime> dates)
+            {
+                var i = 0;
+                foreach (var date in dates)
+                {
+                    var path = Path.Combine(folder.Path, $"p{i:000}.jpg");
+                    TestImages.Write(path, 32, 24);
+                    File.SetLastWriteTimeUtc(path, date.AddMinutes(i++));
+                }
+            }
+            var in2020 = new DateTime(2020, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+            var in2019 = new DateTime(2019, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+            Photos(a, Enumerable.Repeat(in2020, 70).Concat(Enumerable.Repeat(in2019, 5)));
+            Photos(b, MonthlyIn2020);
+            Photos(c, Enumerable.Repeat(in2019, 3));
+            var library = new LibraryService(data.Path);
+            foreach (var (folder, name) in new[] { (a, "A"), (b, "B"), (c, "C") })
+                library.IndexRoot(library.AddRoot(folder.Path, name));
+            var vm = new MainViewModel(library, new ThumbnailService(library));
+            FolderNodeVm Node(string name) => vm.FolderTree.Single(n => n.Name == name);
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => vm.FolderTree.Count == 3 && Sections(vm).Count > 0, Wait));
+
+                vm.NavigateToNode(Node("A"));
+                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+                Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+                vm.NavigateToNode(Node("B"));
+                Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+                vm.NavigateToNode(Node("C"));
+                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+                Assert.True(Section(vm, "2019").IsExpanded);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
         });
     }
 }

@@ -125,6 +125,102 @@ public class LibraryTopTests
     }
 
     [Fact]
+    public void EachFoldersCount_HasAnIntervalOfItsOwn()
+    {
+        // A library's folders are indexed side by side (at launch, all of them): one folder's reads mustn't hold back
+        // another's (round 23).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var first = new TempDir();
+            using var second = new TempDir();
+            foreach (var folder in new[] { first, second })
+                for (var i = 0; i < 250; i++) // one saved batch reported each, at 200; the end is counted once indexing stops
+                    TestImages.Write(Path.Combine(folder.Path, $"p{i:000}.jpg"), 32, 24);
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library))
+            {
+                StartupReconcileDelay = TimeSpan.FromSeconds(30),
+                IndexCountInterval = TimeSpan.FromHours(1),
+            };
+            try
+            {
+                vm.AddFolder(first.Path, includeSubfolders: true);
+                vm.AddFolder(second.Path, includeSubfolders: true);
+                Assert.Equal(2, vm.FolderTree.Count);
+                // By folder: the tree is built again when a folder finishes, so its nodes are replaced mid-run.
+                var seenWhileIndexing = vm.FolderTree.ToDictionary(n => n.RootId, _ => new List<int>());
+                void Watch(FolderNodeVm node) => node.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
+                        seenWhileIndexing[node.RootId].Add(node.Count);
+                };
+                foreach (var node in vm.FolderTree)
+                    Watch(node);
+                vm.FolderTree.CollectionChanged += (_, e) =>
+                {
+                    foreach (var node in e.NewItems?.OfType<FolderNodeVm>() ?? [])
+                        Watch(node);
+                };
+
+                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));
+
+                // Each folder's count was read as it was indexed — whatever it had reached by the time this thread got to
+                // the report (the second folder's would be held back by the first's read, were the interval shared).
+                Assert.All(seenWhileIndexing.Values, Assert.NotEmpty);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void ReportsBetweenCountReads_KeepTheProgressBarFilling()
+    {
+        // A report whose count read isn't due still moves the bar: it mustn't flip it to the indeterminate sweep (round 23).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            for (var i = 0; i < 600; i++) // reports at 200 (count read), 400 and 600 (not)
+                TestImages.Write(Path.Combine(photos.Path, $"p{i:000}.jpg"), 32, 24);
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library))
+            {
+                StartupReconcileDelay = TimeSpan.FromSeconds(30),
+                IndexCountInterval = TimeSpan.FromHours(1),
+            };
+            try
+            {
+                var flips = new List<(bool Indeterminate, double Value)>();
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainViewModel.IndexIndeterminate))
+                        flips.Add((vm.IndexIndeterminate, vm.IndexValue));
+                };
+
+                vm.AddFolder(photos.Path, includeSubfolders: true);
+                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));
+
+                var filling = flips.FindIndex(f => !f.Indeterminate);
+                Assert.True(filling >= 0, "the bar never filled");
+                var swept = flips.Skip(filling).First(f => f.Indeterminate); // once files are done: the clean-up sweeps
+                Assert.Equal(600, swept.Value);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
     public void ALibrarysCount_IsUnknownUntilItsItemsAreRead()
     {
         // The library list records the count of a library being left: one left before its items were read must keep

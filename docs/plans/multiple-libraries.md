@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 22, review round 22 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 23, review round 23 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -719,8 +719,8 @@ Design:
 - **G3** — every library in the list shows a count. The open one shows its live count, as now. The others show the
   count they had when last open — Aperture records it in the library list when you switch away from a library and when
   you close Aperture. A library not opened since this version shows no count until it has been.
-- **G4** — while a folder is indexed, its count in the tree rises as items are added (each time the indexer saves a
-  batch, every 200 files), not only at the end.
+- **G4** — while a folder is indexed, its count in the tree rises as items are added (when the indexer saves a
+  batch, every 200 files; read at most once a second per folder since revision 22), not only at the end.
 - **G5** — the date grouping (day, week, month or year) takes the grid's width into account. A grouping qualifies if
   its sections, on average, fill at least half of the rows they take (a section of 1 photo in a 12-across grid fills
   1/12 of its row). Among the groupings that qualify, the one nearest twelve sections wins, as before; if none
@@ -782,6 +782,38 @@ reporting its width on a resize and when the scrollbar comes or goes, are checke
 Live check (Paul), in addition to revision 21's: Aperture starts and switches libraries; with nothing indexing, the card
 is hidden and Aperture idles; zooming that keeps the grouping doesn't flash "Loading…"; collapse a year, narrow the
 window until it groups by month, widen it again — the year is still collapsed.
+
+### Revision 23 — what changed after review round 23
+
+Two non-author lenses over `0e1f2be..fc181dd` found one Medium — introduced by revision 22 — and nine Lows.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R23-1 Medium | Revision 22's report of the width when the grid's scrollbar came or went fed the regroup it caused: with the months collapsed (no scrollbar) and the window just past a boundary, the view went to years (a scrollbar: one tile fewer across), back to the collapsed months (none), and so on — about six rebuilds a second at a resting width. Lens B flagged the risk; lens A reproduced it in the real window. | AC-GAP | The grouping's width is the grid's viewport with a scrollbar allowed for, shown or not (`MainWindow.GroupingWidth`), so a scrollbar coming or going can't change it | `MainWindowShownTests.ARegroupThatBringsInTheScrollbar_Settles` (lens A's case, the viewport sized between the two heights), `TheGroupingWidth_AllowsForTheScrollbar_ShownOrNot` | report the viewport as it is |
+| R23-2 Low | Every section's state was remembered per grouping, so a section collapsed only by default (an older year) was carried to the next folder grouped the same way, even after other groupings in between. | AC-GAP | Only the user's toggles are remembered across groupings: a section whose state differs from how its build left it (`SectionVm.ExpandedByDefault`); a rebuild in the view's own grouping still keeps every section as it is | `GridGroupingTests.ASectionCollapsedOnlyByDefault_IsntCarriedToAnotherFolder` | remember every section's state |
+| R23-3 Low | The width came from the first section's wrap panel, which keeps its width once collapsed: the grouping stopped following the window (revision 21). | TEST-GAP | `GroupingWidth` reads the grid's scroll viewport | `MainWindowShownTests.TheGrouping_FollowsTheWindow_WithItsFirstSectionCollapsed` | take the width from the first wrap panel |
+| R23-4 Low | The open library's count in the list read "(0)" until its items were read (revision 21). | AC-GAP | It binds `LoadedItemCount` (none until known) | the shown-window test, before and after the read | bind `TotalItemCount` again |
+| R23-5 Low | R22-1 said `Value` and `Maximum` bind two-way by default; only `Value` does (`Maximum`'s `Mode=OneWay` is harmless). The commit message says the same. | PLAN-GAP | Corrected here | — | — |
+| R23-6 Low | "At most once a second per folder" had no test; one interval for the whole library passed. | TEST-GAP | — | `LibraryTopTests.EachFoldersCount_HasAnIntervalOfItsOwn` | one interval for the library |
+| R23-7 Low | An ungrouped build's clearing of the view's grouping was untested: kept, a resize rebuilt an ungrouped view, and turning sections back on lost the toggles. | TEST-GAP | — | `GridGroupingTests.AViewWithoutDateSections_IgnoresTheWidth`, `ASectionsToggle_OutlastsTurningSectionsOffAndOn` | keep the grouping across an ungrouped build |
+| R23-8 Low | The progress fraction's `else` (a revision-22 nit) was untested: on the count's `if`, every report between count reads would flip the bars to the sweep. | TEST-GAP | — | `LibraryTopTests.ReportsBetweenCountReads_KeepTheProgressBarFilling` | the `else` on the count |
+| R23-9 Low | "A zoom that keeps the grouping leaves the view alone" was untested. | TEST-GAP | — | `GridGroupingTests.AZoomThatKeepsTheGrouping_LeavesTheViewAlone` | a zoom rebuilds on any change in tiles across |
+| R23-10 Low | The shown-window test's summary claimed it catches any two-way binding onto a read-only property; it catches those made in its scenario. | HOUSE-RULE | Summary narrowed (no such binding exists today; lens B checked every target) | — | — |
+
+G3, amended: … a library left before its items are read keeps its last count; the open library shows no count until its
+items are read. G5, amended: … a view without date sections ignores the width; the width is the grid's viewport with a
+scrollbar allowed for, so a regroup settles; across groupings only the user's toggles are remembered.
+
+Also: "a width that keeps the grouping" is now checked as no build being requested (`MainViewModel.BuildGeneration`,
+counted at the request) instead of none applied within a second; R22-4 and R22-5 are AC-GAP by the first-match rule (G5
+permitted both); the G4 bullet gives the interval; `IndexCountInterval`'s summary says what is read at the end; the
+mutation runner keeps each row's log and `why13.py` shows each failure's message. The shown-window tests size their
+windows for a 1024 × 768 desktop (the folder pane at its narrowest), as on the CI runner — UNVERIFIED there until CI runs.
+Carried: `_countReadAt` is never cleared (a run starting within a second of the last read skips its first report);
+after a failed run without streaming, the tree node can stay up to one interval behind until the tree is next built.
+
+Live check (Paul), in addition: collapse all but the newest month, then widen the window slowly — the grouping changes
+once at a boundary and stays; switch libraries — the open one's count appears once its items are read, never "(0)".
 
 ## Out of scope (future)
 
