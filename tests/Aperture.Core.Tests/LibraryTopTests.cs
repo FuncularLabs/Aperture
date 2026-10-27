@@ -136,7 +136,7 @@ public class LibraryTopTests
             using var first = new TempDir();
             using var second = new TempDir();
             foreach (var folder in new[] { first, second })
-                for (var i = 0; i < 250; i++) // one saved batch reported each, at 200; the end is counted once indexing stops
+                for (var i = 0; i < 250; i++) // one saved batch reported each, at 200; each folder is counted again as its run ends
                     TestImages.Write(Path.Combine(folder.Path, $"p{i:000}.jpg"), 32, 24);
             var library = new LibraryService(data.Path);
             var vm = new MainViewModel(library, new ThumbnailService(library))

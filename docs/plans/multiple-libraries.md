@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 23, review round 23 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 24, review round 24 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -814,6 +814,39 @@ after a failed run without streaming, the tree node can stay up to one interval 
 
 Live check (Paul), in addition: collapse all but the newest month, then widen the window slowly — the grouping changes
 once at a boundary and stays; switch libraries — the open one's count appears once its items are read, never "(0)".
+
+### Revision 24 — what changed after review round 24
+
+Two non-author lenses over `fc181dd..3cdb56c`: no High or Medium; R23-1's loop verified gone (lens A swept 51 widths a
+pixel apart across the boundary: no rebuild at rest). Seven Lows, two of them found by both.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R24-1 Low [×2] | R23-2 was partial: a toggle was inferred from a state differing from its build's default, so a default carried in from another folder in the same grouping, one kept by a rebuild, or one a sort change flipped read as the user's toggle and was remembered across groupings; and a default-collapsed section still went straight to the next folder grouped the same way (as in 0.8.9). | TEST-GAP | A toggle is recorded as it's made: `SectionVm.Toggled`, set by `IsExpanded`'s setter (the header's toggle, the keyboard); a build sets a section with `SectionVm.Start`. Only the view as it is — the same place (`LocationKey`) in the same grouping — carries every section's state on; another folder, a search or another grouping gets only the user's toggles | `SectionVmTests` (4); `GridGroupingTests.ASectionCollapsedOnlyByDefault_IsntCarriedStraightToAnotherFolder`, `AStateCarriedToAnotherFolder_DoesntBecomeAToggle`, `ASectionKeptOpenByARebuild_IsntRememberedAsAToggle` (lens B's probes P1–P3) | remember every section; a section carried on starts as a toggle; the user's change isn't a toggle; a build's state is; the view's states go to another folder |
+| R24-2 Low | The grid's `SizeChanged` came before layout, with the old viewport beside the new scrollbar: a height change that brought the scrollbar in or took it away asked for a rebuild in an unchanged grouping (revision 23). | TEST-GAP | The width is reported on `ScrollChanged` only (after layout), and `GroupingWidth` is the scroll viewer's width less its padding and a scrollbar — it never reads the viewport, so the scrollbar's real width at other display scales can't matter either (lens A's hardening) | `MainWindowShownTests.AHeightChangeThatBringsInTheScrollbar_AsksForNoBuild`, `AHeightChangeThatTakesTheScrollbarAway_AsksForNoBuild` (lens B's P4–P5) | report on `SizeChanged` again |
+| R24-3 Low | Keyboard navigation's column count also came from the first section's wrap panel, which keeps its width once collapsed: Down went two rows (from 0.8.4; R23-3's sibling). | HOUSE-RULE | `WrapViewportWidth` reads the first shown section's panel | `MainWindowShownTests.TheKeyboardsColumns_FollowTheWindow_WithItsFirstSectionCollapsed` (against the columns laid out) | take the first panel, shown or not |
+| R24-4 Low | Everything's count read "(0)" until the library's items were read (from before this branch; R23-4's sibling). | HOUSE-RULE | It binds `LoadedItemCount`: blank until known | the shown-window test, before and after the read | bind `TotalItemCount` again |
+| R24-5 Low | The open library's count reported again as its items change (`LoadRows`) had no test. | TEST-GAP | — | `LibraryTopTests.ALibrarysCount_IsReportedAgainAsItsItemsChange` | don't report it after a re-read |
+| R24-6 Low | Nothing showed `BuildGeneration` counts, though three "no rebuild" tests rest on it; its summary claimed every build. | TEST-GAP | Summary says what it counts (the startup build and each debounced rebuild, as asked for) | `GridGroupingTests.TheGridsWidth_ChoosesTheGrouping` asserts the request is counted | count nothing |
+| R24-7 Low [×2] | `GroupingWidth` had been put between `WrapViewportWidth`'s summary and its method: two summaries on one, none on the other. | HOUSE-RULE | Each has its own | — | — |
+
+G5, amended again: … a section's toggle — the user's own, recorded as it's made — survives a regroup and back; another
+folder, a search or another grouping gets only the user's toggles; the width is the scroll viewer's less its padding and
+a scrollbar, read after layout.
+
+Also: `SetGridWidth`'s summary; the window tests made by `WithWindow` fit a 1024 × 768 desktop (the round-22
+`TheWindow_Opens…` asks for 1200 × 800 and would be shrunk there, which nothing it checks depends on); the mutation
+runners count a row KILLED when a named test fails (round 23's logger change had every row reading NO RESULT while the
+"failed" column showed each kill); a test comment on when a folder's end count is read. Record: rounds 22 and 23's commit
+messages say `Value` and `Maximum` both bind two-way by default (only `Value` does; R23-5). Carried: before the grid's
+first layout `GroupingWidth` falls back to the list's width, 2 px wider than the viewer's (replaced on the first
+`ScrollChanged`). Observed once: `BackgroundRefreshTests.AFolderRemovedBeforeTheStartupReconcile_IsNotIndexedOrWatched`
+failed in one full run under heavy load (two reviewers and the mutation runner at once), message not kept; lens A ran its
+class 45 times under load with no failure, and nothing in this range touches what it tests — UNVERIFIED cause.
+
+Live check (Paul), in addition: go from a folder whose older year is collapsed by default to one with only that year —
+it opens; collapse the newest year, narrow the window, press Down from the next year's first photo — one row down;
+Everything's count appears once the library is read.
 
 ## Out of scope (future)
 
