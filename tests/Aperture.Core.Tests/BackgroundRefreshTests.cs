@@ -11,8 +11,9 @@ namespace Aperture.Core.Tests;
 /// A library's view model reconciles its folders shortly after it opens. A folder added in the meantime — New
 /// library hands its folder over right then (review round 16) — is already being indexed, and must not be indexed a
 /// second time alongside: two runs on one folder overwrite each other's pause/cancel handle. A folder removed in the
-/// meantime isn't indexed at all (round 17); nor is one added after the library has closed. A real view model on a
-/// real library, its dispatcher pumped on an STA thread.
+/// meantime isn't indexed at all (round 17); nor is one added after the library has closed, or once a library switch
+/// closes it while the add's question is open (round 18). A real view model on a real library, its dispatcher pumped
+/// on an STA thread.
 /// </summary>
 public class BackgroundRefreshTests
 {
@@ -25,7 +26,7 @@ public class BackgroundRefreshTests
         public MainViewModel Vm { get; }
         public ConcurrentQueue<string> Starts { get; } = new();
 
-        public Fixture(TimeSpan reconcileDelay)
+        public Fixture(TimeSpan reconcileDelay, bool addedIsARootToo = false)
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
             TestImages.Write(Path.Combine(Older.Path, "a.jpg"), 64, 48);
@@ -34,6 +35,8 @@ public class BackgroundRefreshTests
 
             Library = new LibraryService(Data.Path);
             Library.IndexRoot(Library.AddRoot(Older.Path, "Older"));
+            if (addedIsARootToo)
+                Library.IndexRoot(Library.AddRoot(Added.Path, "Added"));
             Library.IndexStarting = root => Starts.Enqueue(root.Path);
             Vm = new MainViewModel(Library, new ThumbnailService(Library)) { StartupReconcileDelay = reconcileDelay };
         }
@@ -77,14 +80,15 @@ public class BackgroundRefreshTests
     {
         Sta.Run(() =>
         {
-            using var f = new Fixture(TimeSpan.FromMilliseconds(150));
+            using var f = new Fixture(TimeSpan.FromMilliseconds(150), addedIsARootToo: true);
 
             f.Vm.StartBackgroundRefresh();
-            f.Vm.RemoveRootCommand.Execute(f.Vm.Roots.Single()); // removed during the reconcile's delay
+            f.Vm.RemoveRootCommand.Execute(f.Vm.Roots.Single(r => r.Path == f.Older.Path)); // removed during the delay
 
-            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(800));
-            Assert.Empty(f.Starts);
-            Assert.Equal(0, f.Library.WatcherCount);
+            // The kept folder's reconcile shows the reconcile has run (no fixed wait to outlast).
+            Assert.True(Sta.PumpUntil(() => f.Starts.Contains(f.Added.Path) && !f.Vm.IsIndexing, TimeSpan.FromSeconds(20)));
+            Assert.Equal([f.Added.Path], f.Starts);
+            Assert.Equal(1, f.Library.WatcherCount); // the kept folder's, not the removed one's
         });
     }
 
@@ -99,6 +103,39 @@ public class BackgroundRefreshTests
             f.Close();
 
             f.Vm.AddFolder(f.Added.Path, includeSubfolders: true);
+
+            Assert.Single(f.Vm.Roots);
+            Assert.Empty(f.Starts);
+        });
+    }
+
+    [Fact]
+    public void AddingFoldersToAClosedLibrary_AsksNothingAndAddsNothing()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(TimeSpan.FromSeconds(30));
+            var asked = 0;
+            f.Vm.AskIncludeSubfolders = _ => { asked++; return true; };
+            f.Close();
+
+            f.Vm.AddFolders([f.Added.Path]); // Add folder's picker, or a drop, answered after a switch closed this library
+
+            Assert.Equal(0, asked);
+            Assert.Single(f.Vm.Roots);
+            Assert.Empty(f.Starts);
+        });
+    }
+
+    [Fact]
+    public void ALibrarySwitchWhileTheSubfolderQuestionIsOpen_AddsNothing()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(TimeSpan.FromSeconds(30));
+            f.Vm.AskIncludeSubfolders = _ => { f.Close(); return true; }; // the switch finishes while the user answers
+
+            f.Vm.AddFolders([f.Added.Path]);
 
             Assert.Single(f.Vm.Roots);
             Assert.Empty(f.Starts);

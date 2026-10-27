@@ -1733,8 +1733,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void AddChosenFolders()
     {
-        foreach (var candidate in FirstRunCandidates.Where(c => c.IsChosen).ToList())
-            AddRootPath(candidate.Path, candidate.Alias, FirstRunIncludeSubfolders);
+        if (_closing)
+            return;
+        Add([.. FirstRunCandidates.Where(c => c.IsChosen).Select(c => new FolderToAdd(c.Path, c.Alias, FirstRunIncludeSubfolders))]);
         FinishFirstRun();
     }
 
@@ -1952,7 +1953,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             AddRootPath(folder.Path, folder.Alias, folder.IncludeSubfolders);
     }
 
-    private static bool? AskIncludeSubfolders(IReadOnlyList<string> folders)
+    /// <summary>The subfolder question Add folder and a drop ask: the dialog. Settable for tests only.</summary>
+    internal Func<IReadOnlyList<string>, bool?> AskIncludeSubfolders { get; set; } = AskWithDialog;
+
+    private static bool? AskWithDialog(IReadOnlyList<string> folders)
     {
         var dialog = new AddFolderDialog(folders) { Owner = System.Windows.Application.Current.MainWindow };
         return dialog.ShowDialog() == true ? dialog.IncludeSubfolders : null;

@@ -17,16 +17,20 @@ namespace Aperture.Core.Tests;
 public class MainWindowTemplateTests
 {
     /// <summary>
-    /// Every binding in <paramref name="template"/>, wherever WPF keeps one: on an element or a Freezable it holds (an
-    /// image brush, an effect), inside a MultiBinding or PriorityBinding, in a Style (its setters, its triggers'
-    /// conditions and setters, and the style it's based on), in the template's own triggers, and in a template an
-    /// element sets (loaded and walked the same way, triggers included).
+    /// The bindings in the objects <paramref name="template"/> builds and reaches: on an element, or on a Freezable it
+    /// holds (a brush, an effect, a gradient stop or a transform in a collection); inside a MultiBinding or
+    /// PriorityBinding; in a Style (its setters — whose values may themselves be styles, templates or objects — its
+    /// triggers' conditions and setters, its resources, and the style it's based on); in the template's own triggers
+    /// and resources; in an element's resources; and in a template an element sets (loaded and walked the same way).
+    /// <see cref="TheBindingWalk_FindsABindingInEveryPlaceItWalks"/> plants a binding in each of these places. What
+    /// is written in the tile's XAML is also checked as text (<see cref="TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy"/>).
     /// </summary>
     private static List<(string Where, Binding Binding)> BindingsIn(DataTemplate template)
     {
         var found = new List<(string, Binding)>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
         VisitTriggers(template.Triggers, "template<triggers>");
+        VisitResources(template.Resources, "template<resources>");
         Visit((DependencyObject)template.LoadContent(), "template");
         return found;
 
@@ -50,14 +54,39 @@ public class MainWindowTemplateTests
                 else if (values.Current.Value is DependencyObject other)
                     Visit(other, at);
             }
+            if (node is FrameworkElement element)
+                VisitResources(element.Resources, where + "<resources>");
+            if (node is FrameworkContentElement content)
+                VisitResources(content.Resources, where + "<resources>");
+            if (node is System.Collections.IEnumerable items) // a Freezable collection: gradient stops, transforms…
+                foreach (var item in items.OfType<DependencyObject>())
+                    Visit(item, $"{where}[]");
             foreach (var child in LogicalTreeHelper.GetChildren(node).OfType<DependencyObject>())
                 Visit(child, $"{where}/{child.GetType().Name}");
+        }
+
+        void VisitResources(ResourceDictionary resources, string where)
+        {
+            if (!seen.Add(resources))
+                return;
+            foreach (var key in resources.Keys.Cast<object>().ToList())
+            {
+                switch (resources[key])
+                {
+                    case Style style: VisitStyle(style, where); break;
+                    case FrameworkTemplate template: VisitTemplate(template, where); break;
+                    case DependencyObject other: Visit(other, where); break;
+                }
+            }
+            foreach (var merged in resources.MergedDictionaries)
+                VisitResources(merged, where);
         }
 
         void VisitTemplate(FrameworkTemplate template, string where)
         {
             if (!seen.Add(template))
                 return;
+            VisitResources(template.Resources, where + "<resources>");
             if (template is ControlTemplate control)
                 VisitTriggers(control.Triggers, where + "<triggers>");
             if (template is DataTemplate data)
@@ -72,6 +101,7 @@ public class MainWindowTemplateTests
                 return;
             VisitSetters(style.Setters, where);
             VisitTriggers(style.Triggers, where + "<triggers>");
+            VisitResources(style.Resources, where + "<resources>");
             if (style.BasedOn is { } basedOn)
                 VisitStyle(basedOn, where + "<based on>");
         }
@@ -150,37 +180,99 @@ public class MainWindowTemplateTests
     }
 
     [Fact]
-    public void TheBindingWalk_FindsABindingWhereverATemplateCanHoldOne()
+    public void TheBindingWalk_FindsABindingInEveryPlaceItWalks()
     {
-        // The walk's completeness, separate from today's tile: one window binding in each place a template can keep one.
+        // The walk's completeness, separate from today's tile: one window binding planted in each place the walk claims
+        // to reach (see BindingsIn), every one of which must be found.
         Sta.Run(() =>
         {
             const string Window = "RelativeSource={RelativeSource AncestorType=Window}";
             var template = (DataTemplate)System.Windows.Markup.XamlReader.Parse($$"""
                 <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                  <Border x:Name="b" Tag="{Binding DataContext.Element, {{Window}}}">
-                    <Border.Background>
+                  <DataTemplate.Resources>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="Tag" Value="{Binding DataContext.TemplateResources, {{Window}}}" />
+                    </Style>
+                  </DataTemplate.Resources>
+                  <StackPanel x:Name="b" Tag="{Binding DataContext.Element, {{Window}}}">
+                    <StackPanel.Resources>
+                      <SolidColorBrush x:Key="r" Color="{Binding DataContext.ElementResources, {{Window}}}" />
+                    </StackPanel.Resources>
+                    <StackPanel.Background>
                       <ImageBrush ImageSource="{Binding DataContext.Brush, {{Window}}}" />
-                    </Border.Background>
-                    <Border.Style>
-                      <Style TargetType="Border">
+                    </StackPanel.Background>
+                    <StackPanel.RenderTransform>
+                      <TransformGroup>
+                        <RotateTransform Angle="{Binding DataContext.TransformInACollection, {{Window}}}" />
+                      </TransformGroup>
+                    </StackPanel.RenderTransform>
+                    <StackPanel.Style>
+                      <Style TargetType="StackPanel">
                         <Style.BasedOn>
-                          <Style TargetType="Border">
+                          <Style TargetType="StackPanel">
                             <Setter Property="ToolTip" Value="{Binding DataContext.BasedOn, {{Window}}}" />
                           </Style>
                         </Style.BasedOn>
+                        <Style.Resources>
+                          <SolidColorBrush x:Key="s" Color="{Binding DataContext.StyleResources, {{Window}}}" />
+                        </Style.Resources>
                         <Setter Property="Width" Value="{Binding DataContext.StyleSetter, {{Window}}}" />
+                        <Setter Property="FocusVisualStyle">
+                          <Setter.Value>
+                            <Style>
+                              <Setter Property="Control.Tag" Value="{Binding DataContext.SetterStyle, {{Window}}}" />
+                            </Style>
+                          </Setter.Value>
+                        </Setter>
                         <Style.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
                             <Setter Property="Height" Value="{Binding DataContext.TriggerSetter, {{Window}}}" />
                           </Trigger>
+                          <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                              <Condition Property="IsEnabled" Value="False" />
+                            </MultiTrigger.Conditions>
+                            <Setter Property="MinWidth" Value="{Binding DataContext.MultiTriggerSetter, {{Window}}}" />
+                          </MultiTrigger>
                           <DataTrigger Binding="{Binding DataContext.StyleTrigger, {{Window}}}" Value="1">
                             <Setter Property="Opacity" Value="0.5" />
                           </DataTrigger>
                         </Style.Triggers>
                       </Style>
-                    </Border.Style>
+                    </StackPanel.Style>
+                    <Border>
+                      <Border.BorderBrush>
+                        <LinearGradientBrush>
+                          <GradientStop Color="{Binding DataContext.GradientStop, {{Window}}}" Offset="0" />
+                        </LinearGradientBrush>
+                      </Border.BorderBrush>
+                    </Border>
+                    <TextBlock>
+                      <TextBlock.Tag>
+                        <PriorityBinding>
+                          <Binding Path="DataContext.Priority" RelativeSource="{RelativeSource AncestorType=Window}" />
+                        </PriorityBinding>
+                      </TextBlock.Tag>
+                    </TextBlock>
+                    <ContentControl>
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl">
+                          <Setter Property="Template">
+                            <Setter.Value>
+                              <ControlTemplate TargetType="ContentControl">
+                                <Border Tag="{Binding DataContext.SetterTemplate, {{Window}}}" />
+                              </ControlTemplate>
+                            </Setter.Value>
+                          </Setter>
+                          <Setter Property="Background">
+                            <Setter.Value>
+                              <SolidColorBrush Color="{Binding DataContext.SetterObject, {{Window}}}" />
+                            </Setter.Value>
+                          </Setter>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
                     <Button>
                       <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -199,7 +291,7 @@ public class MainWindowTemplateTests
                         </ControlTemplate>
                       </Button.Template>
                     </Button>
-                  </Border>
+                  </StackPanel>
                   <DataTemplate.Triggers>
                     <DataTrigger Binding="{Binding DataContext.TemplateTrigger, {{Window}}}" Value="1">
                       <Setter TargetName="b" Property="Tag" Value="{Binding DataContext.TemplateTriggerSetter, {{Window}}}" />
@@ -216,10 +308,64 @@ public class MainWindowTemplateTests
 
             var found = Offenders(BindingsIn(template));
 
-            foreach (var place in new[] { "Element", "Brush", "BasedOn", "StyleSetter", "TriggerSetter", "StyleTrigger",
-                                          "Multi", "ControlTrigger", "TemplateTrigger", "TemplateTriggerSetter", "Condition" })
-                Assert.Contains(found, offender => offender.Contains($"<- DataContext.{place} ", StringComparison.Ordinal));
+            string[] places =
+            [
+                "Element", "Brush", "TransformInACollection", "GradientStop", "ElementResources", "TemplateResources",
+                "BasedOn", "StyleResources", "StyleSetter", "SetterStyle", "SetterTemplate", "SetterObject",
+                "TriggerSetter", "MultiTriggerSetter", "StyleTrigger", "Priority", "Multi", "ControlTrigger",
+                "TemplateTrigger", "TemplateTriggerSetter", "Condition",
+            ];
+            Assert.All(places, place =>
+                Assert.Contains(found, offender => offender.Contains($"<- DataContext.{place} ", StringComparison.Ordinal)));
+            Assert.Equal(places.Length, found.Count);
         });
+    }
+
+    [Fact]
+    public void TheTileTemplatesXaml_WritesNoBindingThroughTheWindowOrTheProxy()
+    {
+        // Whatever the walk reaches, a binding written anywhere in the tile's own XAML — a resource, a trigger, a gradient
+        // stop, a place no walk thought of — is in this text.
+        var xaml = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Aperture.App", "MainWindow.xaml"));
+        var tile = TileTemplateText(xaml);
+
+        Assert.Contains("{Binding Thumbnail}", tile); // it's the tile
+        var offenders = new[]
+            {
+                @"AncestorType=\s*(\{x:Type\s+)?([\w.]+:)?(Main)?Window\b", // through the window
+                @"\{(Static|Dynamic)Resource\s+Vm\}",                        // through the view-model proxy
+                @"\bDataContext\.\w",                                        // an ancestor's view model
+            }
+            .SelectMany(pattern => System.Text.RegularExpressions.Regex.Matches(tile, pattern).Select(m => m.Value))
+            .ToList();
+        Assert.Empty(offenders);
+    }
+
+    // The text of <DataTemplate DataType="{x:Type vm:TileVm}"> … its matching </DataTemplate>, nested ones included.
+    private static string TileTemplateText(string xaml)
+    {
+        const string Open = "<DataTemplate DataType=\"{x:Type vm:TileVm}\">";
+        var start = xaml.IndexOf(Open, StringComparison.Ordinal);
+        Assert.True(start >= 0, "the tile template wasn't found in MainWindow.xaml");
+        var depth = 0;
+        var tags = new System.Text.RegularExpressions.Regex(@"<(/?)DataTemplate\b[^>]*?(/?)>");
+        foreach (System.Text.RegularExpressions.Match tag in tags.Matches(xaml, start))
+        {
+            if (tag.Groups[2].Value == "/")
+                continue; // <DataTemplate … />
+            depth += tag.Groups[1].Value == "/" ? -1 : 1;
+            if (depth == 0)
+                return xaml[start..(tag.Index + tag.Length)];
+        }
+        throw new InvalidOperationException("the tile template isn't closed");
+    }
+
+    private static string RepoRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "src", "Aperture.App", "MainWindow.xaml")))
+                return dir.FullName;
+        throw new InvalidOperationException("the repository wasn't found above " + AppContext.BaseDirectory);
     }
 
     [Fact]
