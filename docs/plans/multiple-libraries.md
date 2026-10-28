@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 37, after review round 37) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 38, after review round 38) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1116,6 +1116,26 @@ New, and Open of a library not yet listed, which add it to the list before the s
 `RecordItemCount_AsAnOpenOfAnUnlistedLibraryPrepares_GoesToTheLibraryBeingLeft`; mutation: each activates its library
 as it's added). Record: 1091890's message says the count is read at most once a second by default, which R37-1's test
 now proves. Runner `mutate28.py`, 85 rows.
+
+### Revision 38 — what changed after review round 38
+
+One non-author lens over `1091890..a91bbc4`: the nits verified; R37-1 partial — two Lows, both in the count interval,
+and nits. A third round in a row found the interval's tests short (R36-4, R37-1, now R38-1 and R38-2), each test
+proving one more direction through the whole view model; so the interval is now a class of its own, tested on a clock
+the tests set (test-first-delivery: redesign the test, then the code).
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R38-1 Low | Nothing showed a count read again once the interval had passed: comparing it in ticks or microseconds (the default ~2.8 h or ~17 min), or reading each folder once a run, survived every test — the count would stop at 200 until the run's end. | TEST-GAP | The interval moved to `IntervalGate` (Core), on a clock it's given; the view model asks it per folder (`_countReads`, replacing `CountIsDue` and `_countReadAt`; same behaviour) | `IntervalGateTests.AKey_IsLetThroughFirst_ThenOnceTheIntervalHasPassed` (at 0, 999, 1000, 1001 and 2000 ms of a 1 s interval: through at 0, 1000 and 2000), `ByDefault_ItRunsOnTheSystemsMillisecondClock` | compared in ticks; in microseconds; in seconds (R37-1's); once a key, never again; `<=` for `<`; a clock in seconds |
+| R38-2 Low | The interval measured from a folder's first read, not its last, survived every test: from a run's second second, every batch would be read. | TEST-GAP | — | `AKey_IsLetThroughFirst_ThenOnceTheIntervalHasPassed` (at 1001: not through); `AnAskThatIsntLetThrough_DoesntRestartTheInterval` | measured from the first read; an ask not let through restarts the interval |
+
+Also `EachKey_HasAnIntervalOfItsOwn` (R23-6, at the gate) and `AChangedInterval_AppliesFromTheNextAsk` (the tests set
+the view model's interval after it's made). `AFoldersCountInterval_IsMeasuredInItsOwnUnits` (R37-1's view-model test,
+timed with sleeps on the status) is removed: the gate's tests prove both directions on a set clock, and the view
+model's use of the gate stays proven by the G4, R22-6 and R23-6 tests and the default's pin. The lens's nits on that
+test (it checked neither its sleeps nor its statuses; "whatever the machine's speed") go with it. Record: a91bbc4's
+message and R37-1's test name claimed more than the test proved (R38-1). Revision 23's carried item (a folder's last
+read is never forgotten) is the gate's now. Runner `mutate29.py`, 95 rows.
 
 ## Out of scope (future)
 

@@ -12,6 +12,7 @@ using Aperture.App.Services;
 using Aperture.App.Updates;
 using Aperture.Core.Annotations;
 using Aperture.Core.Formatting;
+using Aperture.Core.Indexing;
 using Aperture.Core.Library;
 using Aperture.Core.Models;
 using Aperture.Core.Startup;
@@ -2800,7 +2801,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done. At most
         // once an interval, though: each read counts the whole folder, and a run that changes nothing reports its batches
         // all at once.
-        if (p.Phase == IndexPhase.Indexing && CountIsDue(rootId))
+        if (p.Phase == IndexPhase.Indexing && _countReads.IsDue(rootId))
         {
             rootVm.Count = _library.CountForRoot(rootId);
             if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
@@ -2825,18 +2826,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// How often, at most, a folder's count is read again while it's indexed (its count is read again when its run ends).
     /// Settable for tests only.
     /// </summary>
-    internal TimeSpan IndexCountInterval { get; set; } = TimeSpan.FromSeconds(1);
-
-    private readonly Dictionary<long, long> _countReadAt = []; // root id → when its count was last read while indexing
-
-    private bool CountIsDue(long rootId)
+    internal TimeSpan IndexCountInterval
     {
-        var now = Environment.TickCount64;
-        if (_countReadAt.TryGetValue(rootId, out var last) && now - last < IndexCountInterval.TotalMilliseconds)
-            return false;
-        _countReadAt[rootId] = now;
-        return true;
+        get => _countReads.Interval;
+        set => _countReads.Interval = value;
     }
+
+    private readonly IntervalGate _countReads = new(TimeSpan.FromSeconds(1)); // per root id, while it's indexed
 
     private void UpdateIndexingText()
     {
