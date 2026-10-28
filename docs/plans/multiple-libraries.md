@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 29, Paul's ruling on date sections) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 30, review round 30 of Paul's ruling on date sections) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -968,8 +968,8 @@ grouping, `SectionExpansion`, recorded as made, `SectionVm.Toggled`), and otherw
 screens open. The machinery that decided "the view as it is" is gone: `ViewKey`, the what's-shown count and the
 per-folder outstanding marks, and the view's states carried into a build. R29-1, R29-2 and R29-3 are moot: the code they
 are about no longer exists. The visible difference from revisions 23–28 (and from 0.8.9, which carried every state): as
-photos stream in above an older section the user hasn't touched, it closes when the default does; expanding it once
-keeps it open.
+photos stream in above an older section the user hasn't touched, it opens and closes with the default; expanding it
+once keeps it open.
 
 | Test | What it pins now |
 |---|---|
@@ -982,7 +982,7 @@ Mutation rows (runner `mutate20.py`, 65 rows): the rows for the removed code are
 remembered too (killed by the five "defaults aren't carried" tests and the photos-arriving test), a toggle carried into a
 build not marked as one, a toggle not carried into the build.
 
-G5, amended for the last time: … the grid's width and zoom choose the grouping (the width the scroll viewer's, less its
+G5, amended again: … the grid's width and zoom choose the grouping (the width the scroll viewer's, less its
 padding and a scrollbar, reported on the grid's resize); a width or zoom that keeps the grouping leaves the view alone; a
 view built for an older width regroups as it's applied if the new width groups differently; every build opens each date
 section as the user left it, if they did, and otherwise by the default.
@@ -990,6 +990,26 @@ section as the user left it, if they did, and otherwise by the default.
 Live check (Paul), replacing revisions 23–28's section checks: collapse a year, narrow the window until it groups by
 month, widen it again — still collapsed; go to another folder with that year — collapsed there too; a section you haven't
 touched opens and closes by the default (the newest ~2 screens open) after any change.
+
+### Revision 30 — what changed after review round 30
+
+One non-author lens over `2f48afe..b557fc0`: R29-1..3 verified moot (nothing of the removed machinery left); every
+section mutation re-run and killed; four Lows and nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R30-1 Low | Only collapsing a section was tested: opening one — the remedy revision 29 offers — wasn't. | TEST-GAP | — | `GridGroupingTests.ASectionTheUserOpened_StaysOpenAsPhotosArrive` (the lens's probe) | only a collapse is a toggle; a remembered open ignored; every toggle remembered as collapsed |
+| R30-2 Low | The CHANGELOG ("in the next folder or search that has it"), G5 and a comment said a toggle is kept; a view in the same grouping without that section replaced the grouping's memory and forgot it. | PLAN-GAP | Toggles are kept for the session: each build adds the view's toggles to those remembered instead of replacing them (`CurrentToggles`), so the claims are true; the CHANGELOG says "other folders and searches that have it" | `GridGroupingTests.AToggle_IsKeptThroughAFolderWithoutItsSection` (the lens's probe) | the view's toggles replace those remembered |
+| R30-3 Low | Comments still described the removed rule (`SectionVm`'s summary: "state survives incidental rebuilds"; `Toggled`: "for other views"; a test header: "the view as it is"). | HOUSE-RULE | Reworded | — | — |
+| R30-4 Low (for Paul) | A cost of the ruling revision 29 didn't name: if the selected photo is in an untouched section that closes by default during a rebuild (photos arriving above it), the selection is left on a hidden photo and the keyboard's next move starts from the first photo of the grid. | AC-GAP | Recorded here and in the live check; for Paul: accept it, or have the section holding the selection count as touched | — | — |
+
+Carried (from 0.8.9, the same there): a toggle made while a build computes (a click during "Loading…") is lost — the
+build replaces the sections the toggle was made on. Revision 28's two carried items are moot with the code they were
+about. Nits taken: revision 29 says untouched sections open and close with the default, and G5 "amended again".
+
+Live check (Paul), in addition: open an older section closed by default, add photos above it — it stays open; collapse a
+year, go to a folder without it, then to one with it — still collapsed; select a photo in an older untouched section and
+let photos arrive above it — the section may close (R30-4).
 
 ## Out of scope (future)
 

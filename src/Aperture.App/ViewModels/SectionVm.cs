@@ -5,7 +5,8 @@ namespace Aperture.App.ViewModels;
 /// <summary>
 /// A collapsible date section header. The same instance is shared by every tile
 /// in the section (the grid groups by it), so <see cref="IsExpanded"/> toggled
-/// from the header drives all its tiles, and state survives incidental rebuilds.
+/// from the header drives all its tiles. A rebuild starts the section as the user
+/// left it, if they toggled it, and otherwise by the default.
 /// </summary>
 public sealed class SectionVm : ObservableObject
 {
@@ -41,7 +42,7 @@ public sealed class SectionVm : ObservableObject
 
     /// <summary>
     /// Whether the user has expanded or collapsed this section — here, or in the section it was carried on from —
-    /// rather than leaving it as a build set it. Only toggled sections are remembered for other views and groupings.
+    /// rather than leaving it as a build set it. Only toggled sections are remembered; the others follow the default.
     /// </summary>
     public bool Toggled { get; private set; }
 

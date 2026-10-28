@@ -412,7 +412,7 @@ public class GridGroupingTests
         });
     }
 
-    // --- Lens B's probes (round 25): what is "the view as it is", and a toggle going on ---
+    // --- Lens B's probes (round 25): a search or filter is another view, and a toggle going on ---
 
     [Fact]
     public void ASearchRefinedToAnother_GetsOnlyTheUsersToggles()
@@ -525,4 +525,42 @@ public class GridGroupingTests
         });
     }
 
+    // --- Round 30: the rule's other half, and a toggle kept through a view without its section ---
+
+    [Fact]
+    public void ASectionTheUserOpened_StaysOpenAsPhotosArrive()
+    {
+        // The reviewer's probe: 2019, closed by default under 70 photos, opened by the user, stays open as 20 more arrive.
+        WithFolders([("A", OlderYearBelow)], (vm, goTo, dir) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // closed by default
+            Section(vm, "2019").IsExpanded = true;      // the user opens it
+
+            Photos(dir("A"), Enumerable.Repeat(In2020, 20), start: 100);
+            vm.StartBackgroundRefresh();
+            Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 90 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "the section the user opened closed again on a rebuild");
+        });
+    }
+
+    [Fact]
+    public void AToggle_IsKeptThroughAFolderWithoutItsSection()
+    {
+        // The reviewer's probe: X (2019 only; the user collapses it) → B (2020 only, also by year) → D (2019 only).
+        WithFolders([("X", OnlyThatYear), ("B", [.. Enumerable.Repeat(In2020, 3)]), ("D", OnlyThatYear)], (vm, goTo, _) =>
+        {
+            goTo("X");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            Section(vm, "2019").IsExpanded = false; // the user's toggle
+            goTo("B");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020"]), Wait), string.Join(", ", Sections(vm)));
+            goTo("D");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+
+            Assert.False(Section(vm, "2019").IsExpanded, "the user's toggle was forgotten in a folder without that year");
+        });
+    }
 }

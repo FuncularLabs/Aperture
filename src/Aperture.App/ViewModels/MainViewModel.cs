@@ -1899,8 +1899,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private BucketMode? _mode;
     private DateGroupings? _groupings;
 
-    // The user's section toggles, per grouping. Every build starts each section as the user left it, if they did, and
-    // otherwise by the default (the newest ~2 screens open) — whatever the build is for (Paul, 2026-10-27).
+    // The user's section toggles, per grouping, for the session: every one they've made, until they change it. Every
+    // build starts each section as the user left it, if they did, and otherwise by the default (the newest ~2 screens
+    // open) — whatever the build is for (Paul, 2026-10-27).
     private SectionExpansion _expansion = SectionExpansion.None;
 
     /// <summary>
@@ -1937,11 +1938,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RequestBuildView();
     }
 
-    // The user's section toggles, remembered for each grouping, with the view's own as they are now. Only toggles: a
-    // section open or closed by the default follows the default in the next build.
-    private SectionExpansion CurrentToggles() => _expansion = _mode is { } mode
-        ? _expansion.With(mode, _sections.Where(kv => kv.Value.Toggled).ToDictionary(kv => kv.Key, kv => kv.Value.IsExpanded))
-        : _expansion;
+    // The user's section toggles: those remembered for each grouping, with the view's own added as they are now (a view
+    // without a section leaves its toggle remembered). Only toggles: a section open or closed by the default follows the
+    // default in the next build.
+    private SectionExpansion CurrentToggles()
+    {
+        if (_mode is not { } mode)
+            return _expansion;
+        var toggles = new Dictionary<long, bool>(_expansion.For(mode));
+        foreach (var (key, section) in _sections)
+            if (section.Toggled)
+                toggles[key] = section.IsExpanded;
+        return _expansion = _expansion.With(mode, toggles);
+    }
 
     // --- Window layout persistence ------------------------------------------
 
