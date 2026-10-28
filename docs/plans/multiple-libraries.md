@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 39, after review round 39) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 40, after review round 40) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -732,7 +732,7 @@ Design:
 | G1 | Everything shows every item of a one-folder library, its subfolders' included; the folder itself shows only its own | `LibraryTopTests.EverythingInAOneFolderLibrary_ShowsAllOfIt` (a real view model, STA) | resolve the top of a one-folder library to that folder again |
 | G2 | The grid has an indexing card, shown while indexing, with the indexing text and a progress bar bound to the indexing progress | `MainWindowTemplateTests.TheGrid_ShowsAnIndexingCardWhileIndexing` (real `MainWindow`) | unbind the card's visibility; drop its text or progress bar |
 | G3 | A library's last count is recorded, kept across another window's changes, read back, ignored if negative; an old list reads as no count; recording for an unknown library changes nothing; the open library's count is recorded through the service; the list shows each library's count | `CatalogRegistryTests` (5 new), `CatalogServiceTests.RecordItemCount_KeepsTheOpenLibrarysCount`, `CatalogBarViewModelTests.Libraries_CarryEachLibrarysLastCount` | don't save the count; drop it on a re-read; don't sanitize it; record it for the wrong library; leave it off the list |
-| G4 | A folder's tree count rises while it's being indexed | `LibraryTopTests.AFoldersCount_RisesWhileItIsIndexed` (250 files: 200 seen before the end); `FolderNodeVmTests.Count_ReportsAChange`. Read at most once a second per folder (revisions 22–39): `LibraryTopTests.AFoldersCount_IsReadAtMostOnceAnInterval`, `EachFoldersCount_HasAnIntervalOfItsOwn`, `AFoldersCount_IsReadAtMostOnceASecond_ByDefault`, `AFoldersCountInterval_AsSet_RunsOnTheSystemsMillisecondClock`; `IntervalGateTests` | update the count only at the end; don't raise the change; the revision rows' interval mutations |
+| G4 | A folder's tree count rises while it's being indexed; it's read at most once a second per folder (revisions 22–40) | `LibraryTopTests.AFoldersCount_RisesWhileItIsIndexed` (250 files: 200 seen before the end); `FolderNodeVmTests.Count_ReportsAChange`; `LibraryTopTests.AFoldersCount_IsReadAtMostOnceAnInterval`, `EachFoldersCount_HasAnIntervalOfItsOwn`, `AFoldersCount_IsReadAtMostOnceASecond_ByDefault`, `AFoldersCountInterval_AsSet_RunsOnTheSystemsMillisecondClock`; `IntervalGateTests` | update the count only at the end; don't raise the change; read at every report; one interval for the library; a default of zero; the interval's units, its clock, and its measure from the last read (the R37-1 to R40-1 rows) |
 | G5 | Sparse sections in a wide grid group coarser; sections that fill their rows keep the nearest-twelve choice; a narrow grid keeps the old choice; no dates gives years | `FormattingTests` (5 new, 2 updated) | ignore tiles per row; weight the fill by section size; let the finer grouping win when none qualifies and two fill their rows equally; drop the row-fill rule |
 
 `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` stay exempt from the coverage floor: App recording the
@@ -1126,7 +1126,7 @@ the tests set (test-first-delivery: redesign the test, then the code).
 
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
-| R38-1 Low | Nothing showed a count read again once the interval had passed: comparing it in ticks or microseconds (the default ~2.8 h or ~17 min), or reading each folder once a run, survived every test — the count would stop at 200 until the run's end. | TEST-GAP | The interval moved to `IntervalGate` (Core), on the system's millisecond clock unless it's given one (the tests give theirs); the view model asks it per folder (`_countReads`, replacing `CountIsDue` and `_countReadAt`; same behaviour) | `IntervalGateTests.AKey_IsLetThroughFirst_ThenOnceTheIntervalHasPassed` (at 0, 999, 1000, 1001 and 2000 ms of a 1 s interval: through at 0, 1000 and 2000), `ByDefault_ItRunsOnTheSystemsMillisecondClock` | compared in ticks; in microseconds; in seconds (R37-1's); once a key, never again; `<=` for `<`; a clock in seconds; a clock in ticks |
+| R38-1 Low | Nothing showed a count read again once the interval had passed: comparing it in ticks or microseconds (the default ~2.8 h or ~17 min), or reading each folder once a run, survived every test — the count would stop at 200 until the run's end. | TEST-GAP | The interval moved to `IntervalGate` (Core), on the system's millisecond clock unless it's given one (the boundary tests give theirs); the view model asks it per folder (`_countReads`, replacing `CountIsDue` and `_countReadAt`; same behaviour) | `IntervalGateTests.AKey_IsLetThroughFirst_ThenOnceTheIntervalHasPassed` (at 0, 999, 1000, 1001 and 2000 ms of a 1 s interval: through at 0, 1000 and 2000), `ByDefault_ItRunsOnTheSystemsMillisecondClock` | compared in ticks; in microseconds; in seconds (R37-1's); once a key, never again; `<=` for `<`; a clock in seconds; a clock in ticks |
 | R38-2 Low | The interval measured from a folder's first read, not its last, survived every test: from a run's second second, every batch would be read. | TEST-GAP | — | `AKey_IsLetThroughFirst_ThenOnceTheIntervalHasPassed` (at 1001: not through); `AnAskThatIsntLetThrough_DoesntRestartTheInterval` | measured from the first read; an ask not let through restarts the interval |
 
 Also `EachKey_HasAnIntervalOfItsOwn` (R23-6, at the gate) and `AChangedInterval_AppliesFromTheNextAsk` (the tests set
@@ -1152,6 +1152,20 @@ last test is on the system's clock); revision 38's R38-1 row names "a clock in t
 system's unless it's given one), and its paragraph's claim is narrowed; the G4 row names the interval's tests. Record:
 c77f7de's message says the gate is "on a clock it is given" (the view model gives none) and that the remaining tests
 prove the view model's use of it (R39-1). Runner `mutate30.py`, 101 rows.
+
+### Revision 40 — what changed after review round 40
+
+One non-author lens over `c77f7de..d5099fb`: R39-1's setter half and the nits verified; its clock half partial — one
+Low, and nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R40-1 Low | The clock tests sampled the clock twice, 50–100 ms apart, so they bounded its speed only between about half and a hundred times a millisecond clock's, and couldn't see one that wraps each second: a clock in ticks read as microseconds (the interval a tenth as long) survived every test, and so did one that wraps (no read again for the session: the count stuck at the first batch, Paul's second-trial item 3). | TEST-GAP | The gate's reading is readable to tests (`IntervalGate.Now`) | `IntervalGateTests.ByDefault_ItRunsOnTheSystemsMillisecondClock` and `LibraryTopTests.AFoldersCountInterval_AsSet_RunsOnTheSystemsMillisecondClock` now check the reading lies between two of the system's (`Environment.TickCount64`), with no sleeps; the view model's also checks the interval set and that its gate remembers; `IntervalGateTests.Now_IsTheClockItReads` | for the gate's default and the view model's: a clock in ticks read as microseconds; one that wraps each second; at twice the speed (and every earlier clock row); `Now` not the clock the gate reads; a fresh gate for the tests |
+
+Nits taken: the view-model test's comment (the view model gives the gate no clock); revision 38's R38-1 row ("the
+boundary tests give theirs"); the G4 row's behaviour and mutations columns. Record: d5099fb's title and R39-1's test
+name claimed the system's millisecond clock before a test proved it (R40-1); the names stay, now true. Runner
+`mutate31.py`, 109 rows.
 
 ## Out of scope (future)
 

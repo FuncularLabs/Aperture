@@ -68,16 +68,23 @@ public class IntervalGateTests
     }
 
     [Fact]
+    public void Now_IsTheClockItReads()
+    {
+        _now = 42;
+
+        Assert.Equal(42, Gate(TimeSpan.FromSeconds(1)).Now);
+    }
+
+    [Fact]
     public void ByDefault_ItRunsOnTheSystemsMillisecondClock()
     {
-        var quick = new IntervalGate(TimeSpan.FromMilliseconds(50));
-        Assert.True(quick.IsDue(1));
-        Thread.Sleep(100);
-        Assert.True(quick.IsDue(1)); // a clock in seconds wouldn't have moved
+        // Its reading, between two of the system's: two samples 50–100 ms apart passed a clock at a tenth of the speed,
+        // or one that wraps each second (round 40).
+        var gate = new IntervalGate(TimeSpan.FromSeconds(1));
 
-        var slow = new IntervalGate(TimeSpan.FromSeconds(5));
-        Assert.True(slow.IsDue(1));
-        Thread.Sleep(50);
-        Assert.False(slow.IsDue(1)); // a clock in ticks would be past 5000
+        var before = Environment.TickCount64;
+        var now = gate.Now;
+
+        Assert.InRange(now, before, Environment.TickCount64);
     }
 }

@@ -13,6 +13,9 @@ public sealed class IntervalGate(TimeSpan interval, Func<long>? clockMs = null)
     /// <summary>How long a key waits after it's let through. A change applies from the next ask.</summary>
     public TimeSpan Interval { get; set; } = interval;
 
+    /// <summary>The clock's reading now, in ms (for tests).</summary>
+    internal long Now => _clockMs();
+
     /// <summary>Whether <paramref name="key"/> is let through now; if it is, its interval starts again.</summary>
     public bool IsDue(long key)
     {

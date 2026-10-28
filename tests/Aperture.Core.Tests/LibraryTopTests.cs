@@ -150,24 +150,24 @@ public class LibraryTopTests
     [Fact]
     public void AFoldersCountInterval_AsSet_RunsOnTheSystemsMillisecondClock()
     {
-        // The gate's boundaries are tested on a clock the tests set (IntervalGateTests); this is the view model's own
-        // gate, on the clock the view model gives it, with the interval set through the view model (round 39).
+        // The gate's boundaries are tested on a clock the tests set (IntervalGateTests); this pins the view model's own
+        // gate: the interval set through the view model, one gate that remembers, and the clock it reads — between two of
+        // the system's readings, not sampled twice (rounds 39–40).
         Sta.Run(() =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
             using var data = new TempDir();
             var library = new LibraryService(data.Path);
-            var vm = new MainViewModel(library, new ThumbnailService(library)) { IndexCountInterval = TimeSpan.FromMilliseconds(50) };
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { IndexCountInterval = TimeSpan.FromHours(1) };
             try
             {
+                Assert.Equal(TimeSpan.FromHours(1), vm.CountReads.Interval);
                 Assert.True(vm.CountReads.IsDue(1));
-                Thread.Sleep(100);
-                Assert.True(vm.CountReads.IsDue(1)); // a frozen clock, or one in seconds, hasn't passed 50; nor has 1 s unset
+                Assert.False(vm.CountReads.IsDue(1));
 
-                vm.IndexCountInterval = TimeSpan.FromSeconds(5);
-                Assert.True(vm.CountReads.IsDue(2));
-                Thread.Sleep(50);
-                Assert.False(vm.CountReads.IsDue(2)); // a clock in ticks or microseconds would be past 5000
+                var before = Environment.TickCount64;
+                var now = vm.CountReads.Now;
+                Assert.InRange(now, before, Environment.TickCount64);
             }
             finally
             {
