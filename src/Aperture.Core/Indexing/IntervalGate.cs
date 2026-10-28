@@ -10,7 +10,7 @@ public sealed class IntervalGate(TimeSpan interval, Func<long>? clockMs = null)
     private readonly Func<long> _clockMs = clockMs ?? (() => Environment.TickCount64);
     private readonly Dictionary<long, long> _lastAt = []; // key → when it was last let through, in ms
 
-    /// <summary>How long a key waits after it's let through, from the next ask.</summary>
+    /// <summary>How long a key waits after it's let through. A change applies from the next ask.</summary>
     public TimeSpan Interval { get; set; } = interval;
 
     /// <summary>Whether <paramref name="key"/> is let through now; if it is, its interval starts again.</summary>

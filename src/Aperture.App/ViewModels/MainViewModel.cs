@@ -2834,6 +2834,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private readonly IntervalGate _countReads = new(TimeSpan.FromSeconds(1)); // per root id, while it's indexed
 
+    internal IntervalGate CountReads => _countReads; // for tests
+
     private void UpdateIndexingText()
     {
         int active;

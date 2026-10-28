@@ -148,6 +148,36 @@ public class LibraryTopTests
     }
 
     [Fact]
+    public void AFoldersCountInterval_AsSet_RunsOnTheSystemsMillisecondClock()
+    {
+        // The gate's boundaries are tested on a clock the tests set (IntervalGateTests); this is the view model's own
+        // gate, on the clock the view model gives it, with the interval set through the view model (round 39).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { IndexCountInterval = TimeSpan.FromMilliseconds(50) };
+            try
+            {
+                Assert.True(vm.CountReads.IsDue(1));
+                Thread.Sleep(100);
+                Assert.True(vm.CountReads.IsDue(1)); // a frozen clock, or one in seconds, hasn't passed 50; nor has 1 s unset
+
+                vm.IndexCountInterval = TimeSpan.FromSeconds(5);
+                Assert.True(vm.CountReads.IsDue(2));
+                Thread.Sleep(50);
+                Assert.False(vm.CountReads.IsDue(2)); // a clock in ticks or microseconds would be past 5000
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
     public void EachFoldersCount_HasAnIntervalOfItsOwn()
     {
         // A library's folders are indexed side by side (at launch, all of them): one folder's reads mustn't hold back

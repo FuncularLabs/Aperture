@@ -3,9 +3,9 @@ using Aperture.Core.Indexing;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// How often a folder's count is read while it's indexed: at most once an interval, on a clock the tests set. Rounds
-/// 36–38 of the multiple-libraries review each found the interval's tests, run through the whole view model, short in
-/// one more direction; here each boundary is a line.
+/// How often a folder's count is read while it's indexed: at most once an interval, on a clock the tests set (the last
+/// test, the system's). Rounds 36–38 of the multiple-libraries review each found the interval's tests, run through the
+/// whole view model, short in one more direction; here each boundary is a line.
 /// </summary>
 public class IntervalGateTests
 {
