@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 33, after review round 33) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 34, after review round 34) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1058,6 +1058,20 @@ rebuild): the newest section opens even when it alone holds more than the newest
 photos into its default fails it. Nits taken: `_expansion`'s comment reflowed; `SectionVmTests`' summary (toggles are
 remembered per grouping, not carried to other groupings). Record: revision 32's runner gained the R31-1 and R32 rows (73
 rows); this one adds the R33 rows (75).
+
+### Revision 34 — what changed after review round 34
+
+One non-author lens over `ea55c68..f7097f2`: the fix layer has no findings (R33-1 and the observation verified, the
+build-side twin of R33-1's mutation killed too; 33 runner rows re-run, all killed); one Low from the cumulative range,
+and nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R34-1 Low | Which grouping the view's toggles are filed under was untested at the view model — the case per-grouping memory exists for (a day and the week starting on it share a key; R22-5). Filing them under the next build's grouping survived every test: the regroup tests all went years↔months, whose keys never collide. | TEST-GAP | — | `GridGroupingTests.AMondaysToggle_DoesntCloseItsWeek_AndIsThereBackInDays` (the lens's probe) | toggles filed under the next build's grouping |
+
+Nits taken: `SectionVm.IsExpanded`'s summary says changing it is the user's toggle (setting the state it has isn't);
+the runner is `mutate25.py` (76 rows; revision 33's was `mutate24.py`). Observations, not findings: the default's
+threshold (~60 items, "~2 screens", approximate by design) and a collapsed section's room in it are as in 0.8.9.
 
 ## Out of scope (future)
 

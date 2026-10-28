@@ -29,7 +29,7 @@ public sealed class SectionVm : ObservableObject
 
     private bool _isExpanded = true;
 
-    /// <summary>Whether the section's tiles show. Setting it — the header's toggle, the keyboard — is the user's toggle.</summary>
+    /// <summary>Whether the section's tiles show. Changing it — the header's toggle, the keyboard — is the user's toggle.</summary>
     public bool IsExpanded
     {
         get => _isExpanded;

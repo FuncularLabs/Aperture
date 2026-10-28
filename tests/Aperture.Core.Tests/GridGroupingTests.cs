@@ -32,6 +32,9 @@ public class GridGroupingTests
     private static SectionVm Section(MainViewModel vm, string label) =>
         vm.ItemsView!.Cast<object>().OfType<TileVm>().Select(t => t.Section).First(s => s?.Label == label)!;
 
+    private static SectionVm SectionByKey(MainViewModel vm, long key) =>
+        vm.ItemsView!.Cast<object>().OfType<TileVm>().Select(t => t.Section).First(s => s?.Key == key)!;
+
     // The width that holds this many tiles across at the current zoom (each tile's slot is its size plus 20 px).
     private static double Across(MainViewModel vm, int tiles) => tiles * (vm.TileSize + 20);
 
@@ -637,6 +640,34 @@ public class GridGroupingTests
             Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
 
             Assert.False(Section(vm, month).IsExpanded, $"{month}: the user's toggle stopped at the first folder it was carried to");
+        });
+    }
+
+    // --- Round 34: a toggle is filed under the view's own grouping ---
+
+    // One photo a day, 1–12 March 2024: twelve days one across; four across, three weeks (from Feb 26, Mar 4, Mar 11).
+    private static readonly DateTime[] TwelveDaysOfMarch =
+        [.. Enumerable.Range(1, 12).Select(day => new DateTime(2024, 3, day, 12, 0, 0, DateTimeKind.Utc))];
+
+    [Fact]
+    public void AMondaysToggle_DoesntCloseItsWeek_AndIsThereBackInDays()
+    {
+        // The reviewer's probe: a day and the week that starts on it share a key — the reason each grouping has a memory
+        // of its own. Collapse Monday 4 March (by day), widen to weeks: the week of 4 March is untouched, so open; narrow
+        // to days again: the Monday is still collapsed.
+        WithLibrary(TwelveDaysOfMarch, vm =>
+        {
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
+            var monday = new DateTime(2024, 3, 4).Ticks;
+            SectionByKey(vm, monday).IsExpanded = false;
+
+            vm.SetGridWidth(Across(vm, 4)); // weeks
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 3 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
+            Assert.True(SectionByKey(vm, monday).IsExpanded, "the Monday's toggle closed its week");
+
+            vm.SetGridWidth(Across(vm, 1)); // days again
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
+            Assert.False(SectionByKey(vm, monday).IsExpanded, "the Monday's toggle was forgotten");
         });
     }
 }
