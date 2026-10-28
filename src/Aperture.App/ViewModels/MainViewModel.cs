@@ -960,9 +960,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             _library.Settings.Update(s => s.IncludeVideos = value);
             OnPropertyChanged();
-            _shownChanges++;
             foreach (var rootVm in Roots.ToList())
-                _ = IndexRootAsync(rootVm.Model, watchAfter: false, changesWhatsShown: true);
+            {
+                _shownChangeOutstanding.Add(rootVm.Id);
+                _ = IndexRootAsync(rootVm.Model, watchAfter: false);
+            }
         }
     }
 
@@ -1909,10 +1911,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // LocationKey, which keys scroll memory by place alone. Internal for tests.
     internal string ViewKey => $"{LocationKey}|{_searchText.Trim()}|{_showImages}|{_showVideos}|{_shownChanges}";
 
-    // The user changed which folders or files the library shows: a folder removed, ticked or unticked, its subfolders
-    // taken in or left out, a subfolder shown or hidden, videos indexed or not. (Adding a folder goes to it: another
-    // place.)
+    // The user changed which folders or files the library shows: a folder removed, ticked or unticked, or a subfolder
+    // shown or hidden, counted as the rebuild that shows it is asked for; videos indexed or not, or subfolders taken in
+    // or left out, counted as each folder's re-index lands the change (_shownChangeOutstanding). (Adding a folder goes to
+    // it: another place.)
     private int _shownChanges;
+
+    // Folders whose re-index is to carry out a change the user made to what's shown, until a run of it lands the change.
+    private readonly HashSet<long> _shownChangeOutstanding = [];
 
     /// <summary>
     /// How many tiles fit across the width the view reports, at the current zoom (each tile's slot is its size plus 20 px
@@ -2058,6 +2064,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         var wasCurrent = _location.RootId == rootVm.Id;
         _shownChanges++;
+        _shownChangeOutstanding.Remove(rootVm.Id);
         _library.RemoveRoot(rootVm.Id);
         Roots.Remove(rootVm);
         if (wasCurrent)
@@ -2083,10 +2090,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void OnRootRecursiveChanged(RootVm rootVm, bool recursive)
     {
-        _shownChanges++;
+        _shownChangeOutstanding.Add(rootVm.Id);
         _library.SetRecursive(rootVm.Id, recursive);
         _library.StopWatching(rootVm.Id);
-        _ = IndexRootAsync(rootVm.Model, watchAfter: true, changesWhatsShown: true);
+        _ = IndexRootAsync(rootVm.Model, watchAfter: true);
     }
 
     // --- Union / sections / status ------------------------------------------
@@ -2599,9 +2606,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Indexing -----------------------------------------------------------
 
-    // changesWhatsShown: the run carries out a change the user made to what's shown (videos indexed or not, subfolders taken
-    // in or left out); its rebuild is another view, however many folders' runs land one by one.
-    private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false, bool changesWhatsShown = false)
+    private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false)
     {
         if (_closing)
             return; // tearing down — don't start new work against a library that's about to be disposed
@@ -2679,8 +2684,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 var added = result?.Added ?? 0;
                 var removed = result?.Removed ?? 0;
                 var dataChanged = streaming || canceled || added + (result?.Updated ?? 0) + removed > 0;
-                if (changesWhatsShown)
-                    _shownChanges++; // counted where the change lands, as well as where it was made
+                // A change the user made to what's shown that this folder's re-index carries out (videos indexed or not,
+                // subfolders taken in or left out) makes the rebuild that shows it another view: counted as a run lands
+                // it — one that ran to its end (a paused run leaves it to the run that resumes) and changed something
+                // (with no rebuild to show it, a count would make the next rebuild of the same view look like another).
+                if (!canceled && _shownChangeOutstanding.Remove(root.Id) && dataChanged)
+                    _shownChanges++;
                 if (dataChanged)
                 {
                     LoadRows();

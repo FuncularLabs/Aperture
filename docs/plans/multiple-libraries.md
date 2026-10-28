@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 27, review round 27 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 28, review round 28 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -913,7 +913,7 @@ R26-4's corrected write-up still wrong about one mechanism (R27-2).
 
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
-| R27-1 Low | The count was taken once, where the change was made; a change carried out by re-indexing every folder (videos indexed or not) lands as one rebuild per folder, and every rebuild after the first was "the view as it is": with two folders whose re-indexes end apart, Everything's only remaining section stayed collapsed by default. Subfolders taken in or left out likewise, if a rebuild came between the change and its re-index's end. | TEST-GAP | A re-index that carries out such a change counts again as it lands, just before its rebuild (`IndexRootAsync(…, changesWhatsShown: true)` from the `IncludeVideos` setter and `OnRootRecursiveChanged`) | `GridGroupingTests.AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands` (the count taken again as each re-index lands, at both call sites). The lens's two-folder probe reproduces the symptom only when the two re-indexes land in separate rebuilds — under load; here they merged inside the debounce, so it can't be a test that fails dependably | not counted where it lands; either call site's run not marked |
+| R27-1 Low | The count was taken once, where the change was made; a change carried out by re-indexing every folder (videos indexed or not) lands as one rebuild per folder, and every rebuild after the first was "the view as it is": with two folders whose re-indexes end apart, Everything's only remaining section stayed collapsed by default. Subfolders taken in or left out likewise, if a rebuild came between the change and its re-index's end. | TEST-GAP | A re-index that carries out such a change counts again as it lands, before the rebuild it asks for (revision 28 refines this: counted only where it lands, and only if it changed something) | `GridGroupingTests.AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands` (the count taken again as each re-index lands, at both call sites). The lens's two-folder probe reproduces the symptom only when the two re-indexes land in separate rebuilds — under load; here they merged inside the debounce, so it can't be a test that fails dependably | not counted where it lands; either call site's run not marked |
 | R27-2 Low | The race write-up said the off-thread reader throws, ending Aperture. For the prune that is false — its failures are caught. What can end Aperture is the UI thread's side: a read that opens while the UI's transaction is open joins its connection, and the UI's next call in that transaction throws ("A concurrent operation is already using the transactional connection"; read in FunkyORM 3.10.1, not run). | PLAN-GAP | Record corrected (below) | — | — |
 
 The provider race, corrected again, for Paul: the library's one FunkyORM provider is shared between threads. While the
@@ -929,6 +929,29 @@ Also: the mutation runner gains a row for the width reported on `ScrollChanged` 
 `ANarrowerTallerGrid_InOneLayout_IsReported` kills at the assertion R26-1 names (the "no `SizeChanged` report" row
 fails earlier, at its set-up). Not a finding: a library switch's own `SetGridWidth` is checked by reading and the live
 check (an exempt shell), as before.
+
+### Revision 28 — what changed after review round 28
+
+One non-author lens over `8f84698..505aeef`: no High or Medium; three Lows (one introduced by revision 27), six nits.
+R27-2 resolved (verified against FunkyORM 3.10.1's source); R27-1 partial; dropping the two-folder test verified right.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R28-1 Low (fix-introduced) | A marked re-index that changed nothing (videos off in a folder with none; a run that throws) took the count but rebuilt nothing; the count was left for the next rebuild of the same view — photos arriving, a sort — which then collapsed every section nobody toggled. | TEST-GAP | A change carried out by re-indexing counts only as a run lands it and changed something (`dataChanged`) | `GridGroupingTests.AReindexThatChangesNothing_LeavesNoCountBehind` | count a run that changes nothing |
+| R28-2 Low | The count taken where such a change was made (the `IncludeVideos` setter, `OnRootRecursiveChanged`) had no rebuild of its own either: subfolders left out of a folder with none left a count over the same way. | TEST-GAP | No count where it's made: the folder is marked as having the change outstanding (`_shownChangeOutstanding`), and the run that lands it counts | the same test | count where the change is made too |
+| R28-3 Low | A run paused (or stopped) before it carried the change out skips its clean-up, and the run that resumes it carried the change out unmarked — "the view as it is": Everything's only section stayed collapsed by default. | TEST-GAP | The outstanding mark stays with the folder until a run of it ends uncancelled, so a resumed run lands it | `GridGroupingTests.AChangePausedAndResumed_CountsWhereTheResumedRunLands` (the pause lands before the run, given 400 new photos to index) | a paused run counts; a paused run drops the mark |
+
+Comments and the plan no longer say a marked run "ends with a rebuild" (R28 nit 3). Record: revision 27's header —
+two of R26-3's five changes are carried out by re-indexing and were partial (R28-2); R27-2's "the UI's next call in that
+transaction throws" is "can throw" (only if the read is still running), and a commit can close the shared connection
+under a running read, so the read throws instead — the fix sentence (one lock across the whole transaction) covers both;
+dc0b65a's commit message names the two-folder test 505aeef removed. Carried: the outstanding mark is in memory, so a run
+stopped (not paused) whose change finishes only at the next launch's reconcile shows it as the same view; "photos
+arriving isn't another view" is pinned through the startup reconcile and a refresh, not the folder watcher (the same
+code path).
+
+Live check (Paul), in addition: turn "include videos" off and pause indexing straight away, then resume — when it ends,
+an older year left alone opens as the newest.
 
 ## Out of scope (future)
 
