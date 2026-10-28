@@ -47,9 +47,23 @@ public class SectionVmTests
     }
 
     [Fact]
+    public void ChangedAndChangedBack_IsStillAToggle()
+    {
+        // A peek: opened, then closed again — the user left it closed, which is a toggle to remember.
+        var section = Section();
+        section.Start(expanded: false);
+
+        section.IsExpanded = true;
+        section.IsExpanded = false;
+
+        Assert.True(section.Toggled);
+    }
+
+    [Fact]
     public void ABuildStartingASectionToggled_DoesntMakeItAToggle()
     {
-        // A section a build starts as the user left it isn't their toggle in this view: the view model remembers those.
+        // Start leaves a section untoggled whatever came before (builds call it on a new section; the view model, not
+        // the section, remembers the user's toggles).
         var section = Section();
         section.IsExpanded = false;
 

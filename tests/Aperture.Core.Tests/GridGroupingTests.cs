@@ -477,7 +477,8 @@ public class GridGroupingTests
             Photos(dir("X"), Enumerable.Repeat(In2019, 2), start: 100);
             vm.StartBackgroundRefresh();
             Assert.True(Sta.PumpUntil(() => Section(vm, "2019").Count == 5 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
-            Assert.False(Section(vm, "2019").IsExpanded); // still as the user left it, after the rebuild
+            Assert.False(Section(vm, "2019").IsExpanded); // still as the user left it, after the rebuild…
+            Assert.False(Section(vm, "2019").Toggled);    // …started from the remembered toggle, not toggled again
 
             goTo("C");
             Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
@@ -570,8 +571,9 @@ public class GridGroupingTests
     [Fact]
     public void ARememberedToggle_TheUserChangesInAnotherFolder_IsKeptAsChanged()
     {
-        // The reviewer's probe: collapsed in X; C opens it collapsed (remembered); the user opens it in C; D: open.
-        WithFolders([("X", OnlyThatYear), ("C", OnlyThatYear), ("D", OnlyThatYear)], (vm, goTo, _) =>
+        // The reviewer's probe: collapsed in X; C opens it collapsed (remembered); the user opens it in C; D, where 2019
+        // is closed by default (under 70 photos of 2020): open — kept as changed, not forgotten.
+        WithFolders([("X", OnlyThatYear), ("C", OnlyThatYear), ("D", OlderYearBelow)], (vm, goTo, _) =>
         {
             goTo("X");
             Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
@@ -581,9 +583,9 @@ public class GridGroupingTests
             Assert.False(Section(vm, "2019").IsExpanded);
             Section(vm, "2019").IsExpanded = true; // the user changes the remembered toggle
             goTo("D");
-            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
 
-            Assert.True(Section(vm, "2019").IsExpanded, "the user's newer toggle lost to the remembered one");
+            Assert.True(Section(vm, "2019").IsExpanded, "the user's newer toggle was lost (to the remembered one, or to the default)");
         });
     }
 
@@ -591,7 +593,7 @@ public class GridGroupingTests
     public void AToggleChangedBackInItsOwnFolder_IsKeptAsChanged()
     {
         // The reviewer's probe. 2019 closed by default: the user opens it, photos arrive (it stays open), the user closes
-        // it again, a search rebuilds the view — closed.
+        // it again; a search for 2019's photos alone (p070–p074), where it's the newest and open by default — closed.
         WithFolders([("A", OlderYearBelow)], (vm, goTo, dir) =>
         {
             goTo("A");
@@ -605,11 +607,11 @@ public class GridGroupingTests
             var applied = 0;
             vm.ViewApplied += () => applied++;
 
-            vm.SearchInput = "p"; // every photo: a rebuild of both years
+            vm.SearchInput = "p07";
             vm.CommitSearch();
-            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
+            Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
 
-            Assert.False(Section(vm, "2019").IsExpanded, "the user's newer toggle lost to the remembered one");
+            Assert.False(Section(vm, "2019").IsExpanded, "the user's newer toggle was lost (to the remembered one, or to the default)");
         });
     }
 }

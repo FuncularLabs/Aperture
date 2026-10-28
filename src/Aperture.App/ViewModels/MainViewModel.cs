@@ -1899,8 +1899,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private BucketMode? _mode;
     private DateGroupings? _groupings;
 
-    // The user's section toggles, per grouping: every one they've made, until they change it (or switch libraries, or
-    // close Aperture). Every build starts each section as the user left it, if they did, and otherwise by the default
+    // The user's section toggles, per grouping: those they've made, taken from the view as each build starts, until they
+    // change them (or switch libraries, or close Aperture). Every build starts each section as the user left it, if they did, and otherwise by the default
     // (the newest ~2 screens open) — whatever the build is for (Paul, 2026-10-27).
     private SectionExpansion _expansion = SectionExpansion.None;
 

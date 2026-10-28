@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 31, after review round 31) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 32, after review round 32) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1019,7 +1019,7 @@ left untested, and nits.
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
 | R31-1 Low | The merge's precedence — a toggle the user makes now beats the one remembered — was untested: remembered-wins survived every test. | TEST-GAP | — | `GridGroupingTests.ARememberedToggle_TheUserChangesInAnotherFolder_IsKeptAsChanged`, `AToggleChangedBackInItsOwnFolder_IsKeptAsChanged` (the lens's probes) | the remembered toggle beats the newer |
-| R31-2 Low | With the merge, the memory is the authority: a carried section marked `Toggled` changed nothing but a flag check — except that, if a streaming build merged a newer toggle while an older build was still computing, the older build's carried flag wrote the stale value back for good. Revision 29's row "a toggle carried into a build not marked as one" had become an equivalent mutant (the author found it; the lens agreed on the mechanism). | TEST-GAP | A build starts every section untoggled (`SectionVm.Start(expanded)`): `Toggled` means the user changed it since its build made it, and the view model's memory is what later builds start from. The flag check became a check of the section's state | `SectionVmTests.ABuildStartingASectionToggled_DoesntMakeItAToggle` (replaces `AToggleCarriedOn_StaysAToggle`); the R31-1 tests | a build's state is a toggle |
+| R31-2 Low | With the merge, the memory is the authority: a carried section marked `Toggled` changed nothing but a flag check — except that, if a streaming build merged a newer toggle while an older build was still computing, the older build's carried flag wrote the stale value back for good. Revision 29's row "a toggle carried into a build not marked as one" had become an equivalent mutant (the author found it; the lens agreed on the mechanism). | TEST-GAP | A build starts every section untoggled (`SectionVm.Start(expanded)`): `Toggled` means the user changed it since its build made it, and the view model's memory is what later builds start from. The flag check became a check of the section's state | `SectionVmTests.ABuildStartingASectionToggled_DoesntMakeItAToggle` (replaces `AToggleCarriedOn_StaysAToggle`); at the build, `AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder`'s flag check (revision 32) | a build's state is a toggle |
 
 The runner drops two rows equivalent since revision 30 — "the grouping kept across an ungrouped build (toggles)" (a
 stale grouping adds nothing and keeps the memory; its width half stays) and "a toggle carried into a build isn't a toggle"
@@ -1027,6 +1027,21 @@ stale grouping adds nothing and keeps the memory; its width half stays) and "a t
 revision 30 named it without a row) and the R31 rows. Nits taken: R30-2's blame is TEST-GAP (G5 forbade the forgetting);
 toggles last until the user changes them, switches libraries or closes Aperture (a new view model starts empty) — the
 comment and the CHANGELOG say so; the photos-arriving test cites the opened case too; the status line.
+
+### Revision 32 — what changed after review round 32
+
+One non-author lens over `7ca09af..a9ca792`: the code correct; four Lows, all tests or prose.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R32-1 Low | Both R31-1 tests ended where the expected state was also the destination's default, so a changed toggle forgotten (falling back to the default) passed them. | TEST-GAP | — | The tests end where the default differs: D with 2019 closed by default (opened by the user: open); a search for 2019's photos alone (closed by the user: closed) | a changed remembered toggle forgotten |
+| R32-2 Low | R31-2's fix had no test at the build (the unit test calls `Start` on a toggled section, which builds never do), and the row cited the R31-1 tests, which pass with the pre-fix behaviour. | TEST-GAP | Row corrected (revision 31) | `AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder`: after the rebuild, the section started from the remembered toggle isn't toggled | sections started from memory marked toggled |
+| R32-3 Low | "Opened then closed in one view is still a toggle" (what the `Toggled` summary and the CHANGELOG mean) was untested. | TEST-GAP | — | `SectionVmTests.ChangedAndChangedBack_IsStillAToggle` | a second change cancels the toggle |
+| R32-4 Low | `Toggled`'s summary said "untoggled sections follow the default" — false since revision 31 for a section started from memory. | HOUSE-RULE | "a section the user hasn't toggled anywhere follows the default" | — | — |
+
+Nits taken: `ABuildStartingASectionToggled_DoesntMakeItAToggle`'s comment; `_expansion`'s ("taken from the view as each
+build starts"). Record: with the merge, a toggle made while a streaming build and a debounced one interleave is kept in
+memory and returns on the next build (revision 30's carried item covers the loss in the view that's up).
 
 ## Out of scope (future)
 

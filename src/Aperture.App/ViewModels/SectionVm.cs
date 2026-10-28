@@ -42,7 +42,8 @@ public sealed class SectionVm : ObservableObject
 
     /// <summary>
     /// Whether the user has expanded or collapsed this section since its build made it. The view model adds these to
-    /// the toggles it remembers, which later builds start sections from; untoggled sections follow the default.
+    /// the toggles it remembers, which later builds start sections from; a section the user hasn't toggled anywhere
+    /// follows the default.
     /// </summary>
     public bool Toggled { get; private set; }
 
