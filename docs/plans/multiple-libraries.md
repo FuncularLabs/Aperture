@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 35, after review round 35) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 36, after review round 36) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1080,9 +1080,26 @@ One non-author lens over `f7097f2..791ba6e` (and a fresh sweep of the cumulative
 
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
-| R35-1 Low | G4's mid-run tree count leaves hidden subfolders out (F6's rule), but nothing tested it there: counting them in survived every test — after each launch's reconcile, a folder with a hidden subfolder would show its hidden items in its count until the tree was next built. | TEST-GAP | — | `LibraryTopTests.AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut` (the lens's probe) | the mid-run tree count includes hidden subfolders |
+| R35-1 Low | G4's mid-run tree count leaves hidden subfolders out (F6's rule), but nothing tested it there: counting them in survived every test — after a launch's reconcile of 200 files or more (the indexer reports every 200; revision 36), a folder with a hidden subfolder would show its hidden items in its count until the tree was next built. | TEST-GAP | — | `LibraryTopTests.AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut` (the lens's probe) | the mid-run tree count includes hidden subfolders |
 
 Nit taken: the CHANGELOG's default reads "the newest ~2 screens open" (as the README). Runner `mutate26.py`, 77 rows.
+
+### Revision 36 — what changed after review round 36
+
+One non-author lens over `791ba6e..2b03399`, with a sweep of the cumulative range (each criterion mapped to its tests):
+the fix layer changed no code, and R35-1's test killed its mutant but could pass without a read; three more behaviours
+untested; nits. Tests only, and one summary.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R36-1 Low | R35-1's test could pass with no count read mid-run: both its checks hold if no report comes (with batches of 500, the R35-1 defect passed it), and its wait for the run to start never saw it (5 s a run). | TEST-GAP | — | `LibraryTopTests.AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut` waits for the folder's mid-run report ("indexing 200 / 230", its first, so its count is read) and the run's end | no report mid-run (batches of 500) |
+| R36-2 Low | A width reported before the first view (the window's first layout, during the startup read) mustn't supersede the startup build and its folder tree; requesting a build then survived every test. | TEST-GAP | — | `GridGroupingTests.AWidthBeforeTheFirstView_LeavesTheStartupBuildAndItsFolderTree` | a width before the read requests a build |
+| R36-3 Low | G3's count "recorded when you switch away" lands on the library being left only because the switch activates its target after `PreparingToSwitch`; untested. | TEST-GAP | `PreparingToSwitch`'s summary says the library being left is still the active one | `CatalogServiceTests.RecordItemCount_AsASwitchPrepares_GoesToTheLibraryBeingLeft` (the lens's probe) | the target activated before `PreparingToSwitch` |
+| R36-4 Low | G4's "at most once a second" held only for the interval the tests set (an hour); a default of zero survived every test. | TEST-GAP | — | `LibraryTopTests.AFoldersCount_IsReadAtMostOnceASecond_ByDefault` | the interval's default is zero |
+
+Nits taken: a negative count is saved as none (`CatalogRegistryTests.ItemCount_BelowNone_IsSavedAsNone`; mutation: saved
+as is); R35-1's row says the mid-run read needs a reconcile of 200 files or more. Record: 2b03399's message says the test
+checks the count "during the run", which R36-1 made true. Runner `mutate27.py`, 82 rows.
 
 ## Out of scope (future)
 

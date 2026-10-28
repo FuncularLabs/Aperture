@@ -670,4 +670,26 @@ public class GridGroupingTests
             Assert.False(SectionByKey(vm, monday).IsExpanded, "the Monday's toggle was forgotten");
         });
     }
+
+    // --- Round 36: the window's first width ---
+
+    [Fact]
+    public void AWidthBeforeTheFirstView_LeavesTheStartupBuildAndItsFolderTree()
+    {
+        // The reviewer's probe: the window reports its width as it's first laid out, usually while the library's items
+        // are still being read. That mustn't supersede the startup build, which also builds the folder tree.
+        WithLibrary(MonthlyIn2020, vm =>
+        {
+            Assert.True(Sta.PumpUntil(() => !vm.IsLoadingView, Wait));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+
+            Assert.Single(vm.FolderTree);
+        }, beforeTheFirstView: vm =>
+        {
+            Assert.Null(vm.LoadedItemCount); // the width comes before the read
+            var across = vm.TilesPerRow;
+            vm.SetGridWidth(Across(vm, 12));
+            Assert.NotEqual(across, vm.TilesPerRow);
+        });
+    }
 }

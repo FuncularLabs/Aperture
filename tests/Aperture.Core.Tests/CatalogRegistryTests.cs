@@ -49,6 +49,18 @@ public class CatalogRegistryTests
     }
 
     [Fact]
+    public void ItemCount_BelowNone_IsSavedAsNone()
+    {
+        using var dir = new TempDir();
+        var registry = new CatalogRegistry(RegistryPath(dir));
+        var work = registry.Add("Work", dir.Combine("work"));
+
+        Assert.True(registry.SetItemCount(work.Id, -5));
+
+        Assert.Equal(0, new CatalogRegistry(RegistryPath(dir)).List().Single().ItemCount);
+    }
+
+    [Fact]
     public void SetItemCount_WhenTheListCannotBeSaved_ReturnsFalse_AndKeepsTheLastCount()
     {
         using var dir = new TempDir();

@@ -622,6 +622,24 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task RecordItemCount_AsASwitchPrepares_GoesToTheLibraryBeingLeft()
+    {
+        // The host records the open library's count as a switch prepares (the reviewer's probe, round 36): the library
+        // being left is still the active one then.
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var left = service.ActiveCatalog!.Id;
+        var work = AddLibrary(service, "Work", outer.Combine("work"));
+        service.PreparingToSwitch += (_, _) => service.RecordItemCount(5);
+
+        await service.SwitchToAsync(work.Id);
+
+        var saved = new CatalogRegistry(RegistryPath(outer)).List();
+        Assert.Equal(5, saved.Single(c => c.Id == left).ItemCount);
+        Assert.Null(saved.Single(c => c.Id == work.Id).ItemCount);
+    }
+
+    [Fact]
     public async Task CreateLibraryAsync_CreatesItsOwnFolder_RegistersIt_AndSwitches()
     {
         using var outer = new TempDir();

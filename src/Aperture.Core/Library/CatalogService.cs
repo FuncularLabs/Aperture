@@ -46,8 +46,9 @@ public sealed class CatalogService : IAsyncDisposable
     public string? OpenWarning { get; }
 
     /// <summary>
-    /// Raised once the target has opened and just before the current library is torn down, so the host
-    /// can quiesce its view model. Not raised for a no-op switch or a target that can't be opened.
+    /// Raised once the target has opened and just before the current library is torn down — while it's still the
+    /// active catalog — so the host can quiesce its view model and record its count. Not raised for a no-op switch or
+    /// a target that can't be opened.
     /// </summary>
     public event EventHandler? PreparingToSwitch;
 

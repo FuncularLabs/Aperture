@@ -125,6 +125,29 @@ public class LibraryTopTests
     }
 
     [Fact]
+    public void AFoldersCount_IsReadAtMostOnceASecond_ByDefault()
+    {
+        // The tests above set an interval of an hour, so a slow run can't read twice; Aperture runs with the default
+        // (round 36: with none, the count was read at every report).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library));
+            try
+            {
+                Assert.Equal(TimeSpan.FromSeconds(1), vm.IndexCountInterval);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
     public void EachFoldersCount_HasAnIntervalOfItsOwn()
     {
         // A library's folders are indexed side by side (at launch, all of them): one folder's reads mustn't hold back
@@ -292,9 +315,10 @@ public class LibraryTopTests
     [Fact]
     public void AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut()
     {
-        // The reviewer's probe (round 35): a folder of 200 photos with a hidden subfolder of 30, reconciled (it reports at
-        // 200 files, so its count is read mid-run). Its count in the tree stays 200 — the hidden subfolder out, as when the
-        // tree is built — during the run and after (a run that changes nothing doesn't build the tree again).
+        // The reviewer's probe (round 35): a folder of 200 photos with a hidden subfolder of 30, reconciled. The run
+        // reports at 200 files, and the folder's first report reads its count (round 36: checked, so the test can't pass
+        // without a read). Its count in the tree stays 200 — the hidden subfolder out, as when the tree is built — during
+        // the run and after (a run that changes nothing doesn't build the tree again).
         Sta.Run(() =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
@@ -320,10 +344,17 @@ public class LibraryTopTests
                     if (e.PropertyName == nameof(FolderNodeVm.Count))
                         seen.Add(node.Count);
                 };
+                var rootVm = Assert.Single(vm.Roots);
+                var statuses = new List<string>();
+                rootVm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(RootVm.Status))
+                        statuses.Add(rootVm.Status);
+                };
 
                 vm.StartBackgroundRefresh();
-                Sta.PumpUntil(() => vm.IsIndexing, TimeSpan.FromSeconds(5));
-                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(30)));
+                Assert.True(Sta.PumpUntil(() => statuses.Contains("indexing 200 / 230") && !rootVm.IsIndexing, TimeSpan.FromSeconds(30)),
+                    $"no report mid-run, or the run didn't end: {string.Join(", ", statuses)}");
                 Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
 
                 Assert.DoesNotContain(230, seen);
