@@ -44,8 +44,10 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   back and forth no longer gets slower each time.
 - Date sections (day, week, month or year) are chosen to suit the window as well as the photos:
   sparse photos in a wide window are grouped by longer spans, so sections fill their rows instead
-  of leaving one photo a row. Resizing the window or zooming can change the grouping; a section you
-  collapsed stays collapsed when the grouping changes and changes back.
+  of leaving one photo a row. Resizing the window or zooming can change the grouping.
+- A date section you open or close stays that way as the view is rebuilt — when the grouping changes
+  and changes back, and in the next folder or search that has it. Sections you haven't touched follow
+  the default (the newest open) each time.
 
 ### Fixed
 - **Everything** in a library with a single folder showed only the photos directly in that folder,

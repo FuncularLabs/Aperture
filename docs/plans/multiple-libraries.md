@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 28, review round 28 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 29, Paul's ruling on date sections) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -952,6 +952,44 @@ code path).
 
 Live check (Paul), in addition: turn "include videos" off and pause indexing straight away, then resume — when it ends,
 an older year left alone opens as the newest.
+
+### Revision 29 — Paul's ruling on date sections, after review round 29
+
+Round 29 (one non-author lens over `505aeef..2f48afe`) found three more Lows in the rule revisions 23–28 had built — that a
+rebuild of "the view as it is" (the same place, search, filter and choice of folders, in the same grouping) keeps every
+section's state, while any other build keeps only the user's toggles: R29-1 (introduced by revision 28) a folder's
+re-index mark taken by whichever run of the folder landed first; R29-2 a run that throws clearing the mark without
+carrying the change out; R29-3 the clearing half of R28-1 untested. Six rounds in a row had found the edges of that rule,
+most introduced by the round before. Asked to choose, Paul ruled (2026-10-27): **untouched sections follow the default on
+every rebuild; only the sections the user expanded or collapsed are remembered.**
+
+So the rule is now one line: every build starts each date section as the user left it, if they did (remembered per
+grouping, `SectionExpansion`, recorded as made, `SectionVm.Toggled`), and otherwise by the default — the newest ~2
+screens open. The machinery that decided "the view as it is" is gone: `ViewKey`, the what's-shown count and the
+per-folder outstanding marks, and the view's states carried into a build. R29-1, R29-2 and R29-3 are moot: the code they
+are about no longer exists. The visible difference from revisions 23–28 (and from 0.8.9, which carried every state): as
+photos stream in above an older section the user hasn't touched, it closes when the default does; expanding it once
+keeps it open.
+
+| Test | What it pins now |
+|---|---|
+| `GridGroupingTests.ASectionNobodyToggled_FollowsTheDefaultAsPhotosArrive` (was `ASectionLeftOpen_StaysOpenAsPhotosArriveAboveIt`, inverted) | an untouched section follows the default as photos arrive |
+| `AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder`, `AToggle_GoesOnThroughAFolderItWasCarriedTo`, `ASectionsToggle_OutlastsARegroupAndBack`, `ASectionsToggle_OutlastsTurningSectionsOffAndOn`, `SectionVmTests` | a toggle is kept through rebuilds, places and groupings |
+| `ASearchRefinedToAnother_GetsOnlyTheUsersToggles`, `ThePicturesAndVideosFilter_GetsOnlyTheUsersToggles`, `UntickingAFolder_GetsOnlyTheUsersToggles`, `ASectionCollapsedOnlyByDefault_IsntCarriedStraightToAnotherFolder`, `AStateCarriedToAnotherFolder_DoesntBecomeAToggle` | a default isn't carried anywhere |
+| Removed with the machinery | `EveryChangeTheUserMakesToWhatsShown_IsAnotherView`, `AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands`, `AReindexThatChangesNothing_LeavesNoCountBehind`, `AChangePausedAndResumed_CountsWhereTheResumedRunLands`, `ASectionKeptOpenByARebuild_IsntRememberedAsAToggle` |
+
+Mutation rows (runner `mutate20.py`, 65 rows): the rows for the removed code are gone; new ones — untouched sections
+remembered too (killed by the five "defaults aren't carried" tests and the photos-arriving test), a toggle carried into a
+build not marked as one, a toggle not carried into the build.
+
+G5, amended for the last time: … the grid's width and zoom choose the grouping (the width the scroll viewer's, less its
+padding and a scrollbar, reported on the grid's resize); a width or zoom that keeps the grouping leaves the view alone; a
+view built for an older width regroups as it's applied if the new width groups differently; every build opens each date
+section as the user left it, if they did, and otherwise by the default.
+
+Live check (Paul), replacing revisions 23–28's section checks: collapse a year, narrow the window until it groups by
+month, widen it again — still collapsed; go to another folder with that year — collapsed there too; a section you haven't
+touched opens and closes by the default (the newest ~2 screens open) after any change.
 
 ## Out of scope (future)
 

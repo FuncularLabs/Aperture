@@ -212,10 +212,11 @@ public class GridGroupingTests
     }
 
     [Fact]
-    public void ASectionLeftOpen_StaysOpenAsPhotosArriveAboveIt()
+    public void ASectionNobodyToggled_FollowsTheDefaultAsPhotosArrive()
     {
-        // A rebuild in the view's own grouping keeps every section as it is (round 23): 2019, open by default while 2020
-        // holds 50 photos, stays open when 20 more arrive in 2020 and push it past the newest ~2 screens.
+        // Untouched sections follow the default on every rebuild (Paul, 2026-10-27): 2019, open by default while 2020
+        // holds 50 photos, closes when 20 more arrive in 2020 and push it past the newest ~2 screens. (A section the user
+        // opened or closed stays as they left it: AToggle_OutlastsARebuildInItsPlace_AndGoesToAnotherFolder.)
         Sta.Run(() =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
@@ -244,7 +245,7 @@ public class GridGroupingTests
                 vm.StartBackgroundRefresh(); // finds the 20 new photos
                 Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 70 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
 
-                Assert.True(Section(vm, "2019").IsExpanded);
+                Assert.False(Section(vm, "2019").IsExpanded, "an untouched section kept its state, not the default");
             }
             finally
             {
@@ -411,32 +412,6 @@ public class GridGroupingTests
         });
     }
 
-    [Fact]
-    public void ASectionKeptOpenByARebuild_IsntRememberedAsAToggle()
-    {
-        // X: 2019 open by default; 20 photos arrive in 2020 and the rebuild keeps it open (not the user). Then B (by month),
-        // then D (by year, 2019 past the newest ~2 screens): D's 2019 is collapsed, as its default.
-        WithFolders([("X", [.. Enumerable.Repeat(In2020, 50).Concat(Enumerable.Repeat(In2019, 5))]), ("B", MonthlyIn2020), ("D", OlderYearBelow)],
-            (vm, goTo, dir) =>
-            {
-                goTo("X");
-                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
-                Assert.True(Section(vm, "2019").IsExpanded);
-                Photos(dir("X"), Enumerable.Repeat(In2020, 20), start: 100);
-                vm.StartBackgroundRefresh();
-                Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 70 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
-                Assert.True(Section(vm, "2019").IsExpanded); // kept open…
-                Assert.False(Section(vm, "2019").Toggled);   // …but not by the user
-
-                goTo("B");
-                Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
-                goTo("D");
-                Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2020", "2019"]), Wait), string.Join(", ", Sections(vm)));
-
-                Assert.False(Section(vm, "2019").IsExpanded, "D's 2019 opened by a state no user set");
-            });
-    }
-
     // --- Lens B's probes (round 25): what is "the view as it is", and a toggle going on ---
 
     [Fact]
@@ -550,187 +525,4 @@ public class GridGroupingTests
         });
     }
 
-    [Fact]
-    public void EveryChangeTheUserMakesToWhatsShown_IsAnotherView()
-    {
-        // What the carry compares: each of these is another view (photos arriving, or a sort change, isn't).
-        Sta.Run(() =>
-        {
-            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
-            using var data = new TempDir();
-            using var photos = new TempDir();
-            using var more = new TempDir();
-            Photos(photos.Path, [In2020]);
-            Photos(Path.Combine(photos.Path, "Trip"), [In2019]);
-            Photos(more.Path, [In2019]);
-            var library = new LibraryService(data.Path);
-            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
-            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
-            try
-            {
-                Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && vm.FolderTree.Count == 1, Wait));
-                var root = vm.Roots.Single();
-                var node = vm.FolderTree.Single();
-                node.IsExpanded = true; // its subfolders load
-                var trip = node.Children.Single(c => c.Name == "Trip");
-
-                void IsAnotherView(string what, Action change)
-                {
-                    var before = vm.ViewKey;
-                    change();
-                    Assert.True(before != vm.ViewKey, $"{what} kept the view");
-                }
-                var kept = vm.ViewKey;
-                vm.SortPreset = vm.SortLabels.First(label => label != vm.SortPreset); // a sort change keeps the view
-                Assert.Equal(kept, vm.ViewKey);
-
-                IsAnotherView("hiding videos", () => vm.ShowVideos = false);
-                IsAnotherView("hiding pictures", () => vm.ShowImages = false);
-                IsAnotherView("hiding a subfolder", () => trip.IsShown = false);
-                // (Leaving subfolders out and not indexing videos are carried out by re-indexing, and count where each
-                // re-index lands: AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands.)
-                IsAnotherView("adding a folder (which goes to it)", () => vm.AddFolder(more.Path, includeSubfolders: true));
-                vm.NavigateHomeCommand.Execute(null); // Everything: the place stays as folders are unticked or removed
-                IsAnotherView("unticking a folder", () => root.IsIncluded = false);
-                IsAnotherView("removing a folder that isn't the one shown", () => vm.RemoveRootCommand.Execute(vm.Roots.Single(r => r.Path == more.Path)));
-            }
-            finally
-            {
-                vm.PrepareForClose();
-                library.ShutdownAsync().GetAwaiter().GetResult();
-            }
-        });
-    }
-
-    // --- Round 27: a change carried out by re-indexing is another view where it lands ---
-
-    private static readonly DateTime In2021 = new(2021, 6, 15, 12, 0, 0, DateTimeKind.Utc);
-
-    private static void Videos(string folder, IEnumerable<DateTime> dates)
-    {
-        Directory.CreateDirectory(folder);
-        var i = 0;
-        foreach (var date in dates)
-        {
-            var path = Path.Combine(folder, $"v{i:000}.mp4");
-            File.WriteAllText(path, "x"); // indexed by its extension
-            File.SetLastWriteTimeUtc(path, date.AddMinutes(i++));
-        }
-    }
-
-    // A library of the folders the setup writes (indexed as they stand), a view model over it, and the body.
-    private static void WithLibraryOf(Action<string> setup, string[] folders, Action<MainViewModel, LibraryService> body)
-    {
-        Sta.Run(() =>
-        {
-            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
-            using var data = new TempDir();
-            using var outer = new TempDir();
-            setup(outer.Path);
-            var library = new LibraryService(data.Path);
-            foreach (var name in folders)
-                library.IndexRoot(library.AddRoot(Path.Combine(outer.Path, name), name));
-            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
-            try
-            {
-                body(vm, library);
-            }
-            finally
-            {
-                vm.PrepareForClose();
-                library.ShutdownAsync().GetAwaiter().GetResult();
-            }
-        });
-    }
-
-    [Fact]
-    public void AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands()
-    {
-        // Each re-index that carries out such a change and changes something ends with a rebuild that must be another
-        // view, whatever rebuilds came between: the count is taken as each re-index lands, not where the change was made.
-        // (The reviewer's case — videos off over two folders whose re-indexes end apart, the second rebuild leaving
-        // Everything's only section collapsed by default — needs the two to land in separate rebuilds, which a fast
-        // machine merges; this checks the count itself.)
-        WithLibraryOf(outer =>
-        {
-            Photos(Path.Combine(outer, "A"), Enumerable.Repeat(In2019, 5));
-            Photos(Path.Combine(outer, "A", "Trip"), Enumerable.Repeat(In2020, 3));
-            Videos(Path.Combine(outer, "A"), Enumerable.Repeat(In2021, 2));
-        }, ["A"], (vm, _) =>
-        {
-            Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
-
-            void CountsAgainWhereItLands(string what, Action change)
-            {
-                change();
-                var asMade = vm.ViewKey;
-                Assert.True(Sta.PumpUntil(() => vm.ViewKey != asMade && !vm.IsIndexing, TimeSpan.FromSeconds(30)), $"{what}: not counted as its re-index landed");
-            }
-            CountsAgainWhereItLands("leaving subfolders out", () => vm.Roots.Single().IsRecursive = false);
-            CountsAgainWhereItLands("not indexing videos", () => vm.IncludeVideos = false);
-        });
-    }
-
-    // Counts the runs that end (IsIndexing going false).
-    private static Func<int> RunsEnded(MainViewModel vm)
-    {
-        var ended = 0;
-        vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(MainViewModel.IsIndexing) && !vm.IsIndexing)
-                ended++;
-        };
-        return () => ended;
-    }
-
-    [Fact]
-    public void AReindexThatChangesNothing_LeavesNoCountBehind()
-    {
-        // Round 28: a folder with no subfolders and no videos. Leaving subfolders out, or videos, changes nothing and
-        // rebuilds nothing; a count left over would make the next rebuild of the same view — photos arriving — another
-        // view, collapsing the sections nobody toggled.
-        WithLibraryOf(outer => Photos(Path.Combine(outer, "A"), Enumerable.Repeat(In2019, 3)), ["A"], (vm, _) =>
-        {
-            Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
-            var ended = RunsEnded(vm);
-            var before = vm.ViewKey;
-
-            vm.Roots.Single().IsRecursive = false;
-            Assert.True(Sta.PumpUntil(() => ended() == 1, Wait), "the subfolders re-index never ended");
-            vm.IncludeVideos = false;
-            Assert.True(Sta.PumpUntil(() => ended() == 2, Wait), "the videos re-index never ended");
-
-            Assert.Equal(before, vm.ViewKey);
-        });
-    }
-
-    [Fact]
-    public void AChangePausedAndResumed_CountsWhereTheResumedRunLands()
-    {
-        // Round 28: videos off, its re-index paused at once (the indexer skips its clean-up on a pause, so the videos are
-        // still there), then resumed: the resumed run carries the change out, and its rebuild is another view.
-        WithLibraryOf(outer =>
-        {
-            Photos(Path.Combine(outer, "A"), Enumerable.Repeat(In2019, 3));
-            Videos(Path.Combine(outer, "A"), Enumerable.Repeat(In2021, 2));
-        }, ["A"], (vm, _) =>
-        {
-            Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
-            var root = vm.Roots.Single();
-            Photos(root.Path, Enumerable.Repeat(In2019, 400), start: 100); // new: work for the run, so the pause lands first
-            var ended = RunsEnded(vm);
-            var before = vm.ViewKey;
-
-            vm.IncludeVideos = false;
-            vm.PauseRootIndexCommand.Execute(root);
-            Assert.True(Sta.PumpUntil(() => ended() == 1, Wait), "the paused run never ended");
-            Assert.True(root.IsPaused);
-            Assert.Equal(before, vm.ViewKey); // a paused run hasn't carried the change out
-
-            vm.ResumeRootIndexCommand.Execute(root);
-            Assert.True(Sta.PumpUntil(() => ended() == 2, TimeSpan.FromSeconds(60)), "the resumed run never ended");
-
-            Assert.NotEqual(before, vm.ViewKey);
-        });
-    }
 }
