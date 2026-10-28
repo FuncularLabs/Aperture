@@ -3,8 +3,8 @@ using Aperture.App.ViewModels;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// A date section knows whether the user expanded or collapsed it: only those toggles go to other places and groupings
-/// (round 24 of the multiple-libraries review).
+/// A date section knows whether the user expanded or collapsed it: only those toggles are remembered — per grouping, for
+/// later builds and other places (round 24 of the multiple-libraries review).
 /// </summary>
 public class SectionVmTests
 {

@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 32, after review round 32) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 33, after review round 33) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1042,6 +1042,22 @@ One non-author lens over `7ca09af..a9ca792`: the code correct; four Lows, all te
 Nits taken: `ABuildStartingASectionToggled_DoesntMakeItAToggle`'s comment; `_expansion`'s ("taken from the view as each
 build starts"). Record: with the merge, a toggle made while a streaming build and a debounced one interleave is kept in
 memory and returns on the next build (revision 30's carried item covers the loss in the view that's up).
+
+### Revision 33 — what changed after review round 33
+
+One non-author lens over `a9ca792..ea55c68`: the fix layer has no findings of its own (round 32's four verified, with
+round 32's mutants and the lens's own); one Low from the cumulative range, and nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R33-1 Low | Toggles kept per grouping through later builds were tested only for years: reading the years' memory whatever the grouping survived every test (a month's toggle was then kept in the first folder it reached, forgotten in the next). | TEST-GAP | — | `GridGroupingTests.AMonthsToggle_GoesOnThroughAFolderItWasCarriedTo` (the lens's probe) | the merge reads the years' memory |
+
+Also, from the lens's observation (the default is older than this branch, but since revision 29 applies on every
+rebuild): the newest section opens even when it alone holds more than the newest ~2 screens —
+`ASectionNobodyToggled_FollowsTheDefaultAsPhotosArrive` now checks 2020 (70 photos) is open; counting a section's own
+photos into its default fails it. Nits taken: `_expansion`'s comment reflowed; `SectionVmTests`' summary (toggles are
+remembered per grouping, not carried to other groupings). Record: revision 32's runner gained the R31-1 and R32 rows (73
+rows); this one adds the R33 rows (75).
 
 ## Out of scope (future)
 

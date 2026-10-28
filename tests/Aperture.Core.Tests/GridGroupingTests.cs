@@ -247,6 +247,7 @@ public class GridGroupingTests
                 Assert.True(Sta.PumpUntil(() => Section(vm, "2020").Count == 70 && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(30)));
 
                 Assert.False(Section(vm, "2019").IsExpanded, "an untouched section kept its state, not the default");
+                Assert.True(Section(vm, "2020").IsExpanded, "the newest section closed, though it alone holds the newest ~2 screens");
             }
             finally
             {
@@ -612,6 +613,30 @@ public class GridGroupingTests
             Assert.True(Sta.PumpUntil(() => applied > 0 && !vm.IsLoadingView && Sections(vm).SequenceEqual(["2019"]), Wait), string.Join(", ", Sections(vm)));
 
             Assert.False(Section(vm, "2019").IsExpanded, "the user's newer toggle was lost (to the remembered one, or to the default)");
+        });
+    }
+
+    // --- Round 33: a toggle kept in other groupings than years ---
+
+    [Fact]
+    public void AMonthsToggle_GoesOnThroughAFolderItWasCarriedTo()
+    {
+        // The reviewer's probe: AToggle_GoesOnThroughAFolderItWasCarriedTo, grouped by month (one across) — each grouping
+        // has a memory of its own, and only years were tested.
+        WithFolders([("A", MonthlyIn2020), ("C", MonthlyIn2020), ("D", MonthlyIn2020)], (vm, goTo, _) =>
+        {
+            goTo("A");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+            var month = Sections(vm)[6];
+            Section(vm, month).IsExpanded = false; // the user's toggle (open by default: 12 photos in all)
+            goTo("C");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, month).IsExpanded);
+
+            goTo("D");
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count == 12, Wait), string.Join(", ", Sections(vm)));
+
+            Assert.False(Section(vm, month).IsExpanded, $"{month}: the user's toggle stopped at the first folder it was carried to");
         });
     }
 }
