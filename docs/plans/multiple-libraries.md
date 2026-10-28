@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 26, review round 26 of Paul's second trial) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 27, review round 27 of Paul's second trial) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -904,6 +904,31 @@ folders that have the year. Not taken: "Beach" and "beach" are different views (
 
 Live check (Paul), in addition: untick one of two folders on Everything — an older year that was collapsed only by
 default, now the newest, opens.
+
+### Revision 27 — what changed after review round 27
+
+One non-author lens over `391784e..8f84698`: no High or Medium; two Lows. R26-1 and R26-2 resolved; R26-3 resolved for
+the changes made in one step (all five rows killed at 8f84698) but not for those carried out by re-indexing (R27-1);
+R26-4's corrected write-up still wrong about one mechanism (R27-2).
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R27-1 Low | The count was taken once, where the change was made; a change carried out by re-indexing every folder (videos indexed or not) lands as one rebuild per folder, and every rebuild after the first was "the view as it is": with two folders whose re-indexes end apart, Everything's only remaining section stayed collapsed by default. Subfolders taken in or left out likewise, if a rebuild came between the change and its re-index's end. | TEST-GAP | A re-index that carries out such a change counts again as it lands, just before its rebuild (`IndexRootAsync(…, changesWhatsShown: true)` from the `IncludeVideos` setter and `OnRootRecursiveChanged`) | `GridGroupingTests.NotIndexingVideos_InTwoFolders_IsAnotherViewWhereEachLands` (the lens's probe), `AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands` (both call sites) | not counted where it lands; either call site's run not marked |
+| R27-2 Low | The race write-up said the off-thread reader throws, ending Aperture. For the prune that is false — its failures are caught. What can end Aperture is the UI thread's side: a read that opens while the UI's transaction is open joins its connection, and the UI's next call in that transaction throws ("A concurrent operation is already using the transactional connection"; read in FunkyORM 3.10.1, not run). | PLAN-GAP | Record corrected (below) | — | — |
+
+The provider race, corrected again, for Paul: the library's one FunkyORM provider is shared between threads. While the
+UI thread has a transaction open on it (removing a folder, saving tags), an off-thread read — the startup read (two reads
+on this branch, the second as soon as the union read ends, on every switch) or the deferred prune (a minute in) — either
+throws itself (the startup read: `async void`, ending Aperture) or joins the transaction's connection, so the UI's next
+call in that transaction throws (ending Aperture; the prune's own errors are caught). The mechanism is in 0.8.9; this
+branch widened the startup window. A fix must hold one lock across the UI's whole transaction (begin to commit or
+rollback) and around each off-thread read — a per-call lock still lets a read join an open transaction, and catching in
+the readers fixes nothing. The stale-rows overwrite in the same window (revision 26) stands.
+
+Also: the mutation runner gains a row for the width reported on `ScrollChanged` only, which
+`ANarrowerTallerGrid_InOneLayout_IsReported` kills at the assertion R26-1 names (the "no `SizeChanged` report" row
+fails earlier, at its set-up). Not a finding: a library switch's own `SetGridWidth` is checked by reading and the live
+check (an exempt shell), as before.
 
 ## Out of scope (future)
 

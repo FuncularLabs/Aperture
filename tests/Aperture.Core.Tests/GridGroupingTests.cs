@@ -601,4 +601,100 @@ public class GridGroupingTests
             }
         });
     }
+
+    // --- Round 27: a change carried out by re-indexing is another view where it lands ---
+
+    private static readonly DateTime In2021 = new(2021, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime In2018 = new(2018, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+
+    private static void Videos(string folder, IEnumerable<DateTime> dates)
+    {
+        Directory.CreateDirectory(folder);
+        var i = 0;
+        foreach (var date in dates)
+        {
+            var path = Path.Combine(folder, $"v{i:000}.mp4");
+            File.WriteAllText(path, "x"); // indexed by its extension
+            File.SetLastWriteTimeUtc(path, date.AddMinutes(i++));
+        }
+    }
+
+    // A library of the folders the setup writes (indexed as they stand), a view model over it, and the body.
+    private static void WithLibraryOf(Action<string> setup, string[] folders, Action<MainViewModel, LibraryService> body)
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var outer = new TempDir();
+            setup(outer.Path);
+            var library = new LibraryService(data.Path);
+            foreach (var name in folders)
+                library.IndexRoot(library.AddRoot(Path.Combine(outer.Path, name), name));
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            try
+            {
+                body(vm, library);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void NotIndexingVideos_InTwoFolders_IsAnotherViewWhereEachLands()
+    {
+        // The reviewer's probe. A: 5 photos (2019), 70 videos (2021); B: 70 videos (2020), and 400 photos not yet indexed
+        // in a subfolder the user hid, so B's re-index ends well after A's. Without videos, Everything is 2019 alone: its
+        // newest, open — not left collapsed by default by B's rebuild, the second.
+        var outerPath = "";
+        WithLibraryOf(outer =>
+        {
+            outerPath = outer;
+            Photos(Path.Combine(outer, "A"), Enumerable.Repeat(In2019, 5));
+            Videos(Path.Combine(outer, "A"), Enumerable.Repeat(In2021, 70));
+            Videos(Path.Combine(outer, "B"), Enumerable.Repeat(In2020, 70));
+        }, ["A", "B"], (vm, library) =>
+        {
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2021", "2020", "2019"]) && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
+            Assert.False(Section(vm, "2019").IsExpanded); // collapsed by default
+            var b = library.GetRoots().Single(r => r.Alias == "B");
+            Photos(Path.Combine(outerPath, "B", "pad"), Enumerable.Repeat(In2018, 400));
+            library.SetFolderShown(b.Id, "pad", false);
+
+            vm.IncludeVideos = false;
+            Assert.True(Sta.PumpUntil(() => Sections(vm).SequenceEqual(["2019"]) && !vm.IsIndexing && !vm.IsLoadingView, TimeSpan.FromSeconds(60)), string.Join(", ", Sections(vm)));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+
+            Assert.True(Section(vm, "2019").IsExpanded, "not indexing videos left Everything's only section collapsed by default");
+        });
+    }
+
+    [Fact]
+    public void AReindexCarryingOutAChangeToWhatsShown_CountsAgainWhereItLands()
+    {
+        // Each re-index that carries out such a change ends with a rebuild that must be another view, whatever rebuilds
+        // came between the change and its end: the count is taken again as each re-index lands.
+        WithLibraryOf(outer =>
+        {
+            Photos(Path.Combine(outer, "A"), Enumerable.Repeat(In2019, 5));
+            Photos(Path.Combine(outer, "A", "Trip"), Enumerable.Repeat(In2020, 3));
+            Videos(Path.Combine(outer, "A"), Enumerable.Repeat(In2021, 2));
+        }, ["A"], (vm, _) =>
+        {
+            Assert.True(Sta.PumpUntil(() => Sections(vm).Count > 0 && !vm.IsLoadingView, Wait), string.Join(", ", Sections(vm)));
+
+            void CountsAgainWhereItLands(string what, Action change)
+            {
+                change();
+                var asMade = vm.ViewKey;
+                Assert.True(Sta.PumpUntil(() => vm.ViewKey != asMade && !vm.IsIndexing, TimeSpan.FromSeconds(30)), $"{what}: not counted as its re-index landed");
+            }
+            CountsAgainWhereItLands("leaving subfolders out", () => vm.Roots.Single().IsRecursive = false);
+            CountsAgainWhereItLands("not indexing videos", () => vm.IncludeVideos = false);
+        });
+    }
 }

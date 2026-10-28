@@ -962,7 +962,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged();
             _shownChanges++;
             foreach (var rootVm in Roots.ToList())
-                _ = IndexRootAsync(rootVm.Model, watchAfter: false);
+                _ = IndexRootAsync(rootVm.Model, watchAfter: false, changesWhatsShown: true);
         }
     }
 
@@ -2086,7 +2086,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _shownChanges++;
         _library.SetRecursive(rootVm.Id, recursive);
         _library.StopWatching(rootVm.Id);
-        _ = IndexRootAsync(rootVm.Model, watchAfter: true);
+        _ = IndexRootAsync(rootVm.Model, watchAfter: true, changesWhatsShown: true);
     }
 
     // --- Union / sections / status ------------------------------------------
@@ -2599,7 +2599,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Indexing -----------------------------------------------------------
 
-    private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false)
+    // changesWhatsShown: the run carries out a change the user made to what's shown (videos indexed or not, subfolders taken
+    // in or left out); its rebuild is another view, however many folders' runs land one by one.
+    private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false, bool changesWhatsShown = false)
     {
         if (_closing)
             return; // tearing down — don't start new work against a library that's about to be disposed
@@ -2677,6 +2679,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 var added = result?.Added ?? 0;
                 var removed = result?.Removed ?? 0;
                 var dataChanged = streaming || canceled || added + (result?.Updated ?? 0) + removed > 0;
+                if (changesWhatsShown)
+                    _shownChanges++; // counted where the change lands, as well as where it was made
                 if (dataChanged)
                 {
                     LoadRows();
