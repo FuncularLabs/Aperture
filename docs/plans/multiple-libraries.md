@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 30, review round 30 of Paul's ruling on date sections) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 31, after review round 31) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -999,7 +999,7 @@ section mutation re-run and killed; four Lows and nits.
 | # | Finding | Blame | Change | Tests | Mutation each must kill |
 |---|---|---|---|---|---|
 | R30-1 Low | Only collapsing a section was tested: opening one — the remedy revision 29 offers — wasn't. | TEST-GAP | — | `GridGroupingTests.ASectionTheUserOpened_StaysOpenAsPhotosArrive` (the lens's probe) | only a collapse is a toggle; a remembered open ignored; every toggle remembered as collapsed |
-| R30-2 Low | The CHANGELOG ("in the next folder or search that has it"), G5 and a comment said a toggle is kept; a view in the same grouping without that section replaced the grouping's memory and forgot it. | PLAN-GAP | Toggles are kept for the session: each build adds the view's toggles to those remembered instead of replacing them (`CurrentToggles`), so the claims are true; the CHANGELOG says "other folders and searches that have it" | `GridGroupingTests.AToggle_IsKeptThroughAFolderWithoutItsSection` (the lens's probe) | the view's toggles replace those remembered |
+| R30-2 Low | The CHANGELOG ("in the next folder or search that has it"), G5 and a comment said a toggle is kept; a view in the same grouping without that section replaced the grouping's memory and forgot it. | TEST-GAP (revision 31: G5 forbade it) | Toggles are kept for the session: each build adds the view's toggles to those remembered instead of replacing them (`CurrentToggles`), so the claims are true; the CHANGELOG says "other folders and searches that have it" | `GridGroupingTests.AToggle_IsKeptThroughAFolderWithoutItsSection` (the lens's probe) | the view's toggles replace those remembered |
 | R30-3 Low | Comments still described the removed rule (`SectionVm`'s summary: "state survives incidental rebuilds"; `Toggled`: "for other views"; a test header: "the view as it is"). | HOUSE-RULE | Reworded | — | — |
 | R30-4 Low (for Paul) | A cost of the ruling revision 29 didn't name: if the selected photo is in an untouched section that closes by default during a rebuild (photos arriving above it), the selection is left on a hidden photo and the keyboard's next move starts from the first photo of the grid. | AC-GAP | Recorded here and in the live check; for Paul: accept it, or have the section holding the selection count as touched | — | — |
 
@@ -1010,6 +1010,23 @@ about. Nits taken: revision 29 says untouched sections open and close with the d
 Live check (Paul), in addition: open an older section closed by default, add photos above it — it stays open; collapse a
 year, go to a folder without it, then to one with it — still collapsed; select a photo in an older untouched section and
 let photos arrive above it — the section may close (R30-4).
+
+### Revision 31 — what changed after review round 31
+
+One non-author lens over `b557fc0..7ca09af`: R30-1, R30-3 and R30-4 verified; R30-2's merge correct; two Lows the merge
+left untested, and nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R31-1 Low | The merge's precedence — a toggle the user makes now beats the one remembered — was untested: remembered-wins survived every test. | TEST-GAP | — | `GridGroupingTests.ARememberedToggle_TheUserChangesInAnotherFolder_IsKeptAsChanged`, `AToggleChangedBackInItsOwnFolder_IsKeptAsChanged` (the lens's probes) | the remembered toggle beats the newer |
+| R31-2 Low | With the merge, the memory is the authority: a carried section marked `Toggled` changed nothing but a flag check — except that, if a streaming build merged a newer toggle while an older build was still computing, the older build's carried flag wrote the stale value back for good. Revision 29's row "a toggle carried into a build not marked as one" had become an equivalent mutant (the author found it; the lens agreed on the mechanism). | TEST-GAP | A build starts every section untoggled (`SectionVm.Start(expanded)`): `Toggled` means the user changed it since its build made it, and the view model's memory is what later builds start from. The flag check became a check of the section's state | `SectionVmTests.ABuildStartingASectionToggled_DoesntMakeItAToggle` (replaces `AToggleCarriedOn_StaysAToggle`); the R31-1 tests | a build's state is a toggle |
+
+The runner drops two rows equivalent since revision 30 — "the grouping kept across an ungrouped build (toggles)" (a
+stale grouping adds nothing and keeps the memory; its width half stays) and "a toggle carried into a build isn't a toggle"
+(the code is gone) — and gains "a remembered open ignored" (killed by `ASectionTheUserOpened_StaysOpenAsPhotosArrive`;
+revision 30 named it without a row) and the R31 rows. Nits taken: R30-2's blame is TEST-GAP (G5 forbade the forgetting);
+toggles last until the user changes them, switches libraries or closes Aperture (a new view model starts empty) — the
+comment and the CHANGELOG say so; the photos-arriving test cites the opened case too; the status line.
 
 ## Out of scope (future)
 

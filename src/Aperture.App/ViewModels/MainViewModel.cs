@@ -1899,9 +1899,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private BucketMode? _mode;
     private DateGroupings? _groupings;
 
-    // The user's section toggles, per grouping, for the session: every one they've made, until they change it. Every
-    // build starts each section as the user left it, if they did, and otherwise by the default (the newest ~2 screens
-    // open) — whatever the build is for (Paul, 2026-10-27).
+    // The user's section toggles, per grouping: every one they've made, until they change it (or switch libraries, or
+    // close Aperture). Every build starts each section as the user left it, if they did, and otherwise by the default
+    // (the newest ~2 screens open) — whatever the build is for (Paul, 2026-10-27).
     private SectionExpansion _expansion = SectionExpansion.None;
 
     /// <summary>
@@ -1938,9 +1938,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RequestBuildView();
     }
 
-    // The user's section toggles: those remembered for each grouping, with the view's own added as they are now (a view
-    // without a section leaves its toggle remembered). Only toggles: a section open or closed by the default follows the
-    // default in the next build.
+    // The user's section toggles: those remembered for each grouping, with the toggles made in the view that's up added
+    // over them (the newer wins; a view without a section leaves its toggle remembered). Only toggles: a section open or
+    // closed by the default follows the default in the next build.
     private SectionExpansion CurrentToggles()
     {
         if (_mode is not { } mode)
@@ -2544,9 +2544,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             section.Count = counts[section.Key];
             if (toggles.TryGetValue(section.Key, out var expanded))
-                section.Start(expanded, toggled: true);                         // as the user left it
+                section.Start(expanded);                         // as the user left it
             else
-                section.Start(cumulative < ExpandTargetItems, toggled: false); // default: expand the newest ~2 screens
+                section.Start(cumulative < ExpandTargetItems);   // default: expand the newest ~2 screens
             cumulative += section.Count;
         }
 

@@ -41,16 +41,19 @@ public sealed class SectionVm : ObservableObject
     }
 
     /// <summary>
-    /// Whether the user has expanded or collapsed this section — here, or in the section it was carried on from —
-    /// rather than leaving it as a build set it. Only toggled sections are remembered; the others follow the default.
+    /// Whether the user has expanded or collapsed this section since its build made it. The view model adds these to
+    /// the toggles it remembers, which later builds start sections from; untoggled sections follow the default.
     /// </summary>
     public bool Toggled { get; private set; }
 
-    /// <summary>How a build leaves the section, before anything shows it: a toggle only if carried on from one.</summary>
-    internal void Start(bool expanded, bool toggled)
+    /// <summary>
+    /// How a build leaves the section, before anything shows it — as the user left it, or by the default. Not a toggle:
+    /// the toggles the user made are remembered by the view model.
+    /// </summary>
+    internal void Start(bool expanded)
     {
         _isExpanded = expanded;
-        Toggled = toggled;
+        Toggled = false;
     }
 
     /// <summary>True when the keyboard cursor is on this section's header.</summary>

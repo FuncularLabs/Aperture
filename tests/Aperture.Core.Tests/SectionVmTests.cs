@@ -15,7 +15,7 @@ public class SectionVmTests
     {
         var section = Section();
 
-        section.Start(expanded: false, toggled: false);
+        section.Start(expanded: false);
 
         Assert.False(section.IsExpanded);
         Assert.False(section.Toggled);
@@ -25,7 +25,7 @@ public class SectionVmTests
     public void TheUsersChange_IsAToggle()
     {
         var section = Section();
-        section.Start(expanded: true, toggled: false);
+        section.Start(expanded: true);
         var changed = new List<string?>();
         section.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
 
@@ -39,7 +39,7 @@ public class SectionVmTests
     public void SettingTheStateItHas_IsntAToggle()
     {
         var section = Section();
-        section.Start(expanded: true, toggled: false);
+        section.Start(expanded: true);
 
         section.IsExpanded = true;
 
@@ -47,13 +47,15 @@ public class SectionVmTests
     }
 
     [Fact]
-    public void AToggleCarriedOn_StaysAToggle()
+    public void ABuildStartingASectionToggled_DoesntMakeItAToggle()
     {
+        // A section a build starts as the user left it isn't their toggle in this view: the view model remembers those.
         var section = Section();
+        section.IsExpanded = false;
 
-        section.Start(expanded: false, toggled: true);
+        section.Start(expanded: false);
 
-        Assert.True(section.Toggled);
+        Assert.False(section.Toggled);
         Assert.False(section.IsExpanded);
     }
 }
