@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 36, after review round 36) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 37, after review round 37) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1100,6 +1100,22 @@ untested; nits. Tests only, and one summary.
 Nits taken: a negative count is saved as none (`CatalogRegistryTests.ItemCount_BelowNone_IsSavedAsNone`; mutation: saved
 as is); R35-1's row says the mid-run read needs a reconcile of 200 files or more. Record: 2b03399's message says the test
 checks the count "during the run", which R36-1 made true. Runner `mutate27.py`, 82 rows.
+
+### Revision 37 — what changed after review round 37
+
+One non-author lens over `2b03399..1091890`: R36-1, R36-2, R36-3 and the nit verified; R36-4 partial — one Low, and
+nits.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R37-1 Low | R36-4's test pins the interval's default, not that it's honoured as a time: comparing it in seconds (the default then 1 ms, a read at every report) survived every test — the interval test's hour became 3.6 s, longer than its run. | TEST-GAP | — | `LibraryTopTests.AFoldersCountInterval_IsMeasuredInItsOwnUnits` (the lens's probe: 100 s, each later report applied 150 ms after the one before; one read mid-run) | the interval compared in seconds |
+
+Nits taken: the R35-1 test's comment says the report is checked (the read is `AFoldersCount_RisesWhileItIsIndexed`'s);
+New, and Open of a library not yet listed, which add it to the list before the switch, get R36-3's test too
+(`CatalogServiceTests.RecordItemCount_AsANewLibraryPrepares_GoesToTheLibraryBeingLeft`,
+`RecordItemCount_AsAnOpenOfAnUnlistedLibraryPrepares_GoesToTheLibraryBeingLeft`; mutation: each activates its library
+as it's added). Record: 1091890's message says the count is read at most once a second by default, which R37-1's test
+now proves. Runner `mutate28.py`, 85 rows.
 
 ## Out of scope (future)
 

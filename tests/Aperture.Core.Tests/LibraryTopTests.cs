@@ -148,6 +148,54 @@ public class LibraryTopTests
     }
 
     [Fact]
+    public void AFoldersCountInterval_IsMeasuredInItsOwnUnits()
+    {
+        // The reviewer's probe (round 37): an interval of 100 s, and each later report applied at least 150 ms after the
+        // one before — one read mid-run, whatever the machine's speed. Compared in the wrong unit (100 "ms") the count was
+        // read again; with the default, at every report.
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            for (var i = 0; i < 600; i++) // batches saved (and reported) at 200, 400 and 600
+                TestImages.Write(Path.Combine(photos.Path, $"p{i:000}.jpg"), 32, 24);
+            var library = new LibraryService(data.Path);
+            var vm = new MainViewModel(library, new ThumbnailService(library))
+            {
+                StartupReconcileDelay = TimeSpan.FromSeconds(30),
+                IndexCountInterval = TimeSpan.FromSeconds(100),
+            };
+            try
+            {
+                vm.AddFolder(photos.Path, includeSubfolders: true);
+                var node = Assert.Single(vm.FolderTree);
+                var rootVm = Assert.Single(vm.Roots);
+                rootVm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(RootVm.Status) && rootVm.Status is "indexing 400 / 600" or "indexing 600 / 600")
+                        Thread.Sleep(150); // the status is set before the report's read is considered
+                };
+                var seenWhileIndexing = new List<int>();
+                node.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
+                        seenWhileIndexing.Add(node.Count);
+                };
+
+                Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));
+
+                Assert.Equal(200, Assert.Single(seenWhileIndexing)); // the first report only
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
     public void EachFoldersCount_HasAnIntervalOfItsOwn()
     {
         // A library's folders are indexed side by side (at launch, all of them): one folder's reads mustn't hold back
@@ -316,9 +364,9 @@ public class LibraryTopTests
     public void AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut()
     {
         // The reviewer's probe (round 35): a folder of 200 photos with a hidden subfolder of 30, reconciled. The run
-        // reports at 200 files, and the folder's first report reads its count (round 36: checked, so the test can't pass
-        // without a read). Its count in the tree stays 200 — the hidden subfolder out, as when the tree is built — during
-        // the run and after (a run that changes nothing doesn't build the tree again).
+        // reports at 200 files, and the folder's first report reads its count (round 36: the report is checked, so the
+        // test can't pass without one). Its count in the tree stays 200 — the hidden subfolder out, as when the tree is
+        // built — during the run and after (a run that changes nothing doesn't build the tree again).
         Sta.Run(() =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());

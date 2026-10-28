@@ -640,6 +640,40 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task RecordItemCount_AsANewLibraryPrepares_GoesToTheLibraryBeingLeft()
+    {
+        // New, and Open of a library not yet listed, add it to the list before the switch: the library being left is
+        // still the active one as the switch prepares (the reviewer's probes, round 37).
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var left = service.ActiveCatalog!.Id;
+        service.PreparingToSwitch += (_, _) => service.RecordItemCount(5);
+
+        var entry = await service.CreateLibraryAsync("Work", outer.Path);
+
+        var saved = new CatalogRegistry(RegistryPath(outer)).List();
+        Assert.Equal(5, saved.Single(c => c.Id == left).ItemCount);
+        Assert.Null(saved.Single(c => c.Id == entry.Id).ItemCount);
+    }
+
+    [Fact]
+    public async Task RecordItemCount_AsAnOpenOfAnUnlistedLibraryPrepares_GoesToTheLibraryBeingLeft()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        var left = service.ActiveCatalog!.Id;
+        var dir = outer.Combine("elsewhere");
+        using (new LibraryService(dir)) { }
+        service.PreparingToSwitch += (_, _) => service.RecordItemCount(5);
+
+        var entry = await service.OpenLibraryAsync(dir);
+
+        var saved = new CatalogRegistry(RegistryPath(outer)).List();
+        Assert.Equal(5, saved.Single(c => c.Id == left).ItemCount);
+        Assert.Null(saved.Single(c => c.Id == entry.Id).ItemCount);
+    }
+
+    [Fact]
     public async Task CreateLibraryAsync_CreatesItsOwnFolder_RegistersIt_AndSwitches()
     {
         using var outer = new TempDir();
