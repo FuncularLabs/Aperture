@@ -1,6 +1,6 @@
 # Implementation plan — Multiple libraries (separate catalogs)
 
-Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 34, after review round 34) ·
+Status: **built on branch `feat/multiple-libraries`, unreleased** (revision 35, after review round 35) ·
 Target: a future minor (e.g. 0.9.0) · Decision (Paul, 2026-10-23): **Option B — separate catalogs.**
 Rulings after review round 1 (Paul, 2026-10-25): **dedicated library folders**; **coverage: test the new
 logic to ≥ 85 %, with `MainViewModel.cs`, `App.xaml.cs` and `MainWindow.xaml.cs` exempt** as pre-existing,
@@ -1072,6 +1072,17 @@ and nits.
 Nits taken: `SectionVm.IsExpanded`'s summary says changing it is the user's toggle (setting the state it has isn't);
 the runner is `mutate25.py` (76 rows; revision 33's was `mutate24.py`). Observations, not findings: the default's
 threshold (~60 items, "~2 screens", approximate by design) and a collapsed section's room in it are as in 0.8.9.
+
+### Revision 35 — what changed after review round 35
+
+One non-author lens over `f7097f2..791ba6e` (and a fresh sweep of the cumulative range): the fix layer has no findings
+(R34-1 verified; the runner's 76 rows all killed in the lens's own run); one Low from the cumulative range, and a nit.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| R35-1 Low | G4's mid-run tree count leaves hidden subfolders out (F6's rule), but nothing tested it there: counting them in survived every test — after each launch's reconcile, a folder with a hidden subfolder would show its hidden items in its count until the tree was next built. | TEST-GAP | — | `LibraryTopTests.AFoldersCountWhileItIsIndexed_LeavesItsHiddenSubfoldersOut` (the lens's probe) | the mid-run tree count includes hidden subfolders |
+
+Nit taken: the CHANGELOG's default reads "the newest ~2 screens open" (as the README). Runner `mutate26.py`, 77 rows.
 
 ## Out of scope (future)
 

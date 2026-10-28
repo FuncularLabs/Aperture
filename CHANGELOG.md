@@ -47,7 +47,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   of leaving one photo a row. Resizing the window or zooming can change the grouping.
 - A date section you open or close stays that way as the view is rebuilt — when the grouping changes
   and changes back, and in other folders and searches that have it, until you switch libraries or close
-  Aperture. Sections you haven't touched follow the default (the newest open) each time.
+  Aperture. Sections you haven't touched follow the default (the newest ~2 screens open) each time.
 
 ### Fixed
 - **Everything** in a library with a single folder showed only the photos directly in that folder,
