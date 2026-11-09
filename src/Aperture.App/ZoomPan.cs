@@ -81,7 +81,8 @@ public sealed class ZoomPan
         if (!CanZoom || !(factor > 0))
             return;
         var (u, v) = ((x - Left) / Width, (y - Top) / Height);
-        Zoom = Math.Clamp(Zoom * factor, 1, MaxZoom);
+        var zoom = Math.Min(Zoom * factor, MaxZoom);
+        Zoom = zoom < 1 + 1e-9 ? 1 : zoom; // never below the fit; steps in and back out end at it, not a rounding error past
         Show(u, v, x, y);
     }
 

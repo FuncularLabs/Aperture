@@ -111,6 +111,26 @@ public class ZoomPanTests
         Assert.Equal(1.25 * 1.25 * Math.Sqrt(1.25), zoom.Zoom, Precision);
     }
 
+    [Theory]
+    [InlineData(1, 35)]
+    [InlineData(2, 11)]
+    [InlineData(3, 2)]
+    [InlineData(2, 72)]
+    public void ATouchpadsStepsInAndBackOut_EndAtTheFit(int first, int second)
+    {
+        // Round Z1 (the reviewer's simulation): in floating point these come back to 1.0000000000000002 — zoomed, by a
+        // hair, while showing the fit (the drag cursor, a drag that moves nothing, even a full load).
+        var zoom = Fitted();
+
+        zoom.ZoomByWheel(first, 500, 300);
+        zoom.ZoomByWheel(second, 500, 300);
+        zoom.ZoomByWheel(-first, 500, 300);
+        zoom.ZoomByWheel(-second, 500, 300);
+
+        Assert.Equal(1.0, zoom.Zoom);
+        Assert.False(zoom.IsZoomed);
+    }
+
     [Fact]
     public void Panning_StopsAtThePhotosEdges()
     {
@@ -126,6 +146,22 @@ public class ZoomPanTests
 
         zoom.PanBy(-5000, -5000);
         AssertShown(zoom, 1000 - 1600, 600 - 1200, 1600, 1200);
+    }
+
+    [Fact]
+    public void APanorama_FillsTheWidth_CentredDown()
+    {
+        // Round Z1: a photo wider than the view's shape fills its width (the other way of fitting) — 3:1 in 1000 × 600
+        // is 1000 × 333⅓ at (0, 133⅓).
+        var zoom = Fitted(300, 100);
+
+        AssertShown(zoom, 0, 600 / 2.0 - 1000 / 6.0, 1000, 1000 / 3.0);
+        Assert.Equal(1000 / 3.0, zoom.FitHeight, Precision);
+        Assert.Equal(600 / 2.0 - 1000 / 6.0, zoom.FitTop, Precision);
+
+        zoom.ZoomAt(2, 250, 300); // a quarter of the way across, half way down
+
+        AssertShown(zoom, 250 - 0.25 * 2000, 300 - 0.5 * 2000 / 3.0, 2000, 2000 / 3.0);
     }
 
     [Fact]

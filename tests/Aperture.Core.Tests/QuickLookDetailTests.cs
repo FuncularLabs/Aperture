@@ -160,11 +160,162 @@ public class QuickLookDetailTests
             var shown = ImagesShown(vm);
             vm.QuickLookNextCommand.Execute(null); // before the full load has come back
 
-            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage?.PixelHeight == 16, Wait), "the next photo wasn't shown");
+            // Both loads come back, in either order: the next photo's, and the first photo's full load (shown, or not).
+            Assert.True(Sta.PumpUntil(() => shown.Any(image => image?.PixelHeight == 16), Wait), "the next photo wasn't shown");
             Settle();
 
             Assert.DoesNotContain(shown, image => image?.PixelWidth == 1200); // the first photo's full load, dropped
             Assert.Equal((32, 16), (vm.QuickLookImage!.PixelWidth, vm.QuickLookImage.PixelHeight));
+        });
+    }
+
+    // --- Round Z1: the photo shown, not its place in the list (the view can be rebuilt while quick view is open) ---
+
+    // A newer photo, a different shape (100 × 20), arrives in the folder and the view is rebuilt — as an index run, the
+    // folder watcher or the launch's reconcile does — while quick view stays open.
+    private static void ANewerPhotoArrives(MainViewModel vm, LibraryService library, string folder, int count)
+    {
+        var path = Path.Combine(folder, "n.jpg");
+        TestImages.Write(path, 100, 20);
+        File.SetLastWriteTimeUtc(path, new DateTime(2024, 7, 1, 12, 0, 0, DateTimeKind.Utc));
+        library.IndexRoot(library.GetRoots().Single());
+        vm.RefreshView();
+        Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == count && !vm.IsLoadingView, Wait), "the view wasn't rebuilt");
+        Settle();
+    }
+
+    private static void WithLibrary(int photos, Action<MainViewModel, LibraryService, string> body)
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var folder = new TempDir();
+            for (var i = 0; i < photos; i++)
+            {
+                var path = Path.Combine(folder.Path, $"p{i}.jpg");
+                TestImages.Write(path, 64, 48);
+                File.SetLastWriteTimeUtc(path, new DateTime(2024, 6, 1, 12, 0, 0, DateTimeKind.Utc).AddDays(-i));
+            }
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(folder.Path, "Photos"));
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { QuickLookDecodeEdge = 32 };
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == photos && !vm.IsLoadingView, Wait));
+                body(vm, library, folder.Path);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void AZoomAfterTheViewIsRebuilt_LoadsThePhotoShownInFull()
+    {
+        // The reviewer's probe: the full load took the photo at quick view's old place in the rebuilt list — the newcomer
+        // — and showed it under the shown photo's caption.
+        WithLibrary(2, (vm, library, folder) =>
+        {
+            vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
+            var caption = vm.QuickLookCaption;
+            ANewerPhotoArrives(vm, library, folder, 3);
+
+            vm.LoadQuickLookDetail();
+
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage?.PixelWidth != 32, Wait), "nothing was loaded in full");
+            Settle();
+            Assert.Equal((64, 48), (vm.QuickLookImage!.PixelWidth, vm.QuickLookImage.PixelHeight)); // p0, not the newcomer
+            Assert.Equal(caption, vm.QuickLookCaption);
+        });
+    }
+
+    [Fact]
+    public void AFullLoadFromBeforeQuickViewClosed_IsDropped_EvenAtTheSamePlace()
+    {
+        // The reviewer's probe, made certain: p0's full load is held until quick view has been closed, the view rebuilt,
+        // quick view opened again at the same place (now the newcomer) and the newcomer loaded in full.
+        WithLibrary(1, (vm, library, folder) =>
+        {
+            using var hold = new ManualResetEventSlim(false);
+            var decode = vm.DecodeQuickLook;
+            var held = 0;
+            vm.DecodeQuickLook = (path, edge) =>
+            {
+                if (edge == vm.QuickLookDetailEdge && Interlocked.Increment(ref held) == 1)
+                    hold.Wait(Wait); // the first full load (p0's)
+                return decode(path, edge);
+            };
+            vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
+            vm.LoadQuickLookDetail(); // p0 in full, held
+            vm.CloseQuickLookCommand.Execute(null);
+            ANewerPhotoArrives(vm, library, folder, 2);
+            vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
+            Assert.Equal(32, vm.QuickLookImage!.PixelWidth); // the newcomer, cut down (32 × 6)
+            vm.LoadQuickLookDetail();
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage?.PixelWidth == 100, Wait), "the newcomer wasn't loaded in full");
+            var shown = ImagesShown(vm);
+
+            hold.Set();
+            Settle();
+
+            Assert.Empty(shown); // p0's full load, dropped
+            Assert.Equal((100, 20), (vm.QuickLookImage!.PixelWidth, vm.QuickLookImage.PixelHeight));
+        });
+    }
+
+    [Fact]
+    public void AFailedFullLoad_LeavesThePhotoShown()
+    {
+        // The file gone, or its share offline, by the time the user zooms: the photo stays as shown (round Z1).
+        WithLibrary(1, (vm, _, _) =>
+        {
+            var decode = vm.DecodeQuickLook;
+            var asked = 0;
+            vm.DecodeQuickLook = (path, edge) =>
+            {
+                if (edge != vm.QuickLookDetailEdge)
+                    return decode(path, edge);
+                Interlocked.Increment(ref asked);
+                return null;
+            };
+            vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
+            var image = vm.QuickLookImage;
+            var shown = ImagesShown(vm);
+
+            vm.LoadQuickLookDetail();
+
+            Assert.True(Sta.PumpUntil(() => Volatile.Read(ref asked) == 1, Wait), "no full load was asked for");
+            Settle();
+            Assert.Empty(shown);
+            Assert.Same(image, vm.QuickLookImage);
+        });
+    }
+
+    [Fact]
+    public void ALoadFinishingAfterQuickViewClosed_IsDropped()
+    {
+        // Closing ends the visit: neither a photo still loading nor its full load shows once quick view is closed.
+        WithLibrary(1, (vm, _, _) =>
+        {
+            vm.OpenQuickLookCommand.Execute(null);
+            vm.CloseQuickLookCommand.Execute(null); // before the photo has loaded
+            Settle();
+            Assert.Null(vm.QuickLookImage);
+
+            vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
+            vm.LoadQuickLookDetail();
+            vm.CloseQuickLookCommand.Execute(null); // before the full load has come back
+            Settle();
+            Assert.Null(vm.QuickLookImage);
         });
     }
 

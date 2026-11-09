@@ -20,7 +20,7 @@ namespace Aperture.Core.Tests;
 public class QuickViewZoomTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
-    private const double Near = 0.5; // layout rounds to the pixel
+    private const double Near = 1e-6; // the photo isn't rounded to whole pixels: drawn where the zoom says, to rounding error
 
     private sealed record View(MainViewModel Vm, MainWindow Window, ZoomPan Zoom, Image Img, FrameworkElement Area);
 
@@ -192,35 +192,148 @@ public class QuickViewZoomTests
             var c = Centre(v);
 
             w.QuickLookPress(c);
-            w.QuickLookDrag(new Point(c.X + 40, c.Y + 30));
+            w.QuickLookMove(new Point(c.X + 40, c.Y + 30));
 
             Assert.True(v.Vm.QuickLookOpen);
             Assert.Equal(left + 40, v.Zoom.Left, 9);
             Assert.Equal(top + 30, v.Zoom.Top, 9);
             AssertDrawnAsTheModelSays(v);
 
-            w.QuickLookDrag(new Point(c.X + 50, c.Y + 30));
+            w.QuickLookMove(new Point(c.X + 50, c.Y + 30));
             Assert.Equal(left + 50, v.Zoom.Left, 9); // from where the last move left it
 
             w.QuickLookRelease();
-            w.QuickLookDrag(new Point(c.X + 200, c.Y + 200));
+            w.QuickLookMove(new Point(c.X + 200, c.Y + 200));
             Assert.Equal(left + 50, v.Zoom.Left, 9); // released: a move no longer drags it
         });
     }
 
     [Fact]
-    public void APress_OnAFittedPhoto_NeitherClosesNorDrags()
+    public void APressOnAFittedPhoto_DoesntClose()
     {
         WithQuickView(1, v =>
         {
-            var c = Centre(v);
-            v.Window.QuickLookPress(c);
-            v.Window.QuickLookDrag(new Point(c.X + 40, c.Y));
+            v.Window.QuickLookPress(Centre(v));
+            v.Window.QuickLookRelease();
 
             Assert.True(v.Vm.QuickLookOpen);
             Assert.Equal(1, v.Zoom.Zoom);
-            Assert.Equal(v.Zoom.FitLeft, v.Zoom.Left, 9);
-            v.Window.QuickLookRelease();
+        });
+    }
+
+    // --- Round Z1: the window's own handlers, as the mouse and keyboard send their events. The modifier keys and the
+    // pointer come from the window's seams, since a test can't hold Ctrl down or move the mouse. ---
+
+    private static void PointerAt(View v, Func<Point> inTheArea) =>
+        v.Window.PointerIn = element => v.Area.TranslatePoint(inTheArea(), (UIElement)element);
+
+    private static void Raise(UIElement target, RoutedEvent routed, MouseButton? button = null, int wheel = 0) =>
+        target.RaiseEvent(routed == UIElement.PreviewMouseWheelEvent
+            ? new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, wheel) { RoutedEvent = routed }
+            : button is { } b
+                ? new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, b) { RoutedEvent = routed }
+                : new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = routed });
+
+    private static void PressKey(Window window, Key key) =>
+        window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, key)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+        });
+
+    [Fact]
+    public void TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem()
+    {
+        WithQuickView(1, v =>
+        {
+            var pointer = new Point(v.Zoom.Left + v.Zoom.Width * 0.3, v.Zoom.Top + v.Zoom.Height * 0.6);
+            PointerAt(v, () => pointer);
+            v.Window.ModifiersNow = () => ModifierKeys.Control;
+            var under = PhotoPointAt(v, pointer);
+
+            Raise(v.Area, UIElement.PreviewMouseWheelEvent, wheel: 240);
+
+            Assert.Equal(1.5625, v.Zoom.Zoom, 9);
+            var after = PhotoPointAt(v, pointer);
+            Assert.Equal(under.X, after.X, Near); // at the pointer, in the image area's frame
+            Assert.Equal(under.Y, after.Y, Near);
+
+            PressKey(v.Window, Key.OemPlus);
+            Assert.Equal(1.5625 * 1.25, v.Zoom.Zoom, 9);
+
+            v.Window.ModifiersNow = () => ModifierKeys.None;
+            var (left, top) = (v.Zoom.Left, v.Zoom.Top);
+            Raise(v.Area, UIElement.MouseLeftButtonDownEvent, MouseButton.Left); // (capture: an inactive window gets none)
+            pointer = new Point(pointer.X + 30, pointer.Y + 20);
+            Raise(v.Area, UIElement.MouseMoveEvent);
+
+            Assert.True(v.Vm.QuickLookOpen);
+            Assert.Equal(left + 30, v.Zoom.Left, 9);
+            Assert.Equal(top + 20, v.Zoom.Top, 9);
+
+            Raise(v.Area, UIElement.MouseLeftButtonUpEvent, MouseButton.Left);
+            pointer = new Point(pointer.X + 50, pointer.Y);
+            Raise(v.Area, UIElement.MouseMoveEvent);
+            Assert.Equal(left + 30, v.Zoom.Left, 9); // released: a move no longer drags it
+        });
+    }
+
+    [Fact]
+    public void APressBesideThePhoto_ThroughTheWindowsHandler_Closes()
+    {
+        WithQuickView(1, v =>
+        {
+            // 30 px left of the fitted photo, in the image area — a point on the photo in the overlay's frame (72 px wider)
+            var beside = new Point(v.Zoom.FitLeft - 30, v.Area.ActualHeight / 2);
+            PointerAt(v, () => beside);
+
+            Raise(v.Area, UIElement.MouseLeftButtonDownEvent, MouseButton.Left);
+
+            Assert.False(v.Vm.QuickLookOpen);
+        });
+    }
+
+    [Fact]
+    public void TheGridsKeys_WithQuickViewClosed_AreTheGridsAsBefore()
+    {
+        // Quick view's keys are its own only while it's open: closed, Ctrl+ zooms the grid's tiles again (round Z1).
+        WithQuickView(1, v =>
+        {
+            v.Window.QuickLookKey(Key.Escape, ModifierKeys.None);
+            Assert.False(v.Vm.QuickLookOpen);
+            var tiles = v.Vm.TileSize;
+            v.Window.ModifiersNow = () => ModifierKeys.Control;
+
+            PressKey(v.Window, Key.OemPlus);
+
+            Assert.True(v.Vm.TileSize > tiles, "Ctrl+ didn't zoom the grid's tiles");
+            Assert.Equal(1, v.Zoom.Zoom);
+        });
+    }
+
+    [Fact]
+    public void ANewViewModel_StartsWithNothingZoomed()
+    {
+        // A library switch gives the window a new view model: quick view starts closed, with nothing zoomed.
+        WithQuickView(1, v =>
+        {
+            v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
+            Assert.True(v.Zoom.IsZoomed);
+            using var data = new TempDir();
+            var other = new LibraryService(data.Path);
+            var vm = new MainViewModel(other, new ThumbnailService(other));
+            try
+            {
+                v.Window.DataContext = vm;
+
+                Assert.Equal(1, v.Zoom.Zoom);
+                Assert.Equal(0, v.Zoom.Width);
+            }
+            finally
+            {
+                v.Window.DataContext = v.Vm;
+                vm.PrepareForClose();
+                other.ShutdownAsync().GetAwaiter().GetResult();
+            }
         });
     }
 
@@ -327,6 +440,41 @@ public class QuickViewZoomTests
     }
 
     [Fact]
+    public void TheDragCursor_ShowsOnlyOverAZoomedPhoto()
+    {
+        // Round Z1 (the reviewer's probe): a zoomed portrait still has room beside it, where a press closes quick view —
+        // the cursor there mustn't invite a drag.
+        WithQuickView(1, v =>
+        {
+            var on = Centre(v);
+            var beside = new Point(v.Zoom.FitLeft / 2, v.Area.ActualHeight / 2);
+            v.Window.QuickLookMove(on);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor); // fitted: nothing to drag
+
+            v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
+            Assert.True(v.Zoom.IsZoomed);
+            Assert.False(v.Zoom.Contains(beside.X, beside.Y)); // still room beside it
+
+            Assert.Equal(Cursors.SizeAll, v.Area.Cursor); // over the photo, zoomed by the key
+            v.Window.QuickLookMove(beside);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor);
+            v.Window.QuickLookWheel(120, beside, ModifierKeys.Control);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor); // zoomed at a point beside it: still beside it
+            v.Window.QuickLookWheel(120, on, ModifierKeys.Control); // the wheel turned over the photo, no move first
+            Assert.Equal(Cursors.SizeAll, v.Area.Cursor);
+            var edge = new Point(4, v.Area.ActualHeight / 2); // the photo has grown over `beside`; the edge is still clear
+            Assert.False(v.Zoom.Contains(edge.X, edge.Y));
+            v.Window.QuickLookMove(edge);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor);
+            v.Window.QuickLookMove(on);
+            Assert.Equal(Cursors.SizeAll, v.Area.Cursor);
+
+            v.Window.QuickLookKey(Key.D0, ModifierKeys.Control);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor);
+        }, size: (48, 64));
+    }
+
+    [Fact]
     public void TheHintLine_NamesTheZoomKeys()
     {
         WithQuickView(1, v =>
@@ -334,7 +482,7 @@ public class QuickViewZoomTests
             var overlay = (DependencyObject)v.Window.FindName("QuickLookOverlay");
             var hints = Descendants(overlay).OfType<TextBlock>().Select(t => t.Text).ToList();
 
-            Assert.Contains(hints, text => text.Contains("Ctrl") && text.Contains("zoom") && text.Contains("Ctrl+0"));
+            Assert.Contains("Space or Esc to close  ·  ← → to move  ·  Ctrl+scroll or Ctrl +/− to zoom, Ctrl+0 to fit", hints);
         });
     }
 

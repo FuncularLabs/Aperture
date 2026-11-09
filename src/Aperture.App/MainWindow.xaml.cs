@@ -251,11 +251,12 @@ public partial class MainWindow : Window
     {
         if (ViewModel is null)
             return;
+        var modifiers = ModifiersNow();
 
         // While quick-look is open it owns the keyboard.
         if (ViewModel.QuickLookOpen)
         {
-            if (QuickLookKey(e.Key, Keyboard.Modifiers))
+            if (QuickLookKey(e.Key, modifiers))
                 e.Handled = true;
             return;
         }
@@ -269,7 +270,7 @@ public partial class MainWindow : Window
         }
 
         // Ctrl +/- zoom (anchored to the centre item).
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        if ((modifiers & ModifierKeys.Control) != 0)
         {
             if (e.Key is Key.OemPlus or Key.Add)
             {
@@ -296,7 +297,7 @@ public partial class MainWindow : Window
 
         // Tab / Shift+Tab: only the folder tree and the tile list. Ribbon stays out.
         // Two stops — either direction toggles. Do not change the destination selection.
-        if (e.Key == Key.Tab && (Keyboard.Modifiers & ~ModifierKeys.Shift) == 0)
+        if (e.Key == Key.Tab && (modifiers & ~ModifierKeys.Shift) == 0)
         {
             if (ViewModel.ShowFirstRun)
                 return; // first-run overlay owns Tab
@@ -316,7 +317,7 @@ public partial class MainWindow : Window
         }
 
         // "/" focuses search (unless already typing).
-        if (e.Key == Key.Oem2 && Keyboard.Modifiers == ModifierKeys.None
+        if (e.Key == Key.Oem2 && modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox)
         {
             SearchBox.Focus();
@@ -328,7 +329,7 @@ public partial class MainWindow : Window
         // Space: open the quick-look preview (on the selected tile, or the cursor section's first tile).
         // It never collapses a section — that's Left/Right on a header, the chevron, or a header click.
         // (Skip when a TextBox/ToggleButton has focus, or the folder tree — it toggles the tree node.)
-        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None
+        if (e.Key == Key.Space && modifiers == ModifierKeys.None
             && focused is not System.Windows.Controls.TextBox
             && focused is not System.Windows.Controls.Primitives.ToggleButton
             && !IsInTree(focused as DependencyObject))
@@ -680,12 +681,12 @@ public partial class MainWindow : Window
             ViewModel?.OpenSelectedCommand.Execute(null);
             return;
         }
-        QuickLookPress(e.GetPosition(QuickLookImageArea));
+        QuickLookPress(PointerIn(QuickLookImageArea));
         if (_quickPanning)
             QuickLookImageArea.CaptureMouse(); // the drag goes on wherever the pointer goes
     }
 
-    private void OnQuickLookImageMove(object sender, MouseEventArgs e) => QuickLookDrag(e.GetPosition(QuickLookImageArea));
+    private void OnQuickLookImageMove(object sender, MouseEventArgs e) => QuickLookMove(PointerIn(QuickLookImageArea));
 
     private void OnQuickLookImageUp(object sender, MouseButtonEventArgs e) => QuickLookRelease();
 
@@ -698,9 +699,16 @@ public partial class MainWindow : Window
     private readonly ZoomPan _quickZoom = new();
     private bool _quickPanning;
     private Point _quickPanLast;
+    private Point? _quickPointer; // where the pointer last was in the image area, for the cursor
 
     /// <summary>Quick view's zoom and pan (for tests).</summary>
     internal ZoomPan QuickLookZoom => _quickZoom;
+
+    /// <summary>The modifier keys held now, as the key and wheel handlers read them (settable for tests: they can't hold Ctrl).</summary>
+    internal Func<ModifierKeys> ModifiersNow { get; set; } = () => Keyboard.Modifiers;
+
+    /// <summary>Where the pointer is in an element's frame, as quick view's mouse handlers read it (settable for tests).</summary>
+    internal Func<IInputElement, Point> PointerIn { get; set; } = Mouse.GetPosition;
 
     /// <summary>Quick view's keys — it owns the keyboard while it's open. True if <paramref name="key"/> was one of them.</summary>
     internal bool QuickLookKey(Key key, ModifierKeys modifiers)
@@ -744,7 +752,7 @@ public partial class MainWindow : Window
 
     private void OnQuickLookWheel(object sender, MouseWheelEventArgs e)
     {
-        if (QuickLookWheel(e.Delta, e.GetPosition(QuickLookImageArea), Keyboard.Modifiers))
+        if (QuickLookWheel(e.Delta, PointerIn(QuickLookImageArea), ModifiersNow()))
             e.Handled = true;
     }
 
@@ -753,6 +761,7 @@ public partial class MainWindow : Window
     {
         if ((modifiers & ModifierKeys.Control) == 0)
             return false;
+        _quickPointer = at;
         _quickZoom.ZoomByWheel(delta, at.X, at.Y);
         ApplyQuickLookZoom();
         return true;
@@ -775,15 +784,29 @@ public partial class MainWindow : Window
         _quickPanLast = at;
     }
 
-    /// <summary>The pointer at <paramref name="at"/>: a drag that's on moves the photo as far.</summary>
-    internal void QuickLookDrag(Point at)
+    /// <summary>
+    /// The pointer moved to <paramref name="at"/>: a drag that's on moves the photo as far; otherwise the cursor says
+    /// whether a press there would drag.
+    /// </summary>
+    internal void QuickLookMove(Point at)
     {
+        _quickPointer = at;
         if (!_quickPanning)
+        {
+            ShowQuickLookCursor();
             return;
+        }
         _quickZoom.PanBy(at.X - _quickPanLast.X, at.Y - _quickPanLast.Y);
         _quickPanLast = at;
         ApplyQuickLookZoom();
     }
+
+    // The drag cursor over a zoomed photo; elsewhere — beside it, where a press closes quick view, or over a fitted
+    // photo — the hand, as before.
+    private void ShowQuickLookCursor() =>
+        QuickLookImageArea.Cursor = _quickZoom.IsZoomed && _quickPointer is { } p && _quickZoom.Contains(p.X, p.Y)
+            ? Cursors.SizeAll
+            : Cursors.Hand;
 
     /// <summary>The button released (or the pointer lost): a drag ends.</summary>
     internal void QuickLookRelease()
@@ -816,13 +839,13 @@ public partial class MainWindow : Window
     }
 
     // Draws the photo as the zoom says: the Image lays the photo out fitted, and its transforms scale it and move it from
-    // there. Zoomed past what the image shows holds, it asks for the photo in full.
+    // there. Zoomed past what the image it shows holds, it asks for the photo in full.
     private void ApplyQuickLookZoom()
     {
         QuickLookScale.ScaleX = QuickLookScale.ScaleY = _quickZoom.Zoom;
         QuickLookShift.X = _quickZoom.Left - _quickZoom.FitLeft;
         QuickLookShift.Y = _quickZoom.Top - _quickZoom.FitTop;
-        QuickLookImageArea.Cursor = _quickZoom.IsZoomed ? Cursors.SizeAll : Cursors.Hand;
+        ShowQuickLookCursor();
         if (ViewModel?.QuickLookImage is { } shown
             && _quickZoom.ShowsMoreThan(shown.PixelWidth, VisualTreeHelper.GetDpi(QuickLookImg).DpiScaleX))
             ViewModel.LoadQuickLookDetail();
