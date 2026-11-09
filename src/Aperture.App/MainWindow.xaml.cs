@@ -48,6 +48,7 @@ public partial class MainWindow : Window
             old.ViewApplied -= OnViewApplied;
             old.PropertyChanged -= OnViewModelPropertyChanged;
         }
+        OnQuickLookImageChanged(null); // another library: quick view starts closed, with nothing zoomed
         if (!IsLoaded || e.NewValue is not MainViewModel vm)
             return; // the first view model is wired up in OnLoaded
 
@@ -109,6 +110,8 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainViewModel.PreviewMode) && ViewModel is not null)
             ConfigurePreviewLayout(ViewModel.PreviewMode);
+        if (e.PropertyName == nameof(MainViewModel.QuickLookImage) && ViewModel is not null)
+            OnQuickLookImageChanged(ViewModel.QuickLookImage);
     }
 
     private double _previewWidth = 380;
@@ -252,25 +255,8 @@ public partial class MainWindow : Window
         // While quick-look is open it owns the keyboard.
         if (ViewModel.QuickLookOpen)
         {
-            switch (e.Key)
-            {
-                case Key.Escape or Key.Space:
-                    ViewModel.CloseQuickLookCommand.Execute(null);
-                    e.Handled = true;
-                    break;
-                case Key.Enter:
-                    ViewModel.OpenSelectedCommand.Execute(null); // launch the viewed item, like a tile
-                    e.Handled = true;
-                    break;
-                case Key.Left:
-                    ViewModel.QuickLookPrevCommand.Execute(null);
-                    e.Handled = true;
-                    break;
-                case Key.Right:
-                    ViewModel.QuickLookNextCommand.Execute(null);
-                    e.Handled = true;
-                    break;
-            }
+            if (QuickLookKey(e.Key, Keyboard.Modifiers))
+                e.Handled = true;
             return;
         }
 
@@ -682,34 +668,164 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Quick-look image clicks: double-click launches the item; a single click on the image
-    /// itself is swallowed (so the double-click can land); a single click in the letterbox
-    /// around the image dismisses the overlay, just like clicking the outer margin.
+    /// itself is swallowed (so the double-click can land), and on a zoomed image starts a drag;
+    /// a single click in the letterbox around the image dismisses the overlay, just like
+    /// clicking the outer margin.
     /// </summary>
     private void OnQuickLookImageClick(object sender, MouseButtonEventArgs e)
     {
+        e.Handled = true;
         if (e.ClickCount == 2)
         {
             ViewModel?.OpenSelectedCommand.Execute(null);
-            e.Handled = true;
             return;
         }
-        if (!ClickIsOnImage(e.GetPosition(QuickLookImageArea)))
-            ViewModel?.CloseQuickLookCommand.Execute(null);
-        e.Handled = true;
+        QuickLookPress(e.GetPosition(QuickLookImageArea));
+        if (_quickPanning)
+            QuickLookImageArea.CaptureMouse(); // the drag goes on wherever the pointer goes
     }
 
-    /// <summary>True if a point (in QuickLookImageArea coordinates) lands on the letterboxed image itself.</summary>
-    private bool ClickIsOnImage(Point p)
+    private void OnQuickLookImageMove(object sender, MouseEventArgs e) => QuickLookDrag(e.GetPosition(QuickLookImageArea));
+
+    private void OnQuickLookImageUp(object sender, MouseButtonEventArgs e) => QuickLookRelease();
+
+    private void OnQuickLookImageLostCapture(object sender, MouseEventArgs e) => QuickLookRelease();
+
+    // --- Quick look: zoom + pan (Ctrl+wheel at the pointer, Ctrl +/− about the centre, Ctrl+0 to fit; drag a zoomed
+    // photo), as Photos and image editors do (Paul, 2026-11-09). The entry points take the modifier keys and the pointer
+    // as arguments, so tests can call them as the handlers do. ---
+
+    private readonly ZoomPan _quickZoom = new();
+    private bool _quickPanning;
+    private Point _quickPanLast;
+
+    /// <summary>Quick view's zoom and pan (for tests).</summary>
+    internal ZoomPan QuickLookZoom => _quickZoom;
+
+    /// <summary>Quick view's keys — it owns the keyboard while it's open. True if <paramref name="key"/> was one of them.</summary>
+    internal bool QuickLookKey(Key key, ModifierKeys modifiers)
     {
-        if (QuickLookImg.Source is not System.Windows.Media.Imaging.BitmapSource bmp || bmp.PixelWidth <= 0)
+        if (ViewModel is not { } vm)
             return false;
-        double sw = QuickLookImageArea.ActualWidth, sh = QuickLookImageArea.ActualHeight;
-        if (sw <= 0 || sh <= 0)
+        if ((modifiers & ModifierKeys.Control) != 0)
+        {
+            Action? zoom = key switch
+            {
+                Key.OemPlus or Key.Add => _quickZoom.ZoomIn,
+                Key.OemMinus or Key.Subtract => _quickZoom.ZoomOut,
+                Key.D0 or Key.NumPad0 => _quickZoom.Reset,
+                _ => null,
+            };
+            if (zoom is not null)
+            {
+                zoom();
+                ApplyQuickLookZoom();
+                return true;
+            }
+        }
+        switch (key) // with or without Ctrl, as before zoom
+        {
+            case Key.Escape or Key.Space:
+                vm.CloseQuickLookCommand.Execute(null);
+                return true;
+            case Key.Enter:
+                vm.OpenSelectedCommand.Execute(null); // launch the viewed item, like a tile
+                return true;
+            case Key.Left:
+                vm.QuickLookPrevCommand.Execute(null);
+                return true;
+            case Key.Right:
+                vm.QuickLookNextCommand.Execute(null);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void OnQuickLookWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (QuickLookWheel(e.Delta, e.GetPosition(QuickLookImageArea), Keyboard.Modifiers))
+            e.Handled = true;
+    }
+
+    /// <summary>Ctrl+wheel zooms quick view at the pointer (<paramref name="at"/>, in its image area); a plain wheel doesn't.</summary>
+    internal bool QuickLookWheel(int delta, Point at, ModifierKeys modifiers)
+    {
+        if ((modifiers & ModifierKeys.Control) == 0)
             return false;
-        var scale = Math.Min(sw / bmp.PixelWidth, sh / bmp.PixelHeight);
-        double dw = bmp.PixelWidth * scale, dh = bmp.PixelHeight * scale;
-        double ox = (sw - dw) / 2, oy = (sh - dh) / 2;
-        return p.X >= ox && p.X <= ox + dw && p.Y >= oy && p.Y <= oy + dh;
+        _quickZoom.ZoomByWheel(delta, at.X, at.Y);
+        ApplyQuickLookZoom();
+        return true;
+    }
+
+    /// <summary>
+    /// A press in quick view's image area at <paramref name="at"/>: beside the photo as it's shown, it closes quick view;
+    /// on a zoomed photo, it starts a drag.
+    /// </summary>
+    internal void QuickLookPress(Point at)
+    {
+        if (!_quickZoom.Contains(at.X, at.Y))
+        {
+            ViewModel?.CloseQuickLookCommand.Execute(null);
+            return;
+        }
+        if (!_quickZoom.IsZoomed)
+            return;
+        _quickPanning = true;
+        _quickPanLast = at;
+    }
+
+    /// <summary>The pointer at <paramref name="at"/>: a drag that's on moves the photo as far.</summary>
+    internal void QuickLookDrag(Point at)
+    {
+        if (!_quickPanning)
+            return;
+        _quickZoom.PanBy(at.X - _quickPanLast.X, at.Y - _quickPanLast.Y);
+        _quickPanLast = at;
+        ApplyQuickLookZoom();
+    }
+
+    /// <summary>The button released (or the pointer lost): a drag ends.</summary>
+    internal void QuickLookRelease()
+    {
+        if (!_quickPanning)
+            return;
+        _quickPanning = false;
+        QuickLookImageArea.ReleaseMouseCapture();
+    }
+
+    private void OnQuickLookAreaSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        _quickZoom.SetView(e.NewSize.Width, e.NewSize.Height);
+        ApplyQuickLookZoom();
+    }
+
+    // Another photo, or none (moving on, closing): it opens fitted. A sharper copy of the photo shown changes nothing.
+    private void OnQuickLookImageChanged(System.Windows.Media.Imaging.BitmapSource? image)
+    {
+        if (image is null)
+        {
+            QuickLookRelease();
+            _quickZoom.Clear();
+        }
+        else
+        {
+            _quickZoom.SetImage(image.PixelWidth, image.PixelHeight);
+        }
+        ApplyQuickLookZoom();
+    }
+
+    // Draws the photo as the zoom says: the Image lays the photo out fitted, and its transforms scale it and move it from
+    // there. Zoomed past what the image shows holds, it asks for the photo in full.
+    private void ApplyQuickLookZoom()
+    {
+        QuickLookScale.ScaleX = QuickLookScale.ScaleY = _quickZoom.Zoom;
+        QuickLookShift.X = _quickZoom.Left - _quickZoom.FitLeft;
+        QuickLookShift.Y = _quickZoom.Top - _quickZoom.FitTop;
+        QuickLookImageArea.Cursor = _quickZoom.IsZoomed ? Cursors.SizeAll : Cursors.Hand;
+        if (ViewModel?.QuickLookImage is { } shown
+            && _quickZoom.ShowsMoreThan(shown.PixelWidth, VisualTreeHelper.GetDpi(QuickLookImg).DpiScaleX))
+            ViewModel.LoadQuickLookDetail();
     }
 
     // --- Folder tree ---

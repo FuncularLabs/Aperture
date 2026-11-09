@@ -1801,13 +1801,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         QuickLookOpen = false;
         QuickLookImage = null;
         _quickLookIndex = -1;
+        _quickLookDetailIndex = -1;
     }
 
     private void MoveQuickLook(int delta)
     {
         if (!_quickLookOpen || _mediaTiles.Count == 0)
             return;
-        ShowQuickLookAt(Math.Clamp(_quickLookIndex + delta, 0, _mediaTiles.Count - 1));
+        // At the first or last photo there's nowhere to go: leave it (and its zoom) as it is.
+        var next = Math.Clamp(_quickLookIndex + delta, 0, _mediaTiles.Count - 1);
+        if (next != _quickLookIndex)
+            ShowQuickLookAt(next);
     }
 
     private void ShowQuickLookAt(int index)
@@ -1815,6 +1819,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (index < 0 || index >= _mediaTiles.Count)
             return;
         _quickLookIndex = index;
+        _quickLookDetailIndex = -1;
         var tile = _mediaTiles[index];
         SelectedItem = tile;
         QuickLookCaption = $"{tile.FileName}   ·   {index + 1} / {_mediaTiles.Count:n0}";
@@ -1826,10 +1831,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var image = await Task.Run(() => tile.IsVideo
             ? DecodeThumbnail(tile.ItemId, tile.FullPath, tile.Item.MTimeUtc.Ticks)
-            : ImageLoading.LoadFullImageUpright(tile.FullPath, maxLongestEdge: 1600));
+            : ImageLoading.LoadFullImageUpright(tile.FullPath, QuickLookDecodeEdge));
 
         // Ignore if the user moved on while we decoded.
         if (_quickLookOpen && _quickLookIndex == index)
+            QuickLookImage = image;
+    }
+
+    /// <summary>
+    /// The longest edge quick view decodes a photo at (1600 px), so paging through photos stays quick; zooming in past it
+    /// loads the photo in full (<see cref="LoadQuickLookDetail"/>). Settable for tests only.
+    /// </summary>
+    internal int QuickLookDecodeEdge { get; set; } = 1600;
+
+    /// <summary>
+    /// A photo loaded "in full" is capped here: 8192 px on its longest side (a 48-megapixel photo is 8000 px wide).
+    /// Settable for tests only.
+    /// </summary>
+    internal int QuickLookDetailEdge { get; set; } = 8192;
+
+    private int _quickLookDetailIndex = -1; // the photo whose full load was asked for, while quick view is on it
+
+    /// <summary>
+    /// Shows the photo in quick view at full resolution (up to 8192 px on its longest side), decoded off the UI thread — the
+    /// view asks when it's zoomed past what the image it shows holds. Once per visit to a photo; not for an image smaller
+    /// than the decode size, which is all there is (a small photo, or a video's frame); dropped if quick view has moved
+    /// on by the time it's decoded.
+    /// </summary>
+    public void LoadQuickLookDetail()
+    {
+        var index = _quickLookIndex;
+        if (!_quickLookOpen || index < 0 || index >= _mediaTiles.Count || _quickLookDetailIndex == index
+            || _quickLookImage is not { } shown || Math.Max(shown.PixelWidth, shown.PixelHeight) < QuickLookDecodeEdge)
+            return;
+        _quickLookDetailIndex = index;
+        LoadQuickLookDetail(index, _mediaTiles[index]);
+    }
+
+    private async void LoadQuickLookDetail(int index, TileVm tile)
+    {
+        var image = await Task.Run(() => ImageLoading.LoadFullImageUpright(tile.FullPath, QuickLookDetailEdge));
+
+        if (_quickLookDetailIndex == index && image is not null)
             QuickLookImage = image;
     }
 

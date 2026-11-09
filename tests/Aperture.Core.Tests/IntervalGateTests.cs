@@ -78,7 +78,7 @@ public class IntervalGateTests
     [Fact]
     public void ByDefault_ItRunsOnTheSystemsMillisecondClock()
     {
-        // Its reading, between two of the system's: two samples 50–100 ms apart passed a clock at a tenth of the speed,
+        // Its reading, between two of the system's: two samples 50–100 ms apart passed a clock at ten times the speed,
         // or one that wraps each second (round 40).
         var gate = new IntervalGate(TimeSpan.FromSeconds(1));
 

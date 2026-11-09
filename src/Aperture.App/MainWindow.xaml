@@ -1326,18 +1326,33 @@
 
         <!-- Quick-look overlay -->
         <Grid x:Name="QuickLookOverlay" Background="#EE0E1014" MouseDown="OnQuickLookBackgroundClick"
+              PreviewMouseWheel="OnQuickLookWheel"
               KeyboardNavigation.TabNavigation="None"
               Visibility="{Binding QuickLookOpen, Converter={StaticResource BoolToVis}}">
             <!-- Transparent hit-target over the central image area, so the tile context menu
                  (right-click) and double-click-to-open work regardless of how the image letterboxes.
                  A single click on the image itself is swallowed (so the double-click can land);
                  a click in the letterbox around it, or the outer margin, dismisses — as does Esc/Space.
-                 The nav/close buttons live in the margins, outside this border. -->
+                 The nav/close buttons live in the margins, outside this border.
+                 Zoom (Ctrl+wheel, Ctrl +/−, Ctrl+0): the image is laid out fitted and its transforms scale and
+                 move it from there (MainWindow's ApplyQuickLookZoom); a zoomed image is dragged, and clipped here. -->
             <Border x:Name="QuickLookImageArea" Margin="72,60,72,72" Background="Transparent" Cursor="Hand"
+                    ClipToBounds="True"
                     ContextMenu="{StaticResource PreviewContextMenu}"
-                    MouseLeftButtonDown="OnQuickLookImageClick">
+                    MouseLeftButtonDown="OnQuickLookImageClick" MouseMove="OnQuickLookImageMove"
+                    MouseLeftButtonUp="OnQuickLookImageUp" LostMouseCapture="OnQuickLookImageLostCapture"
+                    SizeChanged="OnQuickLookAreaSizeChanged">
+                <!-- Not rounded to whole pixels: it's laid out exactly where ZoomPan fits it, so a zoom lands on the point. -->
                 <Image x:Name="QuickLookImg" Source="{Binding QuickLookImage}" Stretch="Uniform"
-                       RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" />
+                       HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                       RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False">
+                    <Image.RenderTransform>
+                        <TransformGroup>
+                            <ScaleTransform x:Name="QuickLookScale" />
+                            <TranslateTransform x:Name="QuickLookShift" />
+                        </TransformGroup>
+                    </Image.RenderTransform>
+                </Image>
             </Border>
 
             <TextBlock Text="{Binding QuickLookCaption}" Foreground="#F0FFFFFF" FontSize="13"
@@ -1352,7 +1367,8 @@
             <Button Content="✕" Command="{Binding CloseQuickLookCommand}" HorizontalAlignment="Right"
                     VerticalAlignment="Top" Width="40" Height="40" Margin="16" FontSize="18"
                     Foreground="White" Background="#33FFFFFF" BorderThickness="0" Cursor="Hand" />
-            <TextBlock Text="Space or Esc to close  ·  ← → to move" Foreground="#99FFFFFF" FontSize="12"
+            <TextBlock Text="Space or Esc to close  ·  ← → to move  ·  Ctrl+scroll or Ctrl +/− to zoom, Ctrl+0 to fit"
+                       Foreground="#99FFFFFF" FontSize="12"
                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,24" IsHitTestVisible="False" />
         </Grid>
 

@@ -35,6 +35,11 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   move still restarts Aperture as before.
 - A library that's open in another copy of Aperture (on another PC, for a library on a shared
   drive) can't have its files deleted, and isn't removed from the list while it can be told it's open.
+- **Zoom in quick view**, as in Photos and most image editors: `Ctrl`+scroll zooms in and out at
+  the pointer, `Ctrl`+`+` and `Ctrl`+`−` zoom about the middle, and `Ctrl`+`0` fits the photo
+  again. Zoomed in, drag the photo to look around it. Zooming in loads the photo at full
+  resolution (up to 8192 pixels on its longest side), so the detail is there. Another photo opens
+  fitted.
 
 ### Changed
 - `APERTURE_DATA_DIR` now pins Aperture to that one data folder: the library list is ignored and

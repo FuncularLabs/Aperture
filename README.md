@@ -49,7 +49,8 @@ on your machine — it never uploads anything or phones home.
   `has:tag`, `camera:`, `folder:`, quoted values (`tag:"date night"`), bare words match
   everywhere — all AND-ed, with `tag:` clauses OR-ed together.
 - **Quick view** (`Space` / `Enter` / double-click) — a full-screen quick-look with `←`/`→`
-  paging; right-click for the full item menu.
+  paging and zoom (`Ctrl`+wheel at the pointer, `Ctrl`+`±`, `Ctrl`+`0` to fit; drag to look
+  around a zoomed photo); right-click for the full item menu.
 - **Inspector pane** (dockable right or bottom) — large preview with zoom/pan, the item's
   tags & notes, and full EXIF/metadata.
 - **Video thumbnails** via the Windows shell; open anything in its default app.

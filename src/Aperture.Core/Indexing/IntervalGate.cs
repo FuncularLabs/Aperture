@@ -19,7 +19,7 @@ public sealed class IntervalGate(TimeSpan interval, Func<long>? clockMs = null)
     /// <summary>Whether <paramref name="key"/> is let through now; if it is, its interval starts again.</summary>
     public bool IsDue(long key)
     {
-        var now = _clockMs();
+        var now = Now; // the reading the tests check is the one it uses
         if (_lastAt.TryGetValue(key, out var last) && now - last < Interval.TotalMilliseconds)
             return false;
         _lastAt[key] = now;
