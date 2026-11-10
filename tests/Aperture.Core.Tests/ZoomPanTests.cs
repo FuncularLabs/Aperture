@@ -71,6 +71,23 @@ public class ZoomPanTests
     }
 
     [Fact]
+    public void ZoomIn_And_ZoomOut_KeepTheViewsCentre_NotThePhotos()
+    {
+        // Round Z4: dragged off-centre first, so the view's centre and the photo's are different points.
+        var zoom = Fitted();
+        zoom.ZoomAt(2, 500, 300); // 1600 × 1200 at (-300, -300)
+        zoom.PanBy(100, 50);      // at (-200, -250): the view's centre is 7/16 across the photo, 11/24 down
+
+        zoom.ZoomIn();
+
+        AssertShown(zoom, 500 - 7 / 16.0 * 2000, 300 - 11 / 24.0 * 1500, 2000, 1500);
+
+        zoom.ZoomOut();
+
+        AssertShown(zoom, -200, -250, 1600, 1200);
+    }
+
+    [Fact]
     public void ZoomingOut_StopsAtTheFit()
     {
         var zoom = Fitted();

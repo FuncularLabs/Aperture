@@ -46,6 +46,8 @@ public class QuickViewZoomTests
                 Width = 1200, Height = 800, DataContext = vm,
                 WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000,
                 ShowActivated = false, ShowInTaskbar = false,
+                // A test that opens the item says so; any other would launch its default app mid-run (round Z4).
+                OpenViewed = _ => Assert.Fail("quick view opened the item in its default app"),
             };
             try
             {
@@ -167,6 +169,10 @@ public class QuickViewZoomTests
 
             Assert.True(w.QuickLookKey(Key.Right, ModifierKeys.Control)); // quick view's own keys, Ctrl or not
             Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookCaption.Contains("2 / 2"), Wait));
+            Assert.True(w.QuickLookKey(Key.Left, ModifierKeys.Control));
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookCaption.Contains("1 / 2"), Wait));
+            Assert.True(w.QuickLookKey(Key.Right, ModifierKeys.None));
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookCaption.Contains("2 / 2"), Wait));
             Assert.True(w.QuickLookKey(Key.Left, ModifierKeys.None));
             Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookCaption.Contains("1 / 2"), Wait));
 
@@ -196,12 +202,15 @@ public class QuickViewZoomTests
     public void CtrlPlusAndMinus_ZoomAboutTheCentre()
     {
         // Round Z3: the point of the photo at the view's centre stays there (zoomed past the view both ways, so the
-        // photo's edges don't move it).
+        // photo's edges don't move it). Round Z4: dragged off-centre first, so the view's centre isn't the photo's.
         WithQuickView(1, v =>
         {
-            for (var i = 0; i < 3; i++)
-                v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control); // 1.95
             var centre = Centre(v);
+            v.Window.QuickLookWheel(360, centre, ModifierKeys.Control); // 1.95, centred
+            v.Window.QuickLookPress(centre);
+            v.Window.QuickLookMove(new Point(centre.X + 60, centre.Y + 40));
+            v.Window.QuickLookRelease();
+            Assert.Equal((v.Area.ActualWidth - v.Zoom.Width) / 2 + 60, v.Zoom.Left, 9); // dragged off-centre
             var under = PhotoPointAt(v, centre);
 
             v.Window.QuickLookKey(Key.OemMinus, ModifierKeys.Control);
@@ -223,11 +232,13 @@ public class QuickViewZoomTests
     public void TheFullLoad_IsAskedForOnceThePhotoIsShownWiderThanItsPixels()
     {
         // Round Z3: the window's threshold. The photo is cut down to 15 % wider than it's shown fitted: a fifth of a notch
-        // (4.6 %) shows no more than it holds; a notch (25 %) does.
+        // (4.6 %) shows no more than it holds; a notch (25 %) does. Round Z4: whether the full load was asked for is read
+        // as the wheel is turned, not from a load's timing; the photo is big enough to cut down at any DPI up to 300 %.
         WithQuickView(1, v =>
         {
             var dpi = VisualTreeHelper.GetDpi(v.Img).DpiScaleX;
             var edge = (int)Math.Round(v.Zoom.FitWidth * dpi * 1.15);
+            Assert.True(edge < 3000, $"the photo isn't big enough to cut down at {dpi:P0}");
             v.Vm.QuickLookDecodeEdge = edge;
             v.Window.QuickLookKey(Key.Escape, ModifierKeys.None);
             v.Vm.OpenQuickLookCommand.Execute(null);
@@ -235,13 +246,13 @@ public class QuickViewZoomTests
             Settle();
 
             v.Window.QuickLookWheel(24, Centre(v), ModifierKeys.Control);
-            Settle();
-            Assert.Equal(edge, v.Vm.QuickLookImage!.PixelWidth); // shown no wider than its pixels: not loaded in full
+            Assert.False(v.Vm.QuickLookDetailAsked, "shown no wider than its pixels, it was loaded in full");
 
             v.Window.QuickLookWheel(96, Centre(v), ModifierKeys.Control); // 1.25 in all
+            Assert.True(v.Vm.QuickLookDetailAsked, "shown wider than its pixels, it wasn't loaded in full");
 
-            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookImage?.PixelWidth == 2000, Wait), "shown wider than its pixels, it wasn't loaded in full");
-        }, size: (2000, 1500));
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookImage?.PixelWidth == 3000, Wait), "the full load didn't come");
+        }, size: (3000, 2250));
     }
 
     [Fact]
@@ -553,6 +564,13 @@ public class QuickViewZoomTests
 
             v.Window.QuickLookKey(Key.D0, ModifierKeys.Control);
             Assert.Equal(Cursors.Hand, v.Area.Cursor);
+
+            // Round Z4: zoomed with room beside it, a press there closes quick view, as the hand says.
+            v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
+            Assert.True(v.Zoom.IsZoomed);
+            Assert.False(v.Zoom.Contains(beside.X, beside.Y));
+            v.Window.QuickLookPress(beside);
+            Assert.False(v.Vm.QuickLookOpen);
         }, size: (48, 64));
     }
 

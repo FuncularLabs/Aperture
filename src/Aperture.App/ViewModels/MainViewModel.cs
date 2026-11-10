@@ -1863,6 +1863,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private int _quickLookDetailVisit = -1; // the visit a full load was asked for in
 
+    /// <summary>Whether the photo quick view shows has been asked for in full (for tests).</summary>
+    internal bool QuickLookDetailAsked => _quickLookTile is not null && _quickLookDetailVisit == _quickLookVisit;
+
     /// <summary>
     /// Shows the photo in quick view at full resolution (up to 8192 px on its longest side), decoded off the UI thread — the
     /// view asks when it's zoomed past what the image it shows holds. The photo shown, wherever a rebuilt view has put
