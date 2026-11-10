@@ -678,7 +678,8 @@ public partial class MainWindow : Window
         e.Handled = true;
         if (e.ClickCount == 2)
         {
-            ViewModel?.OpenSelectedCommand.Execute(null);
+            if (ViewModel is { } vm)
+                OpenViewed(vm);
             return;
         }
         QuickLookPress(PointerIn(QuickLookImageArea));
@@ -713,6 +714,12 @@ public partial class MainWindow : Window
     /// <summary>Where the pointer is in an element's frame, as quick view's mouse handlers read it (settable for tests).</summary>
     internal Func<IInputElement, Point> PointerIn { get; set; } = Mouse.GetPosition;
 
+    /// <summary>
+    /// Opens the item quick view shows in its default app, for Enter and a double-click (settable for tests, which mustn't
+    /// launch one).
+    /// </summary>
+    internal Action<MainViewModel> OpenViewed { get; set; } = vm => vm.OpenSelectedCommand.Execute(null);
+
     /// <summary>Quick view's keys — it owns the keyboard while it's open. True if <paramref name="key"/> was one of them.</summary>
     internal bool QuickLookKey(Key key, ModifierKeys modifiers)
     {
@@ -740,7 +747,7 @@ public partial class MainWindow : Window
                 vm.CloseQuickLookCommand.Execute(null);
                 return true;
             case Key.Enter:
-                vm.OpenSelectedCommand.Execute(null); // launch the viewed item, like a tile
+                OpenViewed(vm); // launch the viewed item, like a tile
                 return true;
             case Key.Left:
                 vm.QuickLookPrevCommand.Execute(null);

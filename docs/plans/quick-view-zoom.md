@@ -1,7 +1,8 @@
 # Quick view zoom
 
-Status: revision 3 (after review round Z2), 2026-11-09. Branch `feat/multiple-libraries`, on top of `3c30055`
-(review-CLEAN); the feature is `ede48ca`, round Z1's fixes `8e76bc2`, round Z2's the commit after it.
+Status: revision 4 (after review round Z3), 2026-11-09. Branch `feat/multiple-libraries`, on top of `3c30055`
+(review-CLEAN); the feature is `ede48ca`, round Z1's fixes `8e76bc2`, round Z2's `be1d7b5`, round Z3's the commit
+after it.
 
 Paul, 2026-11-09: "Before pushing & cutting a release, the previewer should follow a similar zoom in/out with
 Ctrl+Scroll and Ctrl +/- as Photos and most image editors."
@@ -25,7 +26,8 @@ found to check them against, so this is the convention, not a copy of a spec.
 - **Z3** The zoom runs from the fit (the photo as it opens; zooming out stops there) to 8 × the fit, in steps of 1.25 a
   wheel notch or key press. A touchpad's smaller wheel steps zoom by as much smaller a step, and steps in and back out
   end at the fit.
-- **Z4** Zoomed in, dragging the photo moves it. It never moves past its edges, and stays centred along a side on which
+- **Z4** Zoomed in, dragging the photo moves it until the button is released (or the drag is lost, as to Alt+Tab).
+  It never moves past its edges, and stays centred along a side on which
   it is smaller than the view. The drag cursor shows over a zoomed photo, and only there.
 - **Z5** A press beside the photo closes quick view, as before — beside the photo as it's shown, zoomed or not. A press
   on the photo doesn't (a double-click opens it, as before); on a zoomed photo it starts a drag.
@@ -74,24 +76,25 @@ AC → tests (`tests/Aperture.Core.Tests`; QVZ = `QuickViewZoomTests`, QLD = `Qu
 | AC | Tests | Mutation each must kill |
 |---|---|---|
 | Z1 | `ZoomPanTests.ZoomAt_KeepsThePointUnderThePointer`; QVZ `CtrlWheel_ZoomsAtThePointer_APlainWheelDoesnt`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem` | zoom about the centre; the wheel zooms without `Ctrl`; the handler's `Ctrl` or pointer frame |
-| Z2 | QVZ `CtrlPlusMinusAndZero_Zoom_AndQuickViewsOtherKeysStillWork`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem`, `TheGridsKeys_WithQuickViewClosed_AreTheGridsAsBefore`; `ZoomPanTests.Reset_FitsThePhotoAgain` | each key dropped from the map; `Ctrl` turning off `Esc`/`←`/`→`; the handler's `Ctrl`; quick view's keys while it's closed |
+| Z2 | QVZ `CtrlPlusMinusAndZero_Zoom_AndQuickViewsOtherKeysStillWork`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem`, `TheGridsKeys_WithQuickViewClosed_AreTheGridsAsBefore`, `CtrlPlusAndMinus_ZoomAboutTheCentre`; `ZoomPanTests.Reset_FitsThePhotoAgain` | each key dropped from the map; `Ctrl` turning off `Esc`/`←`/`→`; `Space` not closing; `Enter` not opening; `Ctrl` ± about the corner; the handler's `Ctrl`; quick view's keys while it's closed |
 | Z3 | `ZoomPanTests.APhoto_OpensFitted_AndCentred`, `ZoomingOut_StopsAtTheFit`, `Zooming_StopsAtEightTimesTheFit`, `ZoomIn_And_ZoomOut_StepByAQuarter_AboutTheCentre`, `TheWheel_ZoomsInProportionToItsStep`, `ATouchpadsStepsInAndBackOut_EndAtTheFit`, `ASmallStepFromTheFit_Zooms` | no floor; no ceiling; another step; the wheel's sign only; no snap to the fit; the snap too wide |
-| Z4 | `ZoomPanTests.Panning_StopsAtThePhotosEdges`, `ASideSmallerThanTheView_StaysCentred`, `APanorama_FillsTheWidth_CentredDown`; QVZ `DraggingAZoomedPhoto_MovesIt_UntilReleased`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem`, `TheDragCursor_ShowsOnlyOverAZoomedPhoto` | no clamp; no centring; the drag not applied, from the press, or not ended; the mouse handlers not wired; the cursor beside the photo, over a fitted photo, or not following the pointer |
-| Z5 | `ZoomPanTests.Contains_IsThePhotoAsShown`; QVZ `APressBesideThePhoto_Closes_BesideItAsShown`, `APressBesideThePhoto_ThroughTheWindowsHandler_Closes`, `APressOnAFittedPhoto_DoesntClose` | `Contains` on the fit; a press on a zoomed photo closes; a press beside doesn't; the press in the overlay's frame |
+| Z4 | `ZoomPanTests.Panning_StopsAtThePhotosEdges`, `ASideSmallerThanTheView_StaysCentred`, `APanorama_FillsTheWidth_CentredDown`; QVZ `DraggingAZoomedPhoto_MovesIt_UntilReleased`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem`, `TheDragCursor_ShowsOnlyOverAZoomedPhoto` | no clamp; no centring; the drag not applied, from the press, or not ended (by the button or a lost capture); the mouse handlers not wired; the cursor beside the photo, over a fitted photo, or not following the pointer |
+| Z5 | `ZoomPanTests.Contains_IsThePhotoAsShown`; QVZ `APressBesideThePhoto_Closes_BesideItAsShown`, `APressBesideThePhoto_ThroughTheWindowsHandler_Closes`, `APressOnAFittedPhoto_DoesntClose`, `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem` (a double-click) | `Contains` on the fit; a press on a zoomed photo closes; a press beside doesn't; the press in the overlay's frame; a double-click not opening |
 | Z6 | `ZoomPanTests.ANewView_KeepsTheZoomAndTheCentre`, `Clear_LeavesNothingToZoom_UntilAPhotoArrives`, `APhotoBeforeItsView_IsFittedOnceTheViewIsKnown`; QVZ `AnotherPhoto_OpensAtTheFit_AndSoDoesQuickViewOpenedAgain`, `AtTheLastPhoto_RightLeavesItsZoomAlone`, `ResizingTheWindow_KeepsTheZoom_AndTheDrawingFollows`, `ANewViewModel_StartsWithNothingZoomed`; QLD `AtTheLastPhoto_NextLeavesItAsItIs` | `SetView` resets or doesn't re-anchor; `Clear` keeps the shape; no clear on a new photo or view model; the same index reloaded; the area's size not passed |
-| Z7 | `ZoomPanTests.ShowsMoreThan_OnlyZoomedAndWiderThanItsPixels`, `ASharperCopy_ChangesNothing`; QVZ `ZoomingPastTheImage_LoadsThePhotoInFull_WithoutMovingTheView`; QLD `TheDecodeSize_IsSixteenHundredPixels_ByDefault`, `APhotoCutDownToTheDecodeSize_IsLoadedInFull_Once`, `APhotoLoadedInFull_IsCappedAtTheDetailSize`, `ComingBackToAPhoto_LoadsItInFullAgain`, `APhotoSmallerThanTheDecodeSize_IsAllThereIs_AndIsntLoadedAgain`, `AFullLoadFinishingAfterTheUserMovedOn_IsDropped`, `ACutDownLoadFinishingAfterTheUserMovedOn_IsDropped`, `AZoomAfterTheViewIsRebuilt_LoadsThePhotoShownInFull`, `AFullLoadFromBeforeQuickViewClosed_IsDropped_EvenAtTheSamePlace`, `ALoadFinishingAfterQuickViewClosed_IsDropped`, `AFailedFullLoad_LeavesThePhotoShown` | no detail asked; `IsZoomed` or the DPI ignored; the once-guard, the small-image guard or a visit check removed; the photo at quick view's old place; a cut-down load kept after moving on; closing not ending the visit; a failed load shown; decoded at the decode size or uncapped; the sizes' defaults |
+| Z7 | `ZoomPanTests.ShowsMoreThan_OnlyZoomedAndWiderThanItsPixels`, `ASharperCopy_ChangesNothing`; QVZ `ZoomingPastTheImage_LoadsThePhotoInFull_WithoutMovingTheView`, `TheFullLoad_IsAskedForOnceThePhotoIsShownWiderThanItsPixels`; QLD `TheDecodeSize_IsSixteenHundredPixels_ByDefault`, `APhotoCutDownToTheDecodeSize_IsLoadedInFull_Once`, `APhotoLoadedInFull_IsCappedAtTheDetailSize`, `ComingBackToAPhoto_LoadsItInFullAgain`, `APhotoSmallerThanTheDecodeSize_IsAllThereIs_AndIsntLoadedAgain`, `AFullLoadFinishingAfterTheUserMovedOn_IsDropped`, `ACutDownLoadFinishingAfterTheUserMovedOn_IsDropped`, `AZoomAfterTheViewIsRebuilt_LoadsThePhotoShownInFull`, `AFullLoadFromBeforeQuickViewClosed_IsDropped_EvenAtTheSamePlace`, `ALoadFinishingAfterQuickViewClosed_IsDropped`, `AFailedFullLoad_LeavesThePhotoShown` | no detail asked; asked at any zoom, past 4 × the pixels, or by the height; `IsZoomed` or the DPI ignored; the once-guard, the small-image guard or a visit check removed; the photo at quick view's old place; a cut-down load kept after moving on; closing not ending the visit; a failed load shown; decoded at the decode size or uncapped; the sizes' defaults |
 | Z8 | QVZ `TheHintLine_NamesTheZoomKeys` (the whole line); README and CHANGELOG read in review | the hint unchanged or cut |
 | Drawing | QVZ `ThePhoto_IsDrawnWhereTheZoomSays_FittedAndZoomed` and the drawing check in five more (to 1e-6) | the shift or the scale wrong; laid out on whole pixels |
 
 Interface coverage: every `ZoomPan` member is called by name in `ZoomPanTests`, which alone reach both ways of fitting
 since round Z1; `ZoomPan.cs` is at 100 %. The view model's and the window's members by QLD and QVZ (exempt files, tested
-anyway). Mutations run in a clone with the branch's runner (`mutate34.py`).
+anyway). Mutations run in a clone with the branch's runner (`mutate35.py`).
 
 **Checked by hand on the trial build** (no test can): the mouse capture during a drag (an inactive, off-screen test
 window gets none — W6), the DPI the window passes on a screen above 100 % (W9; this machine and CI run at 100 %), and
 how zoom, drag and the full-resolution load feel with a real mouse, touchpad and a large photo; and the two seams'
 defaults, read rather than tested since no test can hold Ctrl or move the mouse (`ModifiersNow` is
-`Keyboard.Modifiers`, `PointerIn` is `Mouse.GetPosition`: the same device `e.GetPosition` reads, capture or not).
+`Keyboard.Modifiers`, `PointerIn` is `Mouse.GetPosition`: the same device `e.GetPosition` reads, capture or not;
+`OpenViewed` is the view model's open command, as before this feature).
 
 Also in this layer: round 41's two carried nits (`IntervalGateTests`' comment says the old samples passed a clock at ten
 times the speed, not a tenth; `IntervalGate.IsDue` reads `Now`, so the reading the tests check is the one it uses).
@@ -143,3 +146,19 @@ had a prefix) and the fit's test; the held-load tests wait for the held decode t
 reopened photo is told from p0 by its height. Not taken: the cursor follows the last point the pointer was seen at
 until it moves again (WPF's own moves after a layout change correct it; cosmetic). Record: 8e76bc2's message counts 66
 rows for quick-view zoom — 65, and R41's one.
+
+## Revision 4 — what changed after review round Z3
+
+One non-author lens over `8e76bc2..be1d7b5` and a final sweep of the feature: round Z2's three verified fixed (the
+whole runner's 68 quick-view rows killed); no behaviour defect; five behaviours of the feature no test pinned.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| Z3-1 Low | `Space` closing quick view (with or without `Ctrl`, Z2) was untested. | TEST-GAP | — | QVZ `CtrlPlusMinusAndZero_Zoom_AndQuickViewsOtherKeysStillWork` (`Space`, both ways) | `Space` doesn't close |
+| Z3-2 Low | `Enter` and a double-click opening the item (Z2, Z5), both moved by this feature, were untested: they launch its default app. | TEST-GAP | Both call the window's `OpenViewed` (the view model's open command; settable for tests) | The keys test (`Enter`, both ways); `TheWindowsOwnHandlers_…` (a real double-click: `ClickCount` 2) | `Enter` doesn't open; a double-click doesn't |
+| Z3-3 Low | `Ctrl` ± zooming about the centre was pinned only in the model: the window's map zooming about the corner survived for `Ctrl`+`−`. | TEST-GAP | — | QVZ `CtrlPlusAndMinus_ZoomAboutTheCentre` | `Ctrl`+`−` or `Ctrl`+`+` about the corner |
+| Z3-4 Low | The window's threshold for the full load was untested: the one test zoomed 33 × past the pixels, so asking only past 4 ×, by the height, or at any zoom survived. | TEST-GAP | — | QVZ `TheFullLoad_IsAskedForOnceThePhotoIsShownWiderThanItsPixels` (cut down to 15 % wider than its fit: none after a fifth of a notch, one after a notch) | asked past 4 × the pixels; by the height; at any zoom |
+| Z3-5 Low | A lost capture (Alt+Tab mid-drag) ending the drag was untested. | AC-GAP | Z4 says a drag ends with the button or a lost capture | `TheWindowsOwnHandlers_…` (`LostMouseCapture` raised mid-drag) | the lost capture unhooked |
+
+Nit taken: the snap test's comment and be1d7b5's message overclaimed ("a rounding error wide"): the test pins the snap
+narrower than a touchpad's smallest step, which is what Z3 needs.

@@ -134,8 +134,8 @@ public class ZoomPanTests
     [Fact]
     public void ASmallStepFromTheFit_Zooms()
     {
-        // Round Z2: the snap to the fit is a rounding error wide, no more — a touchpad's smallest step (1 of a notch's 120)
-        // still zooms in.
+        // Round Z2: the snap to the fit is narrower than a touchpad's smallest step (1 of a notch's 120), which still zooms
+        // in.
         var zoom = Fitted();
 
         zoom.ZoomByWheel(1, 500, 300);

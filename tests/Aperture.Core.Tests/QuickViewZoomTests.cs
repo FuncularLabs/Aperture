@@ -175,9 +175,73 @@ public class QuickViewZoomTests
             w.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Right) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
             Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookCaption.Contains("2 / 2"), Wait), "the window's keys didn't reach quick view");
 
+            var opened = 0;
+            w.OpenViewed = _ => opened++; // (rather than launching the item's default app)
+            Assert.True(w.QuickLookKey(Key.Enter, ModifierKeys.None));
+            Assert.True(w.QuickLookKey(Key.Enter, ModifierKeys.Control));
+            Assert.Equal(2, opened);
+
+            Assert.True(w.QuickLookKey(Key.Space, ModifierKeys.Control));
+            Assert.False(v.Vm.QuickLookOpen);
+            v.Vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(w.QuickLookKey(Key.Space, ModifierKeys.None));
+            Assert.False(v.Vm.QuickLookOpen);
+            v.Vm.OpenQuickLookCommand.Execute(null);
             Assert.True(w.QuickLookKey(Key.Escape, ModifierKeys.Control));
             Assert.False(v.Vm.QuickLookOpen);
         });
+    }
+
+    [Fact]
+    public void CtrlPlusAndMinus_ZoomAboutTheCentre()
+    {
+        // Round Z3: the point of the photo at the view's centre stays there (zoomed past the view both ways, so the
+        // photo's edges don't move it).
+        WithQuickView(1, v =>
+        {
+            for (var i = 0; i < 3; i++)
+                v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control); // 1.95
+            var centre = Centre(v);
+            var under = PhotoPointAt(v, centre);
+
+            v.Window.QuickLookKey(Key.OemMinus, ModifierKeys.Control);
+
+            Assert.Equal(1.5625, v.Zoom.Zoom, 9);
+            var after = PhotoPointAt(v, centre);
+            Assert.Equal(under.X, after.X, Near);
+            Assert.Equal(under.Y, after.Y, Near);
+
+            v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
+
+            after = PhotoPointAt(v, centre);
+            Assert.Equal(under.X, after.X, Near);
+            Assert.Equal(under.Y, after.Y, Near);
+        });
+    }
+
+    [Fact]
+    public void TheFullLoad_IsAskedForOnceThePhotoIsShownWiderThanItsPixels()
+    {
+        // Round Z3: the window's threshold. The photo is cut down to 15 % wider than it's shown fitted: a fifth of a notch
+        // (4.6 %) shows no more than it holds; a notch (25 %) does.
+        WithQuickView(1, v =>
+        {
+            var dpi = VisualTreeHelper.GetDpi(v.Img).DpiScaleX;
+            var edge = (int)Math.Round(v.Zoom.FitWidth * dpi * 1.15);
+            v.Vm.QuickLookDecodeEdge = edge;
+            v.Window.QuickLookKey(Key.Escape, ModifierKeys.None);
+            v.Vm.OpenQuickLookCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookImage?.PixelWidth == edge, Wait), "the photo wasn't cut down to the edge");
+            Settle();
+
+            v.Window.QuickLookWheel(24, Centre(v), ModifierKeys.Control);
+            Settle();
+            Assert.Equal(edge, v.Vm.QuickLookImage!.PixelWidth); // shown no wider than its pixels: not loaded in full
+
+            v.Window.QuickLookWheel(96, Centre(v), ModifierKeys.Control); // 1.25 in all
+
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookImage?.PixelWidth == 2000, Wait), "shown wider than its pixels, it wasn't loaded in full");
+        }, size: (2000, 1500));
     }
 
     [Fact]
@@ -274,6 +338,20 @@ public class QuickViewZoomTests
             pointer = new Point(pointer.X + 50, pointer.Y);
             Raise(v.Area, UIElement.MouseMoveEvent);
             Assert.Equal(left + 30, v.Zoom.Left, 9); // released: a move no longer drags it
+
+            Raise(v.Area, UIElement.MouseLeftButtonDownEvent, MouseButton.Left); // another drag…
+            Raise(v.Area, Mouse.LostMouseCaptureEvent);                         // …and the capture lost (Alt+Tab)
+            pointer = new Point(pointer.X - 40, pointer.Y);
+            Raise(v.Area, UIElement.MouseMoveEvent);
+            Assert.Equal(left + 30, v.Zoom.Left, 9); // the drag ended with it
+
+            var opened = 0;
+            v.Window.OpenViewed = _ => opened++; // (rather than launching the item's default app)
+            var doubleClick = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent };
+            typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.SetValue(doubleClick, 2);
+            v.Area.RaiseEvent(doubleClick);
+            Assert.Equal(1, opened); // a double-click opens it, as before
+            Assert.True(v.Vm.QuickLookOpen);
         });
     }
 
