@@ -460,10 +460,14 @@ public class QuickViewZoomTests
             Assert.Equal(Cursors.Hand, v.Area.Cursor);
             v.Window.QuickLookWheel(120, beside, ModifierKeys.Control);
             Assert.Equal(Cursors.Hand, v.Area.Cursor); // zoomed at a point beside it: still beside it
+            var edge = new Point(4, v.Area.ActualHeight / 2); // clear of the photo even once it's grown over `beside`
+            v.Window.QuickLookMove(edge);
+            Assert.Equal(Cursors.Hand, v.Area.Cursor);
+
             v.Window.QuickLookWheel(120, on, ModifierKeys.Control); // the wheel turned over the photo, no move first
-            Assert.Equal(Cursors.SizeAll, v.Area.Cursor);
-            var edge = new Point(4, v.Area.ActualHeight / 2); // the photo has grown over `beside`; the edge is still clear
-            Assert.False(v.Zoom.Contains(edge.X, edge.Y));
+
+            Assert.False(v.Zoom.Contains(edge.X, edge.Y)); // where the pointer last moved is still clear of it…
+            Assert.Equal(Cursors.SizeAll, v.Area.Cursor);  // …but the wheel says the pointer is on it
             v.Window.QuickLookMove(edge);
             Assert.Equal(Cursors.Hand, v.Area.Cursor);
             v.Window.QuickLookMove(on);

@@ -243,12 +243,15 @@ public class QuickLookDetailTests
         {
             using var hold = new ManualResetEventSlim(false);
             var decode = vm.DecodeQuickLook;
-            var held = 0;
+            var (held, returned) = (0, 0);
             vm.DecodeQuickLook = (path, edge) =>
             {
-                if (edge == vm.QuickLookDetailEdge && Interlocked.Increment(ref held) == 1)
-                    hold.Wait(Wait); // the first full load (p0's)
-                return decode(path, edge);
+                if (edge != vm.QuickLookDetailEdge || Interlocked.Increment(ref held) != 1)
+                    return decode(path, edge);
+                hold.Wait(Wait); // the first full load (p0's)
+                var image = decode(path, edge);
+                Interlocked.Increment(ref returned);
+                return image;
             };
             vm.OpenQuickLookCommand.Execute(null);
             Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
@@ -257,16 +260,52 @@ public class QuickLookDetailTests
             ANewerPhotoArrives(vm, library, folder, 2);
             vm.OpenQuickLookCommand.Execute(null);
             Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait));
-            Assert.Equal(32, vm.QuickLookImage!.PixelWidth); // the newcomer, cut down (32 × 6)
+            Assert.Equal(32, vm.QuickLookImage!.PixelWidth);
+            Assert.InRange(vm.QuickLookImage.PixelHeight, 6, 7); // the newcomer cut down, not p0 (32 × 24)
             vm.LoadQuickLookDetail();
             Assert.True(Sta.PumpUntil(() => vm.QuickLookImage?.PixelWidth == 100, Wait), "the newcomer wasn't loaded in full");
             var shown = ImagesShown(vm);
 
             hold.Set();
+            Assert.True(Sta.PumpUntil(() => Volatile.Read(ref returned) == 1, Wait), "p0's full load didn't come back");
             Settle();
 
             Assert.Empty(shown); // p0's full load, dropped
             Assert.Equal((100, 20), (vm.QuickLookImage!.PixelWidth, vm.QuickLookImage.PixelHeight));
+        });
+    }
+
+    [Fact]
+    public void ACutDownLoadFinishingAfterTheUserMovedOn_IsDropped()
+    {
+        // Round Z2: paging on quickly, an earlier photo's slower load mustn't land under a later photo's caption.
+        WithLibrary(2, (vm, _, _) =>
+        {
+            using var hold = new ManualResetEventSlim(false);
+            var decode = vm.DecodeQuickLook;
+            var (held, returned) = (0, 0);
+            vm.DecodeQuickLook = (path, edge) =>
+            {
+                if (Path.GetFileName(path) != "p0.jpg" || Interlocked.Increment(ref held) != 1)
+                    return decode(path, edge);
+                hold.Wait(Wait); // p0, cut down
+                var image = decode(path, edge);
+                Interlocked.Increment(ref returned);
+                return image;
+            };
+            vm.OpenQuickLookCommand.Execute(null); // p0, held
+            vm.QuickLookNextCommand.Execute(null);
+            Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait), "p1 wasn't shown");
+            Assert.StartsWith("p1.jpg", vm.QuickLookCaption);
+            var p1 = vm.QuickLookImage;
+            var shown = ImagesShown(vm);
+
+            hold.Set();
+            Assert.True(Sta.PumpUntil(() => Volatile.Read(ref returned) == 1, Wait), "p0's load didn't come back");
+            Settle();
+
+            Assert.Empty(shown); // p0's load, dropped
+            Assert.Same(p1, vm.QuickLookImage);
         });
     }
 

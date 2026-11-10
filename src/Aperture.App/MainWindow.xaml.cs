@@ -704,7 +704,10 @@ public partial class MainWindow : Window
     /// <summary>Quick view's zoom and pan (for tests).</summary>
     internal ZoomPan QuickLookZoom => _quickZoom;
 
-    /// <summary>The modifier keys held now, as the key and wheel handlers read them (settable for tests: they can't hold Ctrl).</summary>
+    /// <summary>
+    /// The modifier keys held now, as the window's preview-key handler and quick view's wheel read them (settable for
+    /// tests: they can't hold Ctrl).
+    /// </summary>
     internal Func<ModifierKeys> ModifiersNow { get; set; } = () => Keyboard.Modifiers;
 
     /// <summary>Where the pointer is in an element's frame, as quick view's mouse handlers read it (settable for tests).</summary>

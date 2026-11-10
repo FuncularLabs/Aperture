@@ -132,6 +132,19 @@ public class ZoomPanTests
     }
 
     [Fact]
+    public void ASmallStepFromTheFit_Zooms()
+    {
+        // Round Z2: the snap to the fit is a rounding error wide, no more — a touchpad's smallest step (1 of a notch's 120)
+        // still zooms in.
+        var zoom = Fitted();
+
+        zoom.ZoomByWheel(1, 500, 300);
+
+        Assert.Equal(Math.Pow(1.25, 1 / 120.0), zoom.Zoom, 12);
+        Assert.True(zoom.IsZoomed);
+    }
+
+    [Fact]
     public void Panning_StopsAtThePhotosEdges()
     {
         var zoom = Fitted();
