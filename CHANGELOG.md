@@ -5,6 +5,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-11
+
 ### Added
 - **Separate libraries.** Keep several independent libraries — say *Work* and *Personal*. They're
   listed under **LIBRARIES** in the folder pane: click one to switch to it, or the open one to see
