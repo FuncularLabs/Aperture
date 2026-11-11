@@ -1,8 +1,9 @@
 # Quick view zoom
 
-Status: revision 5 (after review round Z4), 2026-11-09. Branch `feat/multiple-libraries`, on top of `3c30055`
-(review-CLEAN); the feature is `ede48ca`, round Z1's fixes `8e76bc2`, round Z2's `be1d7b5`, round Z3's `bbb5cd2`,
-round Z4's the commit after it.
+Status: revision 6 (after the 0.9.0 release review), 2026-11-11. Branch `feat/multiple-libraries`, on top of
+`3c30055` (review-CLEAN); the feature is `ede48ca`, round Z1's fixes `8e76bc2`, round Z2's `be1d7b5`, round Z3's
+`bbb5cd2`, round Z4's `47f6afa` (round Z5 CLEAN); the release commit `7f29048`, the release review's fixes the commit
+after it.
 
 Paul, 2026-11-09: "Before pushing & cutting a release, the previewer should follow a similar zoom in/out with
 Ctrl+Scroll and Ctrl +/- as Photos and most image editors."
@@ -179,3 +180,17 @@ instead of a load's timing, and its photo (3000 px) is big enough to cut down at
 the window tests' `OpenViewed` fails the test unless a test sets its own, so a regression can't launch an app mid-run;
 revision 4's rows name `TheWindowsOwnHandlers_ZoomAndDrag_AsTheMouseAndKeyboardSendThem` in full and call its
 double-click what it is (`ClickCount` set to 2). Record: revision 4's "68 quick-view rows" is 67, and R41's one.
+
+## Revision 6 — what changed after the 0.9.0 release review
+
+One non-author lens over the release commit (`47f6afa..7f29048`: the version, 0.9.0, and the CHANGELOG's [0.9.0]
+header), the release workflows and the notes as users will read them.
+
+| # | Finding | Blame | Change | Tests | Mutation each must kill |
+|---|---|---|---|---|---|
+| REL-1 High | `TheDragCursor_ShowsOnlyOverAZoomedPhoto` would fail on CI's 1024 × 768 runner, where Windows cuts a 1200 × 800 window to the screen: the zoomed portrait grew over its `beside` point (a quarter of the way in). The release run would have failed its tests after tag-version.yml had already pushed v0.9.0. | TEST-GAP | The quick-view tests' window is 1000 × 700, which fits, and the harness asserts it got that size; `beside` is at the area's edge, and the test asserts the photo leaves it clear at each step | QVZ `TheDragCursor_ShowsOnlyOverAZoomedPhoto` (reproduced red at 1000 × 700 before the change) | the cursor's rows (Z1A-3) and Z4-2's, re-run |
+| REL-2 Medium | The release page's standing note said the index lives under `%LocalAppData%\Aperture`; with separate libraries it's in each library's own folder. | OTHER (a sibling artifact drifted) | `release.yml`'s note names Default's folder, `Aperture Libraries` and a library opened from elsewhere | — | — |
+| REL-3 Nit | The Fixed entry named **Everything**, which 0.9.0 shows only under `APERTURE_DATA_DIR`. | OTHER | The entry says what it was and what it is now | — | — |
+
+Before main moves, the branch's whole suite runs on GitHub's runner (`ci.yml` by `workflow_dispatch`): this branch had
+never run there.

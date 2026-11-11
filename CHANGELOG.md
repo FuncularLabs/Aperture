@@ -57,8 +57,9 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   Aperture. Sections you haven't touched follow the default (the newest ~2 screens open) each time.
 
 ### Fixed
-- **Everything** in a library with a single folder showed only the photos directly in that folder,
-  not those in its subfolders.
+- Viewing the whole of a library with a single folder (**Everything** before this release; now the
+  open library under **LIBRARIES**) showed only the photos directly in that folder, not those in its
+  subfolders.
 
 ## [0.8.9] - 2026-10-23
 

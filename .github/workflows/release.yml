@@ -187,7 +187,7 @@ jobs:
             '## Notes'
             ''
             '- The download is **signed** by Funcular Labs via Azure Trusted Signing (Authenticode). If Windows SmartScreen warns on a very new release, the reputation graph builds up quickly for signed installers.'
-            '- Your index/thumbnail cache lives under `%LocalAppData%\Aperture` and never leaves your machine.'
+            '- Each library keeps its index and thumbnail cache in its own folder (`%LocalAppData%\Aperture` for Default, `%LocalAppData%\Aperture Libraries` for the libraries you create, or the folder of a library you open), and none of it is uploaded.'
           ) -join "`n"
 
           $full = $body + "`n" + $boilerplate

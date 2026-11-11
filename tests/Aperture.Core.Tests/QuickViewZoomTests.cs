@@ -43,7 +43,7 @@ public class QuickViewZoomTests
             var vm = new MainViewModel(library, new ThumbnailService(library)) { QuickLookDecodeEdge = decodeEdge };
             var window = new MainWindow
             {
-                Width = 1200, Height = 800, DataContext = vm,
+                Width = 1000, Height = 700, DataContext = vm, // fits a 1024 × 768 screen (CI's): a bigger window is cut to it
                 WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000,
                 ShowActivated = false, ShowInTaskbar = false,
                 // A test that opens the item says so; any other would launch its default app mid-run (round Z4).
@@ -52,6 +52,7 @@ public class QuickViewZoomTests
             try
             {
                 window.Show();
+                Assert.Equal((1000.0, 700.0), (window.ActualWidth, window.ActualHeight)); // the size the tests' geometry assumes
                 Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == photos && !vm.IsLoadingView, Wait));
                 vm.OpenQuickLookCommand.Execute(null);
                 Assert.True(Sta.PumpUntil(() => vm.QuickLookImage is not null, Wait), "quick view showed nothing");
@@ -532,32 +533,33 @@ public class QuickViewZoomTests
     public void TheDragCursor_ShowsOnlyOverAZoomedPhoto()
     {
         // Round Z1 (the reviewer's probe): a zoomed portrait still has room beside it, where a press closes quick view —
-        // the cursor there mustn't invite a drag.
+        // the cursor there mustn't invite a drag. `beside` is at the area's edge, which the portrait doesn't reach at
+        // any zoom here (asserted at each step), whatever the window's size (the 0.9.0 release review: a smaller window
+        // grew the photo over a point a quarter of the way in).
         WithQuickView(1, v =>
         {
             var on = Centre(v);
-            var beside = new Point(v.Zoom.FitLeft / 2, v.Area.ActualHeight / 2);
+            var beside = new Point(4, v.Area.ActualHeight / 2);
+            void RoomBeside() => Assert.False(v.Zoom.Contains(beside.X, beside.Y), $"the photo ({v.Zoom.Left:0} to {v.Zoom.Left + v.Zoom.Width:0}) covers `beside`");
             v.Window.QuickLookMove(on);
             Assert.Equal(Cursors.Hand, v.Area.Cursor); // fitted: nothing to drag
 
             v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
             Assert.True(v.Zoom.IsZoomed);
-            Assert.False(v.Zoom.Contains(beside.X, beside.Y)); // still room beside it
+            RoomBeside();
 
             Assert.Equal(Cursors.SizeAll, v.Area.Cursor); // over the photo, zoomed by the key
             v.Window.QuickLookMove(beside);
             Assert.Equal(Cursors.Hand, v.Area.Cursor);
             v.Window.QuickLookWheel(120, beside, ModifierKeys.Control);
+            RoomBeside();
             Assert.Equal(Cursors.Hand, v.Area.Cursor); // zoomed at a point beside it: still beside it
-            var edge = new Point(4, v.Area.ActualHeight / 2); // clear of the photo even once it's grown over `beside`
-            v.Window.QuickLookMove(edge);
-            Assert.Equal(Cursors.Hand, v.Area.Cursor);
 
             v.Window.QuickLookWheel(120, on, ModifierKeys.Control); // the wheel turned over the photo, no move first
 
-            Assert.False(v.Zoom.Contains(edge.X, edge.Y)); // where the pointer last moved is still clear of it…
-            Assert.Equal(Cursors.SizeAll, v.Area.Cursor);  // …but the wheel says the pointer is on it
-            v.Window.QuickLookMove(edge);
+            RoomBeside(); // where the pointer last moved is still clear of it…
+            Assert.Equal(Cursors.SizeAll, v.Area.Cursor); // …but the wheel says the pointer is on it
+            v.Window.QuickLookMove(beside);
             Assert.Equal(Cursors.Hand, v.Area.Cursor);
             v.Window.QuickLookMove(on);
             Assert.Equal(Cursors.SizeAll, v.Area.Cursor);
@@ -568,7 +570,7 @@ public class QuickViewZoomTests
             // Round Z4: zoomed with room beside it, a press there closes quick view, as the hand says.
             v.Window.QuickLookKey(Key.OemPlus, ModifierKeys.Control);
             Assert.True(v.Zoom.IsZoomed);
-            Assert.False(v.Zoom.Contains(beside.X, beside.Y));
+            RoomBeside();
             v.Window.QuickLookPress(beside);
             Assert.False(v.Vm.QuickLookOpen);
         }, size: (48, 64));
