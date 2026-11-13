@@ -898,11 +898,13 @@ public class IndexingResponsivenessTests
             };
 
             f.Vm.AddFolder(folder, includeSubfolders: true);
+            Assert.DoesNotContain("up to date", f.Vm.SyncStatus); // from the run's start, not only once the pill changes (R5-1)
             Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(60)));
 
             Assert.Equal([true, false], changes);
             Assert.Empty(stalePills);
             Assert.Equal(33, f.Vm.TotalItemCount);
+            Assert.Equal("33 items  ·  up to date", f.Vm.SyncStatus); // and caught up, once the run's refresh has landed
         });
     }
 
