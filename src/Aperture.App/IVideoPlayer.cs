@@ -27,6 +27,12 @@ public interface IVideoPlayer
     /// <summary>The video's own size once it has opened; <c>null</c> until then.</summary>
     (int Width, int Height)? NaturalSize { get; }
 
+    /// <summary>Where the video is; setting it moves it there (a paused video shows the frame there).</summary>
+    TimeSpan Position { get; set; }
+
+    /// <summary>The video's length once it has opened; <c>null</c> until then, or when the player can't tell.</summary>
+    TimeSpan? Duration { get; }
+
     event EventHandler? Opened;
 
     event EventHandler? Ended;

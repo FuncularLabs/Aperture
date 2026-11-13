@@ -137,12 +137,12 @@
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
             <Separator />
             <MenuItem Header="Copy" InputGestureText="Ctrl+C"
-                      Command="{Binding Data.CopyFileCommand, Source={StaticResource Vm}}"
+                      Command="{Binding Data.CopyShownFileCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
                 <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="Cut" InputGestureText="Ctrl+X"
-                      Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
+                      Command="{Binding Data.CutShownFileCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
                 <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
             </MenuItem>
@@ -1415,6 +1415,14 @@
                             </Style>
                         </Button.Style>
                     </Button>
+                    <!-- 0.9.2 V10: where the video is, and its time; not focusable, so Space and the arrows stay quick view's. -->
+                    <Slider x:Name="QuickLookSeek" Minimum="0" Maximum="{Binding DurationSeconds}"
+                            Value="{Binding PositionSeconds, Mode=TwoWay}" IsEnabled="{Binding CanSeek}" Width="360"
+                            Margin="10,0,0,0" VerticalAlignment="Center" Focusable="False" IsMoveToPointEnabled="True"
+                            ToolTip="Move along the video" Thumb.DragStarted="OnSeekDragStarted"
+                            Thumb.DragCompleted="OnSeekDragCompleted" />
+                    <TextBlock x:Name="QuickLookTime" Text="{Binding TimeText}" Foreground="#E6FFFFFF" FontSize="12"
+                               MinWidth="84" Margin="10,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
                     <Button Command="{Binding ToggleMuteCommand}" Focusable="False" Width="38" Height="30" Margin="8,0,0,0"
                             Cursor="Hand" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="White"
                             Background="#33FFFFFF" BorderThickness="0" ToolTip="Mute or unmute">
@@ -1429,8 +1437,9 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Slider Minimum="0" Maximum="1" Value="{Binding Volume, Mode=TwoWay}" Width="120" Margin="8,0,0,0"
-                            VerticalAlignment="Center" Focusable="False" IsMoveToPointEnabled="True" ToolTip="Volume" />
+                    <Slider x:Name="QuickLookVolume" Minimum="0" Maximum="1" Value="{Binding Volume, Mode=TwoWay}" Width="120"
+                            Margin="8,0,0,0" VerticalAlignment="Center" Focusable="False" IsMoveToPointEnabled="True"
+                            ToolTip="Volume" />
                 </StackPanel>
                 <TextBlock Text="{Binding StatusLine}" Foreground="#E6FFFFFF" FontSize="12" HorizontalAlignment="Center"
                            Margin="0,0,0,6" IsHitTestVisible="False">

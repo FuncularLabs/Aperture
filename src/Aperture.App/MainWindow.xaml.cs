@@ -21,6 +21,11 @@ public partial class MainWindow : Window
         DataContextChanged += OnDataContextChanged;
         VideoPlayerFactory = () => new MediaElementPlayer(QuickLookVideoHost);
         _ = Playback; // its controls bind to it from the start
+        // The seek bar and the time follow a video as it plays (0.9.2 V10): a few times a second, while one is shown.
+        _videoClock = new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(200), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => _playback?.Tick(), Dispatcher);
+        _videoClock.Stop();
         // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid is
         // resized, its first layout included. GroupingWidth reads the grid's scroll viewer, whose width changes only with
         // the grid's (and is laid out by then), never its viewport: the scrollbar coming or going leaves it as it was.
@@ -767,21 +772,37 @@ public partial class MainWindow : Window
         return playback;
     }
 
-    // Each visit: a video plays (a new one, even the same video again); anything else stops whatever played.
+    private readonly System.Windows.Threading.DispatcherTimer _videoClock;
+
+    // Each visit: a video is shown, paused (a new one, even the same video again); anything else stops whatever played.
     private void OnQuickLookVisit()
     {
         if (ViewModel is { QuickLookOpen: true, QuickLookIsVideo: true, QuickLookPath: { } path })
+        {
             Playback.Show(path);
+            _videoClock.Start();
+        }
         else
+        {
+            _videoClock.Stop();
             Playback.Leave();
+        }
     }
 
-    // Once a video has opened its own frame shows instead of its still, and is what a click on the video is.
+    // The seek bar's thumb dragged: the bar follows the drag, not the player, until it's let go (0.9.2 V10).
+    private void OnSeekDragStarted(object sender, System.Windows.Controls.Primitives.DragStartedEventArgs e) =>
+        Playback.BeginScrub();
+
+    private void OnSeekDragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e) =>
+        Playback.EndScrub();
+
+    // Once a video has been played (or moved along) its own frame shows instead of its still, and is what a click on the
+    // video is; until then the still is (0.9.2 V9: it opens paused, and its first frame is often black).
     private void OnPlaybackChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is not (nameof(VideoPlayback.IsReady) or nameof(VideoPlayback.NaturalSize)))
+        if (e.PropertyName is not (nameof(VideoPlayback.ShowsFrame) or nameof(VideoPlayback.NaturalSize)))
             return;
-        var ready = Playback.IsReady;
+        var ready = Playback.ShowsFrame;
         QuickLookImg.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
         QuickLookVideoHost.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
         if (ready && Playback.NaturalSize is { } size)

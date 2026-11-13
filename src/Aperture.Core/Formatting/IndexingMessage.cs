@@ -44,23 +44,30 @@ public static class IndexingMessage
     /// The headline and the friendly line for the runs in progress (each folder's alias and its latest report, or null
     /// if it hasn't reported yet): one folder's progress, or how many; how many online-only files they'll read in all.
     /// </summary>
-    public static (string Headline, string Note) For(IReadOnlyList<(string Alias, IndexProgress? Progress)> runs) =>
-        (runs.Count == 1 ? Headline(runs[0].Alias, runs[0].Progress, 1) : Headline(null, null, runs.Count),
-         Note(runs.Sum(r => r.Progress?.OnlineOnly ?? 0), runs.Count > 0));
+    public static (string Headline, string Note) For(IReadOnlyList<(string Alias, IndexProgress? Progress)> runs)
+    {
+        var downloading = runs.Where(r => r.Progress?.OnlineOnly > 0).ToList();
+        return (runs.Count == 1 ? Headline(runs[0].Alias, runs[0].Progress, 1) : Headline(null, null, runs.Count),
+                Note(downloading.Sum(r => r.Progress!.OnlineOnly), runs.Count > 0,
+                     afterTheRest: downloading.Count > 0 && downloading.All(r => r.Progress!.OnlineOnlyLast)));
+    }
 
     /// <summary>
     /// The friendly line while anything is indexed, saying too how many of the files are online-only (downloaded as
-    /// they're indexed, which is slower); empty otherwise.
+    /// they're indexed, which is slower — or, <paramref name="afterTheRest"/>, after every other file, as the user
+    /// asked: 0.9.2 C3); empty otherwise.
     /// </summary>
-    public static string Note(int onlineOnly, bool indexing)
+    public static string Note(int onlineOnly, bool indexing, bool afterTheRest = false)
     {
         if (!indexing)
             return "";
         const string patience = "This might take a while. You can keep browsing.";
-        return onlineOnly switch
+        return (onlineOnly, afterTheRest) switch
         {
-            <= 0 => patience,
-            1 => patience + " 1 of the files is online-only, so it's downloaded as it's indexed.",
+            (<= 0, _) => patience,
+            (1, true) => patience + " 1 of the files is online-only; it's downloaded after the others.",
+            (_, true) => patience + $" {onlineOnly:n0} of the files are online-only; they're downloaded after the others.",
+            (1, false) => patience + " 1 of the files is online-only, so it's downloaded as it's indexed.",
             _ => patience + $" {onlineOnly:n0} of the files are online-only, so each one is downloaded as it's indexed.",
         };
     }

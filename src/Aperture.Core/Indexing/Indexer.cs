@@ -21,12 +21,82 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// </summary>
     internal TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Test seam: hears each file's relative path as the run is about to read it (decode or download it).</summary>
+    internal Action<string>? Reading { get; set; }
+
     private readonly ApertureDatabase _db = database;
     private readonly ThumbnailGenerator _thumbnails = thumbnails;
     private readonly MetadataReader _metadata = metadata;
 
+    /// <param name="askOnlineOnly">
+    /// Asked once, after the count and before any file is read, when the run would read online-only files (0.9.2 C1):
+    /// skip them, read them after the rest, or read them now. <c>null</c> reads them now, as before. It's called on the
+    /// run's thread with the run's token, and may throw <see cref="OperationCanceledException"/> to end the run.
+    /// </param>
     public IndexResult IndexRoot(
-        Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default, bool includeVideos = true)
+        Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default, bool includeVideos = true,
+        Func<OnlineOnlyQuestion, CancellationToken, OnlineOnlyChoice>? askOnlineOnly = null)
+    {
+        var scan = Prepare(root, progress, ct, includeVideos);
+        var choice = scan.OnlineOnly > 0 && askOnlineOnly is not null
+            ? askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct)
+            : OnlineOnlyChoice.Now;
+        return Execute(scan, choice, progress, ct);
+    }
+
+    /// <summary>
+    /// <see cref="IndexRoot"/> with a question answered later (the window's dialog): the run counts, then awaits the
+    /// answer holding no thread (every folder can ask at once; review gate 3), then reads on a pool thread — never on
+    /// the thread that answered.
+    /// </summary>
+    public async Task<IndexResult> IndexRootAsync(
+        Root root, IProgress<IndexProgress>? progress, CancellationToken ct, bool includeVideos,
+        Func<OnlineOnlyQuestion, CancellationToken, Task<OnlineOnlyChoice>> askOnlineOnly)
+    {
+        var scan = Prepare(root, progress, ct, includeVideos);
+        if (scan.OnlineOnly == 0)
+            return Execute(scan, OnlineOnlyChoice.Now, progress, ct);
+        var choice = await askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct).ConfigureAwait(false);
+        return await Task.Run(() => Execute(scan, choice, progress, ct), CancellationToken.None).ConfigureAwait(false);
+    }
+
+    // What a run knows once it has counted: the files, the rows and thumbnails it has, so which it will read.
+    private sealed class Scan(
+        Root root, List<ScannedFile> files, Dictionary<string, ItemStore.ExistingItem> existing,
+        Dictionary<long, ThumbnailStore.ThumbCacheInfo> thumbInfo, long nowTicks)
+    {
+        private static readonly int ExpectedThumbs = ThumbSizes.All.Length;
+
+        public Root Root { get; } = root;
+        public List<ScannedFile> Files { get; } = files;
+        public Dictionary<string, ItemStore.ExistingItem> Existing { get; } = existing;
+        public long NowTicks { get; } = nowTicks;
+
+        // The online-only files among those it will read: each is downloaded to be read (the slow part on a cloud drive).
+        public int OnlineOnly { get; } = files.Count(f => Downloads(f, existing, thumbInfo));
+
+        // A file is unchanged when its size and time match its row; its thumbnails are fresh when all of them are cached
+        // from this version of it. The run reads every file but an unchanged one with fresh thumbnails.
+        public bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) => IsUnchanged(file, Existing, out row);
+
+        public bool ThumbsFresh(long itemId, ScannedFile file) => ThumbsFresh(itemId, file, thumbInfo);
+
+        public bool Downloads(ScannedFile file) => Downloads(file, Existing, thumbInfo);
+
+        private static bool IsUnchanged(
+            ScannedFile file, Dictionary<string, ItemStore.ExistingItem> existing, out ItemStore.ExistingItem row) =>
+            existing.TryGetValue(file.RelPath, out row) && row.MTimeTicks == file.MTimeTicks && row.SizeBytes == file.SizeBytes;
+
+        private static bool ThumbsFresh(long itemId, ScannedFile file, Dictionary<long, ThumbnailStore.ThumbCacheInfo> info) =>
+            info.TryGetValue(itemId, out var ti) && ti.Count >= ExpectedThumbs && ti.SrcMtimeTicks == file.MTimeTicks;
+
+        private static bool Downloads(
+            ScannedFile f, Dictionary<string, ItemStore.ExistingItem> existing,
+            Dictionary<long, ThumbnailStore.ThumbCacheInfo> info) =>
+            f.IsOnlineOnly && !(IsUnchanged(f, existing, out var r) && ThumbsFresh(r.Id, f, info));
+    }
+
+    private Scan Prepare(Root root, IProgress<IndexProgress>? progress, CancellationToken ct, bool includeVideos)
     {
         var nowTicks = DateTime.UtcNow.Ticks;
 
@@ -35,30 +105,50 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var files = FileScanner.Scan(root.Path, includeVideos, ct, root.Recursive, t =>
             progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning, Processed = t.Found }));
 
-        var existing = new ItemStore(_db).GetExisting(root.Id);
-        var thumbInfo = new ThumbnailStore(_db).GetInfo();
-        var expectedThumbs = ThumbSizes.All.Length;
+        return new Scan(root, files, new ItemStore(_db).GetExisting(root.Id), new ThumbnailStore(_db).GetInfo(), nowTicks);
+    }
 
-        // A file is unchanged when its size and time match its row; its thumbnails are fresh when all of them are cached
-        // from this version of it. The run reads every file but an unchanged one with fresh thumbnails.
-        bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) =>
-            existing.TryGetValue(file.RelPath, out row) && row.MTimeTicks == file.MTimeTicks && row.SizeBytes == file.SizeBytes;
-        bool ThumbsFresh(long itemId, ScannedFile file) =>
-            thumbInfo.TryGetValue(itemId, out var ti) && ti.Count >= expectedThumbs && ti.SrcMtimeTicks == file.MTimeTicks;
+    private IndexResult Execute(Scan scan, OnlineOnlyChoice choice, IProgress<IndexProgress>? progress, CancellationToken ct)
+    {
+        var (root, files, existing, nowTicks, onlineOnly) = (scan.Root, scan.Files, scan.Existing, scan.NowTicks, scan.OnlineOnly);
+        bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) => scan.IsUnchanged(file, out row);
+        bool ThumbsFresh(long itemId, ScannedFile file) => scan.ThumbsFresh(itemId, file);
+        bool Downloads(ScannedFile file) => scan.Downloads(file);
 
-        // The online-only files among those it will read: each is downloaded to be read (the slow part on a cloud drive).
-        var onlineOnly = files.Count(f => f.IsOnlineOnly && !(IsUnchanged(f, out var r) && ThumbsFresh(r.Id, f)));
+        // Asked before anything is read (0.9.2 C1): skip them (kept as they are, never pruned for it), read them after
+        // the rest, or read them in order as before.
+        ct.ThrowIfCancellationRequested();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var skippedOnlineOnly = 0;
+        var work = files;
+        if (choice == OnlineOnlyChoice.Skip)
+        {
+            work = [];
+            foreach (var file in files)
+            {
+                if (Downloads(file))
+                {
+                    seen.Add(file.RelPath); // its row, if it has one, stays as it was
+                    skippedOnlineOnly++;
+                }
+                else
+                    work.Add(file);
+            }
+            onlineOnly = 0;
+        }
+        else if (choice == OnlineOnlyChoice.Background)
+            work = [.. files.Where(f => !Downloads(f)), .. files.Where(Downloads)];
+        var onlineOnlyLast = choice == OnlineOnlyChoice.Background && onlineOnly > 0;
 
         // How far it is, from the start: the count, and how many it will download (review R1-1).
         IndexProgress Indexing(int processed, bool saved, string? current) => new()
         {
-            RootAlias = root.Alias, Phase = IndexPhase.Indexing, Processed = processed, Total = files.Count,
-            OnlineOnly = onlineOnly, CurrentFile = current, Saved = saved,
+            RootAlias = root.Alias, Phase = IndexPhase.Indexing, Processed = processed, Total = work.Count,
+            OnlineOnly = onlineOnly, OnlineOnlyLast = onlineOnlyLast, CurrentFile = current, Saved = saved,
         };
         progress?.Report(Indexing(0, saved: false, current: null));
         var sinceReport = System.Diagnostics.Stopwatch.StartNew();
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         int added = 0, updated = 0, skipped = 0, thumbsGenerated = 0, failed = 0;
 
         using var meta = _db.OpenMetadata();
@@ -74,7 +164,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         try
         {
             var processed = 0;
-            foreach (var file in files)
+            foreach (var file in work)
             {
                 ct.ThrowIfCancellationRequested();
                 seen.Add(file.RelPath);
@@ -88,6 +178,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     // would otherwise serve the wrong image for this item.
                     if (!ThumbsFresh(row.Id, file))
                     {
+                        Reading?.Invoke(file.RelPath);
                         var set = GenerateThumbnails(file);
                         if (set is null)
                             failed++;
@@ -99,6 +190,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 else
                 {
                     // Videos carry no EXIF we rely on; use file times.
+                    Reading?.Invoke(file.RelPath);
                     var md = file.Kind == MediaKind.Video ? default : _metadata.Read(file.FullPath);
                     var set = GenerateThumbnails(file);
                     if (set is null)
@@ -151,7 +243,10 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         }
 
         // Prune rows whose files disappeared from disk.
-        progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly });
+        progress?.Report(new IndexProgress
+        {
+            RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly, OnlineOnlyLast = onlineOnlyLast,
+        });
         var removedIds = existing
             .Where(kv => !seen.Contains(kv.Key))
             .Select(kv => kv.Value.Id)
@@ -166,9 +261,10 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         {
             RootAlias = root.Alias,
             Phase = IndexPhase.Done,
-            Processed = files.Count,
-            Total = files.Count,
+            Processed = work.Count,
+            Total = work.Count,
             OnlineOnly = onlineOnly,
+            OnlineOnlyLast = onlineOnlyLast,
         });
 
         return new IndexResult
@@ -179,6 +275,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             Removed = removedIds.Count,
             ThumbnailsGenerated = thumbsGenerated,
             Failed = failed,
+            SkippedOnlineOnly = skippedOnlineOnly,
         };
     }
 

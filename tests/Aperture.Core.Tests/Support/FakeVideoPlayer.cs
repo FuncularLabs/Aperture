@@ -13,6 +13,25 @@ public sealed class FakeVideoPlayer : IVideoPlayer
     public double Volume { get; set; }
     public (int Width, int Height)? NaturalSize { get; set; }
 
+    private TimeSpan _position;
+
+    /// <summary>Where it is; a set is a seek, recorded as <c>seek:&lt;seconds&gt;</c>. <see cref="PlayTo"/> moves it as playing does.</summary>
+    public TimeSpan Position
+    {
+        get => _position;
+        set
+        {
+            _position = value;
+            Calls.Add($"seek:{value.TotalSeconds:0.###}");
+        }
+    }
+
+    /// <summary>The video's length, once it has opened (null: one it can't tell).</summary>
+    public TimeSpan? Duration { get; set; }
+
+    /// <summary>As if it had played on to <paramref name="seconds"/>: no seek recorded.</summary>
+    public void PlayTo(double seconds) => _position = TimeSpan.FromSeconds(seconds);
+
     public event EventHandler? Opened;
     public event EventHandler? Ended;
     public event EventHandler? Failed;
@@ -33,9 +52,10 @@ public sealed class FakeVideoPlayer : IVideoPlayer
         Calls.Add("close");
     }
 
-    public void RaiseOpened(int width = 1920, int height = 1080)
+    public void RaiseOpened(int width = 1920, int height = 1080, double? seconds = 83)
     {
         NaturalSize = (width, height);
+        Duration = seconds is { } s ? TimeSpan.FromSeconds(s) : null;
         Opened?.Invoke(this, EventArgs.Empty);
     }
 

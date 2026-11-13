@@ -1,15 +1,18 @@
 using System.Windows.Input;
 using Aperture.App.Mvvm;
+using Aperture.Core.Formatting;
 using Aperture.Core.Settings;
 
 namespace Aperture.App;
 
 /// <summary>
-/// Quick view's video playback (0.9.1 batch, items 1–2), as a model over <see cref="IVideoPlayer"/>: no WPF types, so
-/// it's tested without a window. Shown a video, it makes a player for it and plays it with the sound the user last left
-/// (muted the first time ever); <see cref="Toggle"/> plays and pauses it (from the start once it has ended); leaving it
-/// stops it and lets go of its file. Events from a player it has left change nothing. A mute is saved at once; a
-/// volume set while a video plays is saved as the video is left (the slider sets many as it's dragged).
+/// Quick view's video playback (0.9.1 batch, items 1–2; 0.9.2 V9–V10), as a model over <see cref="IVideoPlayer"/>: no
+/// WPF types, so it's tested without a window. Shown a video, it makes a player for it and opens it paused, with the
+/// sound the user last left (muted the first time ever): only <see cref="Toggle"/> (the play button, Space, a click)
+/// plays it, and pauses it again (from the start once it has ended). <see cref="Seek"/> moves it (the seek bar);
+/// <see cref="Tick"/> follows it as it plays (the window's timer), except while the bar is dragged. Leaving it stops it
+/// and lets go of its file. Events from a player it has left change nothing. A mute is saved at once; a volume set
+/// while a video plays is saved as the video is left (the slider sets many as it's dragged).
 /// </summary>
 public sealed class VideoPlayback : ObservableObject
 {
@@ -24,6 +27,10 @@ public sealed class VideoPlayback : ObservableObject
     private bool _isMuted;
     private double _volume;
     private bool _soundUnsaved; // a volume set while a video plays: saved once, as it's left (a slider drag sets many)
+    private bool _started;      // played or moved along once: its own frame shows (until then, its still)
+    private TimeSpan? _duration;
+    private double _position;   // seconds; what the seek bar and the time show
+    private bool _scrubbing;    // the seek bar is being dragged: it follows the drag, not the player
 
     /// <param name="prefs">Where the sound is kept between videos and launches.</param>
     /// <param name="playerFactory">Makes the player for each video shown; one that throws means "can't play here".</param>
@@ -93,6 +100,79 @@ public sealed class VideoPlayback : ObservableObject
         : !_isReady ? "Loading video…"
         : "";
 
+    /// <summary>
+    /// The video's own frame shows rather than its still: it has opened, and has been played or moved along once (a
+    /// video opens paused, and its first frame is often black where the still isn't).
+    /// </summary>
+    public bool ShowsFrame => _isReady && _started;
+
+    /// <summary>The seek bar works: the video has opened and the player tells its length.</summary>
+    public bool CanSeek => _isReady && !_hasFailed && _player is not null && _duration is { } length && length > TimeSpan.Zero;
+
+    /// <summary>The seek bar's end: the video's length in seconds (0 until it's known).</summary>
+    public double DurationSeconds => _isReady && _duration is { } length ? length.TotalSeconds : 0;
+
+    /// <summary>Where the video is, in seconds: the seek bar's value. Setting it seeks (<see cref="Seek"/>).</summary>
+    public double PositionSeconds
+    {
+        get => _position;
+        set => Seek(value);
+    }
+
+    /// <summary>"elapsed / length" (<see cref="MediaTime"/>); <see cref="MediaTime.Pending"/> until it has opened.</summary>
+    public string TimeText =>
+        !_isVideoShown || _hasFailed ? ""
+        : !_isReady ? MediaTime.Pending
+        : MediaTime.Format(TimeSpan.FromSeconds(_position), _duration);
+
+    /// <summary>
+    /// Moves the video to <paramref name="seconds"/> (clamped to its length), playing or paused; a paused video then
+    /// shows the frame there. Moved to its end, the next play starts again; moved back from its end, it plays from
+    /// there. Nothing happens before it has opened, or when its length isn't known.
+    /// </summary>
+    public void Seek(double seconds)
+    {
+        if (!double.IsFinite(seconds) || !CanSeek || _player is not { } player || _duration is not { } length)
+            return;
+        var at = Math.Clamp(seconds, 0, length.TotalSeconds);
+        player.Position = TimeSpan.FromSeconds(at);
+        _position = at;
+        _atEnd = at >= length.TotalSeconds;
+        _started = true;
+        RaiseTimeline();
+    }
+
+    /// <summary>Follows the player as it plays (the window calls it a few times a second): its place, and a length told late.</summary>
+    public void Tick()
+    {
+        if (_player is not { } player || !_isReady || _hasFailed)
+            return;
+        var changed = false;
+        if (_duration is null && player.Duration is { } told)
+        {
+            _duration = told;
+            changed = true;
+        }
+        if (!_scrubbing)
+        {
+            var at = Math.Max(0, player.Position.TotalSeconds);
+            if (_duration is { } length)
+                at = Math.Min(at, length.TotalSeconds);
+            if (at != _position)
+            {
+                _position = at;
+                changed = true;
+            }
+        }
+        if (changed)
+            RaiseTimeline();
+    }
+
+    /// <summary>The seek bar's thumb is being dragged: <see cref="Tick"/> leaves the bar under the pointer.</summary>
+    public void BeginScrub() => _scrubbing = _player is not null;
+
+    public void EndScrub() => _scrubbing = false;
+
     public ICommand ToggleCommand { get; }
 
     public ICommand ToggleMuteCommand { get; }
@@ -103,7 +183,10 @@ public sealed class VideoPlayback : ObservableObject
     /// </summary>
     public static bool IsOnVideo(bool hasPicture, bool onPicture) => !hasPicture || onPicture;
 
-    /// <summary>Shows the video at <paramref name="path"/>: a player of its own, with the saved sound, playing.</summary>
+    /// <summary>
+    /// Shows the video at <paramref name="path"/>: a player of its own, with the saved sound, opened paused (0.9.2 V9:
+    /// it plays only when <see cref="Toggle"/> is asked to; a Manual MediaElement opens on a pause).
+    /// </summary>
     public void Show(string path)
     {
         Leave();
@@ -119,8 +202,8 @@ public sealed class VideoPlayback : ObservableObject
             player.IsMuted = _isMuted;
             player.Volume = _volume;
             player.Open(new Uri(path));
-            player.Play();
-            IsPlaying = true;
+            player.Pause();
+            IsPlaying = false;
         }
         catch (Exception)
         {
@@ -132,6 +215,7 @@ public sealed class VideoPlayback : ObservableObject
             IsPlaying = false;
         }
         OnPropertyChanged(nameof(Player));
+        RaiseTimeline();
     }
 
     /// <summary>Stops the video shown, if any, and lets go of its file (another item, quick view closed, a switch).</summary>
@@ -146,10 +230,15 @@ public sealed class VideoPlayback : ObservableObject
             OnPropertyChanged(nameof(Player));
         }
         _atEnd = false;
+        _started = false;
+        _duration = null;
+        _position = 0;
+        _scrubbing = false;
         IsPlaying = false;
         IsReady = false;
         HasFailed = false;
         IsVideoShown = false;
+        RaiseTimeline();
     }
 
     /// <summary>Plays or pauses; once it has ended, plays it again from the start.</summary>
@@ -167,9 +256,12 @@ public sealed class VideoPlayback : ObservableObject
         {
             player.Rewind();
             _atEnd = false;
+            _position = 0;
         }
         player.Play();
         IsPlaying = true;
+        _started = true;
+        RaiseTimeline();
     }
 
     /// <summary>Pauses (before the video is opened in its default app).</summary>
@@ -217,18 +309,24 @@ public sealed class VideoPlayback : ObservableObject
 
     private void OnOpened(object? sender, EventArgs e)
     {
-        if (!ReferenceEquals(sender, _player))
+        if (!ReferenceEquals(sender, _player) || _player is not { } player)
             return; // a video already left
+        _duration = player.Duration;
         IsReady = true;
         OnPropertyChanged(nameof(NaturalSize));
+        RaiseTimeline();
     }
 
     private void OnEnded(object? sender, EventArgs e)
     {
-        if (!ReferenceEquals(sender, _player))
+        if (!ReferenceEquals(sender, _player) || _player is not { } player)
             return;
         _atEnd = true;
         IsPlaying = false;
+        player.Pause(); // a Manual MediaElement stays "playing" at its end: a seek back would set it going (V12)
+        if (!_scrubbing)
+            _position = _duration?.TotalSeconds ?? Math.Max(0, player.Position.TotalSeconds); // the bar at the end
+        RaiseTimeline();
     }
 
     private void OnFailed(object? sender, EventArgs e)
@@ -241,6 +339,11 @@ public sealed class VideoPlayback : ObservableObject
         IsPlaying = false;
         IsReady = false;
         HasFailed = true;
+        _started = false;
+        _duration = null;
+        _position = 0;
+        _scrubbing = false;
+        RaiseTimeline();
     }
 
     private void Drop(IVideoPlayer player)
@@ -256,6 +359,16 @@ public sealed class VideoPlayback : ObservableObject
         {
             // Letting go must never throw out of moving on or closing quick view.
         }
+    }
+
+    // What the seek bar, the time and the frame-or-still follow: said together whenever any of it may have moved.
+    private void RaiseTimeline()
+    {
+        OnPropertyChanged(nameof(ShowsFrame));
+        OnPropertyChanged(nameof(CanSeek));
+        OnPropertyChanged(nameof(DurationSeconds));
+        OnPropertyChanged(nameof(PositionSeconds));
+        OnPropertyChanged(nameof(TimeText));
     }
 
     // The state the status line and Space follow: say they changed too.

@@ -26,8 +26,13 @@ public class IndexingMessageTests : IDisposable
             IndexingMessage.Headline("Photos", P(IndexPhase.Indexing, 1234, 12345), 1));
     }
 
-    private static IndexProgress P(IndexPhase phase, int processed = 0, int total = 0, int onlineOnly = 0) =>
-        new() { RootAlias = "Photos", Phase = phase, Processed = processed, Total = total, OnlineOnly = onlineOnly };
+    private static IndexProgress P(
+        IndexPhase phase, int processed = 0, int total = 0, int onlineOnly = 0, bool last = false) =>
+        new()
+        {
+            RootAlias = "Photos", Phase = phase, Processed = processed, Total = total, OnlineOnly = onlineOnly,
+            OnlineOnlyLast = last,
+        };
 
     [Fact]
     public void RootStatus_SaysWhatTheRunIsDoing()
@@ -83,6 +88,32 @@ public class IndexingMessageTests : IDisposable
         Assert.Equal("This might take a while. You can keep browsing.", IndexingMessage.Note(0, indexing: true));
         Assert.Equal("", IndexingMessage.Note(0, indexing: false));
         Assert.Equal("", IndexingMessage.Note(25, indexing: false));
+    }
+
+    [Fact]
+    public void Note_SaysAfterTheRest_WhenEveryRunDoes()
+    {
+        // 0.9.2 C3: the user said "in the background" — the online-only files come after every other file.
+        Assert.Equal(
+            "This might take a while. You can keep browsing. 1,234 of the files are online-only; they're downloaded "
+            + "after the others.",
+            IndexingMessage.Note(1234, indexing: true, afterTheRest: true));
+        Assert.Equal(
+            "This might take a while. You can keep browsing. 1 of the files is online-only; it's downloaded after "
+            + "the others.",
+            IndexingMessage.Note(1, indexing: true, afterTheRest: true));
+        var (_, note) = IndexingMessage.For(
+            [("Photos", P(IndexPhase.Indexing, 3, 9, onlineOnly: 2, last: true)), ("Local", P(IndexPhase.Indexing, 1, 5)),
+             ("Cloud", P(IndexPhase.Indexing, 1, 5, onlineOnly: 3, last: true))]);
+        Assert.EndsWith("5 of the files are online-only; they're downloaded after the others.", note); // a run with none doesn't count
+    }
+
+    [Fact]
+    public void Note_MixedRuns_SayAsTheyreIndexed()
+    {
+        var (_, note) = IndexingMessage.For(
+            [("Photos", P(IndexPhase.Indexing, 3, 9, onlineOnly: 2, last: true)), ("Cloud", P(IndexPhase.Indexing, 1, 5, onlineOnly: 3))]);
+        Assert.EndsWith("5 of the files are online-only, so each one is downloaded as it's indexed.", note);
     }
 
     [Fact]

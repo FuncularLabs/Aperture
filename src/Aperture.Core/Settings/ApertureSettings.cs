@@ -68,6 +68,49 @@ public sealed class ApertureSettings
     /// </summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(LenientIdListConverter))]
     public long[]? RootOrder { get; set; }
+
+    /// <summary>
+    /// What to do with each folder's online-only files, kept when the user ticked Remember or chose from the folder's
+    /// menu (0.9.2 C5–C6): root id → "Skip", "Background" or "Now". Read leniently, as <see cref="RootOrder"/>.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(LenientStringMapConverter))]
+    public Dictionary<string, string>? OnlineOnlyChoices { get; set; }
+}
+
+/// <summary>
+/// Reads a map of strings leniently: an object's string-valued members; anything else in it is skipped, and a value
+/// that isn't an object reads as none, never costing the other settings. Writes a plain object.
+/// </summary>
+public sealed class LenientStringMapConverter : System.Text.Json.Serialization.JsonConverter<Dictionary<string, string>?>
+{
+    public override bool HandleNull => true;
+
+    public override Dictionary<string, string>? Read(
+        ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
+    {
+        using var doc = System.Text.Json.JsonDocument.ParseValue(ref reader);
+        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var member in doc.RootElement.EnumerateObject())
+            if (member.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                map[member.Name] = member.Value.GetString()!;
+        return map;
+    }
+
+    public override void Write(
+        System.Text.Json.Utf8JsonWriter writer, Dictionary<string, string>? value, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartObject();
+        foreach (var (key, text) in value)
+            writer.WriteString(key, text);
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>

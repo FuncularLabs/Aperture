@@ -84,6 +84,86 @@ public class RealPlayerTests
     }
 
     [MediaFact]
+    public void OpenThenPause_RaisesOpened_AndStaysPut()
+    {
+        // 0.9.2 V9: quick view opens a video paused (Open, then Pause): a Manual MediaElement opens on a Pause too.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var opened = false;
+            player.Opened += (_, _) => opened = true;
+
+            player.Open(new Uri(clip));
+            player.Pause();
+
+            Assert.True(pump(() => opened), "the sample clip didn't open on a pause");
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            Assert.True(player.Position < TimeSpan.FromMilliseconds(100), $"it played on to {player.Position}"); // it didn't play
+        });
+    }
+
+    [MediaFact]
+    public void OpenThenPause_RaisesOpened_InACollapsedHost()
+    {
+        // As the window has it: quick view's video host stays collapsed until the video's frame shows.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            host.Visibility = Visibility.Collapsed;
+            var opened = false;
+            player.Opened += (_, _) => opened = true;
+
+            player.Open(new Uri(clip));
+            player.Pause();
+
+            Assert.True(pump(() => opened), "the sample clip didn't open in a collapsed host");
+            Assert.True(player.Duration is { } length && length > TimeSpan.Zero);
+        });
+    }
+
+    [MediaFact]
+    public void AfterTheEnd_ASeek_StaysPaused()
+    {
+        // 0.9.2 V12, as VideoPlayback drives it: at the end it's paused, and a seek back leaves it paused.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var opened = false;
+            var ended = false;
+            player.Opened += (_, _) => opened = true;
+            player.Ended += (_, _) => { ended = true; player.Pause(); };
+            player.Open(new Uri(clip));
+            player.Play();
+            Assert.True(pump(() => opened));
+            player.Position = player.Duration!.Value - TimeSpan.FromMilliseconds(300);
+            Assert.True(pump(() => ended), "no end");
+
+            player.Position = TimeSpan.FromSeconds(1);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+
+            Assert.True(player.Position - TimeSpan.FromSeconds(1) < TimeSpan.FromMilliseconds(100),
+                $"it played on after a seek at its end: {player.Position}");
+        });
+    }
+
+    [MediaFact]
+    public void Position_AndDuration_AreTheVideos()
+    {
+        // 0.9.2 V10: the seek bar's length and where the video is; a seek while paused moves it there.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var opened = false;
+            player.Opened += (_, _) => opened = true;
+            Assert.Null(player.Duration);
+            player.Open(new Uri(clip));
+            player.Pause();
+            Assert.True(pump(() => opened));
+
+            Assert.True(player.Duration is { } length && length > TimeSpan.FromSeconds(1), $"length {player.Duration}");
+            player.Position = TimeSpan.FromSeconds(1);
+            Assert.True(pump(() => Math.Abs((player.Position - TimeSpan.FromSeconds(1)).TotalMilliseconds) < 50));
+            Assert.True(((MediaElement)host.Child).ScrubbingEnabled); // a paused seek shows its frame
+        });
+    }
+
+    [MediaFact]
     public void PlayPauseAndRewind_DriveIt()
     {
         WithPlayer((player, host, clip, pump) =>

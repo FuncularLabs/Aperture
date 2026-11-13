@@ -17,7 +17,8 @@ namespace Aperture.Core.Tests;
 
 /// <summary>
 /// Videos in quick view, in the real window shown off screen (0.9.1 batch, items 1–2: "a click on the video or a
-/// spacebar press should toggle play and pause"; "Add mute/unmute and a volume control"). The window's players are
+/// spacebar press should toggle play and pause"; "Add mute/unmute and a volume control"; 0.9.2 V9–V11: a video opens
+/// paused, "only on click on the play button or spacebar", with a seek bar and a time). The window's players are
 /// fakes that play nothing (CI has no media player); each test drives the window's entry points as its handlers do.
 /// </summary>
 public class QuickViewVideoTests
@@ -37,6 +38,9 @@ public class QuickViewVideoTests
         public Image Still => (Image)Window.FindName("QuickLookImg");
         public FrameworkElement VideoHost => (FrameworkElement)Window.FindName("QuickLookVideoHost");
         public FrameworkElement Chrome => (FrameworkElement)Window.FindName("QuickLookChrome");
+        public Slider Seek => (Slider)Window.FindName("QuickLookSeek");
+        public Slider VolumeSlider => (Slider)Window.FindName("QuickLookVolume");
+        public TextBlock Time => (TextBlock)Window.FindName("QuickLookTime");
         public Point Middle => new(Area.ActualWidth / 2, Area.ActualHeight / 2);
         public string Path(string name) => System.IO.Path.Combine(Folder, name);
     }
@@ -129,20 +133,21 @@ public class QuickViewVideoTests
         [.. Descendants(node).OfType<TextBlock>().Where(t => t.IsVisible).Select(t => t.Text)];
 
     [Fact]
-    public void OpeningAVideo_PlaysIt()
+    public void OpeningAVideo_ShowsItPaused()
     {
         WithQuickView(["v0.mp4", "p1.jpg"], v =>
         {
             var player = Assert.Single(v.Players);
             Assert.Equal(new Uri(v.Path("v0.mp4")), player.Source);
-            Assert.Equal("play", player.LastPlayOrPause);
+            Assert.Equal("pause", player.LastPlayOrPause);
+            Assert.DoesNotContain("play", player.Calls); // V9: only the play button, Space or a click plays it
             Assert.True(player.IsMuted); // the first video ever: muted
-            Assert.True(v.Window.Playback.IsPlaying);
+            Assert.False(v.Window.Playback.IsPlaying);
         });
     }
 
     [Fact]
-    public void TheStill_ShowsUntilTheVideoIsReady()
+    public void TheStill_ShowsUntilTheVideoIsPlayed()
     {
         WithQuickView(["v0.mp4"], v =>
         {
@@ -154,10 +159,59 @@ public class QuickViewVideoTests
             v.Player.RaiseOpened(1280, 720);
             Settle();
 
-            Assert.NotEqual(Visibility.Visible, v.Still.Visibility);
-            Assert.Equal(Visibility.Visible, v.VideoHost.Visibility);
+            Assert.Equal(Visibility.Visible, v.Still.Visibility);           // opened, paused: still the still
+            Assert.NotEqual(Visibility.Visible, v.VideoHost.Visibility);
             Assert.DoesNotContain("Loading video…", VisibleTexts(v.Chrome));
+
+            Assert.True(v.Window.QuickLookKey(Key.Space, ModifierKeys.None));
+            Settle();
+
+            Assert.NotEqual(Visibility.Visible, v.Still.Visibility);        // played: its own frame
+            Assert.Equal(Visibility.Visible, v.VideoHost.Visibility);
         }, still: Still16By9);
+    }
+
+    [Fact]
+    public void TheSeekBar_AndTime_FollowThePlayback()
+    {
+        WithQuickView(["v0.mp4"], v =>
+        {
+            Assert.False(v.Seek.IsEnabled);                 // V10: until it has opened
+            Assert.Equal("0:00 / –:––", v.Time.Text);
+            Assert.False(v.Seek.Focusable);                 // V11: no keys of its own
+
+            v.Player.RaiseOpened(seconds: 83);
+            Settle();
+            Assert.True(v.Seek.IsEnabled);
+            Assert.True(v.Seek.IsVisible);
+            Assert.Equal((0.0, 83.0), (v.Seek.Minimum, v.Seek.Maximum));
+            Assert.Equal("0:00 / 1:23", v.Time.Text);
+
+            v.Seek.Value = 30;                               // a click or a drag on the bar
+            Assert.Equal(TimeSpan.FromSeconds(30), v.Player.Position);
+            Assert.Equal("0:30 / 1:23", v.Time.Text);
+
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None); // plays
+            v.Player.PlayTo(45);
+            Assert.True(Sta.PumpUntil(() => v.Seek.Value == 45, Wait)); // the window's timer follows it
+            Assert.Equal("0:45 / 1:23", v.Time.Text);
+        });
+    }
+
+    [Fact]
+    public void ArrowKeys_StillMove_WithTheSeekBarShown()
+    {
+        WithQuickView(["v0.mp4", "p1.jpg"], v =>
+        {
+            v.Player.RaiseOpened(seconds: 83);
+            Settle();
+            Assert.True(v.Seek.IsVisible);
+
+            Assert.True(v.Window.QuickLookKey(Key.Right, ModifierKeys.None));
+
+            Assert.EndsWith("p1.jpg", v.Vm.QuickLookPath);
+            Assert.False(v.Seek.IsVisible);                 // a photo has no bar
+        });
     }
 
     [Fact]
@@ -182,11 +236,11 @@ public class QuickViewVideoTests
         WithQuickView(["v0.mp4"], v =>
         {
             Assert.True(v.Window.QuickLookKey(Key.Space, ModifierKeys.None));
-            Assert.Equal("pause", v.Player.LastPlayOrPause);
+            Assert.Equal("play", v.Player.LastPlayOrPause);
             Assert.True(v.Vm.QuickLookOpen);
 
             Assert.True(v.Window.QuickLookKey(Key.Space, ModifierKeys.None));
-            Assert.Equal("play", v.Player.LastPlayOrPause);
+            Assert.Equal("pause", v.Player.LastPlayOrPause);
             Assert.True(v.Vm.QuickLookOpen);
         });
     }
@@ -226,9 +280,9 @@ public class QuickViewVideoTests
             Settle();
 
             v.Window.QuickLookClick(v.Middle, clickCount: 1);
-            Assert.Equal("pause", v.Player.LastPlayOrPause);
-            v.Window.QuickLookClick(v.Middle, clickCount: 1);
             Assert.Equal("play", v.Player.LastPlayOrPause);
+            v.Window.QuickLookClick(v.Middle, clickCount: 1);
+            Assert.Equal("pause", v.Player.LastPlayOrPause);
             Assert.True(v.Vm.QuickLookOpen);
         }, still: Still16By9);
     }
@@ -243,7 +297,7 @@ public class QuickViewVideoTests
             v.Window.QuickLookClick(new Point(3, 3), clickCount: 1); // anywhere: there's nothing beside it yet
 
             Assert.True(v.Vm.QuickLookOpen);
-            Assert.Equal("pause", v.Player.LastPlayOrPause);
+            Assert.Equal("play", v.Player.LastPlayOrPause);
         });
     }
 
@@ -263,12 +317,16 @@ public class QuickViewVideoTests
     }
 
     [Fact]
-    public void TheVideosOwnFrame_IsTheVideo_OnceItHasOpened()
+    public void TheVideosOwnFrame_IsTheVideo_OnceItHasPlayed()
     {
-        // Review R1-B6: with no still, the whole area is the video until it opens; then its own (16:9) frame is.
+        // Review R1-B6: with no still, the whole area is the video until its own (16:9) frame shows; then that is.
         WithQuickView(["v0.mp4"], v =>
         {
             v.Player.RaiseOpened(1920, 1080);
+            Settle();
+            v.Window.QuickLookClick(new Point(v.Area.ActualWidth / 2, 3), clickCount: 1); // no frame yet: plays
+            Assert.Equal("play", v.Player.LastPlayOrPause);
+            Assert.True(v.Vm.QuickLookOpen);
             Settle();
 
             v.Window.QuickLookClick(v.Middle, clickCount: 1);
@@ -294,6 +352,8 @@ public class QuickViewVideoTests
     {
         WithQuickView(["v0.mp4"], v =>
         {
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None); // playing
+
             Assert.True(v.Window.QuickLookKey(Key.Enter, ModifierKeys.None));
 
             Assert.Equal([v.Path("v0.mp4")], v.Opened);
@@ -321,8 +381,7 @@ public class QuickViewVideoTests
     {
         WithQuickView(["v0.mp4"], v =>
         {
-            v.Window.QuickLookKey(Key.Space, ModifierKeys.None); // paused
-
+            // It opens paused (V9).
             v.Window.QuickLookClick(v.Middle, clickCount: 1);    // plays…
             v.Window.QuickLookClick(v.Middle, clickCount: 2);    // …and the double-click pauses it as it opens
 
@@ -353,10 +412,11 @@ public class QuickViewVideoTests
             var buttons = Descendants(v.Chrome).OfType<Button>().Where(b => b.IsVisible).ToList();
             var play = Assert.Single(buttons, b => b.Command == v.Window.Playback.ToggleCommand);
             var mute = Assert.Single(buttons, b => b.Command == v.Window.Playback.ToggleMuteCommand);
-            var volume = Assert.Single(Descendants(v.Chrome).OfType<Slider>(), s => s.IsVisible);
+            var volume = v.VolumeSlider;
+            Assert.True(volume.IsVisible);
 
             play.Command.Execute(null);
-            Assert.Equal("pause", v.Player.LastPlayOrPause);
+            Assert.Equal("play", v.Player.LastPlayOrPause);
             mute.Command.Execute(null);
             Assert.False(v.Player.IsMuted);
             volume.Value = 0.8;
@@ -471,6 +531,7 @@ public class QuickViewVideoTests
         WithQuickView(["v0.mp4"], v =>
         {
             var player = v.Player;
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None);
             Assert.Equal("play", player.LastPlayOrPause);
 
             release.Set();                                                   // the still decodes after it began to play
@@ -488,33 +549,38 @@ public class QuickViewVideoTests
     }
 
     [Fact]
-    public void VideoToVideo_WithoutStills_PlaysTheNewOne()
+    public void VideoToVideo_WithoutStills_ShowsTheNewOnePaused()
     {
         WithQuickView(["v0.mp4", "v1.mp4"], v =>
         {
             var first = v.Player;
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None); // the first plays
 
             v.Window.QuickLookKey(Key.Right, ModifierKeys.None);
 
             Assert.True(first.IsClosed);
             Assert.Equal(2, v.Players.Count);
             Assert.Equal(new Uri(v.Path("v1.mp4")), v.Player.Source);
-            Assert.Equal("play", v.Player.LastPlayOrPause);
+            Assert.Equal("pause", v.Player.LastPlayOrPause); // V9: moved to, it waits to be played
+            Assert.DoesNotContain("play", v.Player.Calls);
+            Assert.False(v.Window.Playback.IsPlaying);
         });
     }
 
     [Fact]
-    public void ReopeningOnTheSameVideo_PlaysItAgain()
+    public void ReopeningOnTheSameVideo_ShowsItPausedAgain()
     {
         WithQuickView(["v0.mp4"], v =>
         {
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None);
             v.Vm.CloseQuickLookCommand.Execute(null);
             v.Vm.OpenQuickLookCommand.Execute(null);
 
             Assert.Equal(2, v.Players.Count);
             Assert.True(v.Players[0].IsClosed);
             Assert.Equal(new Uri(v.Path("v0.mp4")), v.Player.Source);
-            Assert.Equal("play", v.Player.LastPlayOrPause);
+            Assert.Equal("pause", v.Player.LastPlayOrPause);
+            Assert.DoesNotContain("play", v.Player.Calls);
         });
     }
 

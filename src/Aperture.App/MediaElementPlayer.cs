@@ -21,6 +21,7 @@ public sealed class MediaElementPlayer : IVideoPlayer
         {
             LoadedBehavior = MediaState.Manual, // played and paused by quick view, not by being shown
             UnloadedBehavior = MediaState.Close,
+            ScrubbingEnabled = true,            // a seek while paused shows the frame there (0.9.2 V10)
             Stretch = Stretch.Uniform,
             IsHitTestVisible = false,           // quick view's area takes the clicks
             Focusable = false,
@@ -51,6 +52,14 @@ public sealed class MediaElementPlayer : IVideoPlayer
 
     public (int Width, int Height)? NaturalSize =>
         _element.NaturalVideoWidth > 0 ? (_element.NaturalVideoWidth, _element.NaturalVideoHeight) : null;
+
+    public TimeSpan Position
+    {
+        get => _element.Position;
+        set => _element.Position = value;
+    }
+
+    public TimeSpan? Duration => _element.NaturalDuration.HasTimeSpan ? _element.NaturalDuration.TimeSpan : null;
 
     public void Open(Uri source) => _element.Source = source;
 

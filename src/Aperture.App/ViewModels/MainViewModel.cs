@@ -155,6 +155,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
+        CopyShownFileCommand = new RelayCommand<TileVm>(t => PutFilesOnClipboard(OnDisk(t), cut: false));
+        CutShownFileCommand = new RelayCommand<TileVm>(t => PutFilesOnClipboard(OnDisk(t), cut: true));
         OpenContainingFolderCommand = new RelayCommand<TileVm>(OpenContainingFolder);
         CyclePreviewCommand = new RelayCommand(CyclePreview);
         ClosePreviewCommand = new RelayCommand(() => PreviewMode = PreviewMode.Off);
@@ -1119,6 +1121,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyImageCommand { get; }
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
+
+    /// <summary>Quick view's and the preview's Copy and Cut: the item shown alone, whatever else is selected (0.9.2 X1).</summary>
+    public ICommand CopyShownFileCommand { get; }
+
+    public ICommand CutShownFileCommand { get; }
     public ICommand OpenContainingFolderCommand { get; }
     public ICommand CyclePreviewCommand { get; }
     public ICommand ClosePreviewCommand { get; }
@@ -1490,19 +1497,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch { }
     }
 
-    private static void PutFileOnClipboard(TileVm? tile, bool cut)
+    /// <summary>Puts data on the clipboard (the PC's own; settable for tests only).</summary>
+    internal Action<System.Windows.IDataObject> SetClipboard { get; set; } =
+        data => System.Windows.Clipboard.SetDataObject(data, copy: true);
+
+    /// <summary>
+    /// The files an action on <paramref name="tile"/> is for (Cut, Copy, Move to…): the whole selection when the tile is
+    /// part of it (the keys pass the grid's current tile, one of the selection), that tile alone otherwise (a
+    /// right-click outside the selection). Files no longer on disk are left out (0.9.2 X1).
+    /// </summary>
+    private List<TileVm> ActionTargets(TileVm? tile)
     {
-        if (tile is null || !File.Exists(tile.FullPath))
+        if (tile is null)
+            return [];
+        IEnumerable<TileVm> targets = _selectedTiles.Contains(tile) ? _selectedTiles : [tile];
+        return [.. targets.Where(t => File.Exists(t.FullPath)).DistinctBy(t => t.FullPath, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private static List<TileVm> OnDisk(TileVm? tile) => tile is not null && File.Exists(tile.FullPath) ? [tile] : [];
+
+    private void PutFileOnClipboard(TileVm? tile, bool cut) => PutFilesOnClipboard(ActionTargets(tile), cut);
+
+    private void PutFilesOnClipboard(List<TileVm> targets, bool cut)
+    {
+        if (targets.Count == 0)
             return;
         try
         {
-            var files = new System.Collections.Specialized.StringCollection { tile.FullPath };
+            var files = new System.Collections.Specialized.StringCollection();
+            files.AddRange([.. targets.Select(t => t.FullPath)]);
             var data = new System.Windows.DataObject();
             data.SetFileDropList(files);
             // "Preferred DropEffect" DWORD: 2 = Move (cut), 5 = Copy — what Explorer reads.
             var effect = new byte[] { (byte)(cut ? 2 : 5), 0, 0, 0 };
             data.SetData("Preferred DropEffect", new MemoryStream(effect));
-            System.Windows.Clipboard.SetDataObject(data, copy: true);
+            SetClipboard(data);
         }
         catch { }
     }
@@ -2159,6 +2188,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library.SetAlias(rootVm.Id, alias);
         SortRoots();
         BuildTree();
+        SelectPath(_location.RootId, _location.RelDir); // the tree was rebuilt: where the user is, selected again (0.9.2 R1)
         RequestBuildView(); // captions reference {alias}
     }
 

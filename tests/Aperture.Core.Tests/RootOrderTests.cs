@@ -275,6 +275,78 @@ public class RootOrderTests
     }
 
     [Fact]
+    public void RenamingTheFolderYoureIn_KeepsItSelected()
+    {
+        // 0.9.2 R1 (carried from 0.9.1 as OOR-1, in 0.9.0 too): the tree was rebuilt and nothing re-selected.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Vm.NavigateToNode(f.Vm.FolderTree.Single(n => n.Name == "Beta"));
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsLoadingView, Wait));
+
+            f.Vm.Roots.Single(r => r.Id == f.Ids["Beta"]).Alias = "Delta";
+
+            Assert.Equal("alpha, Delta, Gamma", f.Tree());
+            var node = f.Vm.FolderTree.Single(n => n.Name == "Delta");
+            Assert.True(node.IsSelected);
+            Assert.Single(f.Vm.FolderTree, n => n.IsSelected);
+            Assert.Equal($"{f.Ids["Beta"]}|", f.Vm.LocationKey);
+        });
+    }
+
+    [Fact]
+    public void RenamingTheFolderAboveTheOneYoureIn_KeepsYoursSelected()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            TestImages.Write(Path.Combine(f.Photos.Path, "Beta", "Trip", "t.jpg"), 32, 24);
+            f.Library.IndexRoot(f.Library.GetRoots().Single(r => r.Alias == "Beta"));
+            f.Reopen();
+            var beta = f.Vm.FolderTree.Single(n => n.Name == "Beta");
+            beta.IsExpanded = true;
+            f.Vm.NavigateToNode(beta.Children.Single(c => c.Name == "Trip"));
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsLoadingView, Wait));
+
+            f.Vm.Roots.Single(r => r.Id == f.Ids["Beta"]).Alias = "Delta";
+
+            var trip = f.Vm.FolderTree.Single(n => n.Name == "Delta").Children.Single(c => c.Name == "Trip");
+            Assert.True(trip.IsSelected);
+        });
+    }
+
+    [Fact]
+    public void RenamingAnotherFolder_LeavesYoursSelected()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Vm.NavigateToNode(f.Vm.FolderTree.Single(n => n.Name == "Beta"));
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsLoadingView, Wait));
+
+            f.Vm.Roots.Single(r => r.Id == f.Ids["Gamma"]).Alias = "Aardvark";
+
+            Assert.Equal("Aardvark, alpha, Beta", f.Tree());
+            Assert.True(f.Vm.FolderTree.Single(n => n.Name == "Beta").IsSelected);
+            Assert.Single(f.Vm.FolderTree, n => n.IsSelected);
+        });
+    }
+
+    [Fact]
+    public void RenamingAFolder_InEverything_SelectsNone()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(); // opens on Everything
+
+            f.Vm.Roots.Single(r => r.Id == f.Ids["Beta"]).Alias = "Delta";
+
+            Assert.DoesNotContain(f.Vm.FolderTree, n => n.IsSelected);
+            Assert.True(f.Vm.IsHome);
+        });
+    }
+
+    [Fact]
     public void AnExpandedFolder_StaysExpanded()
     {
         Sta.Run(() =>

@@ -5,9 +5,9 @@ using Aperture.Core.Tests.Support;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// Quick view's video playback, as a model over a player (0.9.1 batch, items 1–2): it plays a video as it's shown,
-/// muted the first time ever and as the last one was left after that; Space or a click plays and pauses it; one player
-/// per visit, and what a player left behind says changes nothing.
+/// Quick view's video playback, as a model over a player (0.9.1 batch, items 1–2; 0.9.2 V9–V10): it opens a video paused
+/// as it's shown, muted the first time ever and as the last one was left after that; Space or a click plays and pauses
+/// it; a seek bar and a time follow it; one player per visit, and what a player left behind says changes nothing.
 /// </summary>
 public class VideoPlaybackTests
 {
@@ -22,7 +22,7 @@ public class VideoPlaybackTests
     });
 
     [Fact]
-    public void TheFirstVideoEver_StartsMuted_AndPlays()
+    public void TheFirstVideoEver_StartsMuted_AndOpensPaused()
     {
         var playback = Playback();
 
@@ -31,12 +31,294 @@ public class VideoPlaybackTests
         var player = Assert.Single(_players);
         Assert.Equal(new Uri(@"C:\v\a.mp4"), player.Source);
         Assert.Equal((true, 0.5), (player.IsMuted, player.Volume));
-        Assert.Equal("play", player.LastPlayOrPause);
+        Assert.Equal("pause", player.LastPlayOrPause);
         Assert.True(playback.IsVideoShown);
-        Assert.True(playback.IsPlaying);
+        Assert.False(playback.IsPlaying);
         Assert.True(playback.IsMuted);
         Assert.Equal(0.5, playback.Volume);
         Assert.False(playback.IsReady);
+    }
+
+    [Fact]
+    public void Show_OpensPaused_AndDoesNotPlay()
+    {
+        // 0.9.2 V9 (Paul: "only on click on the play button or spacebar"): opened, and paused so it opens, never played.
+        var playback = Playback();
+
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened();
+
+        Assert.Equal(["open", "pause"], _players[0].Calls);
+        Assert.False(playback.IsPlaying);
+        Assert.True(playback.IsReady);
+        Assert.False(playback.ShowsFrame); // the still stays until it's played or moved along
+        Assert.Equal("", playback.StatusLine);
+        Assert.True(playback.SpaceToggles);
+    }
+
+    [Fact]
+    public void Playing_ShowsItsOwnFrame()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened();
+
+        playback.Toggle();
+
+        Assert.True(playback.IsPlaying);
+        Assert.Equal("play", _players[0].LastPlayOrPause);
+        Assert.True(playback.ShowsFrame);
+        playback.Toggle();                // paused again: its frame stays (it's where it was stopped)
+        Assert.True(playback.ShowsFrame);
+    }
+
+    [Fact]
+    public void PlayedBeforeItOpens_ItsFrameShows_OnceItHas()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+
+        playback.Toggle();
+        Assert.True(playback.IsPlaying);
+        Assert.False(playback.ShowsFrame); // nothing to show yet
+
+        _players[0].RaiseOpened();
+        Assert.True(playback.ShowsFrame);
+        Assert.True(playback.IsPlaying);
+    }
+
+    [Fact]
+    public void BeforeItOpens_TheBarIsOff_AndTheTimeUnknown()
+    {
+        var playback = Playback();
+
+        playback.Show(@"C:\v\a.mp4");
+
+        Assert.False(playback.CanSeek);
+        Assert.Equal("0:00 / –:––", playback.TimeText);
+        playback.PositionSeconds = 10; // no seek before it has opened
+        Assert.DoesNotContain(_players[0].Calls, c => c.StartsWith("seek:"));
+        Assert.Equal(0, playback.PositionSeconds);
+    }
+
+    [Fact]
+    public void Opened_SetsTheLength_AndTheTime()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+
+        _players[0].RaiseOpened(seconds: 83);
+
+        Assert.True(playback.CanSeek);
+        Assert.Equal(83, playback.DurationSeconds);
+        Assert.Equal(0, playback.PositionSeconds);
+        Assert.Equal("0:00 / 1:23", playback.TimeText);
+    }
+
+    [Fact]
+    public void Seek_MovesThePlayer_AndTheTime_AndShowsTheFrameThere()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        playback.PositionSeconds = 30; // as the seek bar sets it
+
+        Assert.Equal("seek:30", _players[0].Calls[^1]);
+        Assert.Equal(TimeSpan.FromSeconds(30), _players[0].Position);
+        Assert.Equal(30, playback.PositionSeconds);
+        Assert.Equal("0:30 / 1:23", playback.TimeText);
+        Assert.False(playback.IsPlaying); // a seek doesn't play
+        Assert.True(playback.ShowsFrame); // a paused video shows the frame there
+    }
+
+    [Theory]
+    [InlineData(-5, 0)]
+    [InlineData(999, 83)]
+    [InlineData(41.5, 41.5)]
+    public void Seek_IsClamped(double asked, double at)
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        playback.Seek(asked);
+
+        Assert.Equal(at, playback.PositionSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(at), _players[0].Position);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void Seek_ToNotANumber_DoesNothing(double asked)
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        playback.Seek(asked);
+
+        Assert.DoesNotContain(_players[0].Calls, c => c.StartsWith("seek:"));
+        Assert.Equal(0, playback.PositionSeconds);
+    }
+
+    [Fact]
+    public void Seek_AfterTheEnd_PlaysFromThere()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+        _players[0].PlayTo(83);
+        _players[0].RaiseEnded();
+        Assert.Equal(83, playback.PositionSeconds); // the bar at the end
+
+        playback.Seek(10);
+        playback.Toggle();
+
+        Assert.DoesNotContain("rewind", _players[0].Calls);
+        Assert.Equal(["seek:10", "play"], _players[0].Calls.TakeLast(2));
+    }
+
+    [Fact]
+    public void Ended_PausesThePlayer()
+    {
+        // 0.9.2 V12: a Manual MediaElement stays "playing" after its end; a seek back would set it going again.
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+
+        _players[0].RaiseEnded();
+        playback.Seek(20);
+
+        Assert.Equal("pause", _players[0].LastPlayOrPause);
+        Assert.False(playback.IsPlaying);
+        Assert.Equal(["pause", "seek:20"], _players[0].Calls.TakeLast(2));
+    }
+
+    [Fact]
+    public void Seek_ToTheEnd_ThenPlay_StartsAgain()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        playback.Seek(83);
+        playback.Toggle();
+
+        Assert.Equal(["rewind", "play"], _players[0].Calls.TakeLast(2));
+        Assert.Equal(0, playback.PositionSeconds);
+    }
+
+    [Fact]
+    public void Tick_FollowsThePlayer()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+        var changed = new List<string?>();
+        playback.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        _players[0].PlayTo(12.9);
+        playback.Tick();
+
+        Assert.Equal(12.9, playback.PositionSeconds, 3);
+        Assert.Equal("0:12 / 1:23", playback.TimeText);
+        Assert.Contains(nameof(VideoPlayback.PositionSeconds), changed);
+        Assert.Contains(nameof(VideoPlayback.TimeText), changed);
+        Assert.DoesNotContain(_players[0].Calls, c => c.StartsWith("seek:")); // following it isn't seeking it
+    }
+
+    [Fact]
+    public void WhileTheBarIsDragged_ItFollowsTheDrag_NotThePlayer()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+
+        playback.BeginScrub();
+        playback.PositionSeconds = 40;   // the drag moves the video…
+        _players[0].PlayTo(41);          // …which plays on a little
+        playback.Tick();
+        Assert.Equal(40, playback.PositionSeconds); // the bar stays under the pointer
+        Assert.Equal("seek:40", _players[0].Calls.Last(c => c.StartsWith("seek:")));
+
+        playback.EndScrub();
+        playback.Tick();
+        Assert.Equal(41, playback.PositionSeconds); // and follows the player again
+    }
+
+    [Fact]
+    public void ALengthItCantTell_LeavesTheBarOff_AndTheTimeAlone()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: null);
+        playback.Toggle();
+
+        _players[0].PlayTo(5);
+        playback.Tick();
+
+        Assert.False(playback.CanSeek);
+        Assert.Equal("0:05", playback.TimeText);
+        playback.Seek(1);
+        Assert.DoesNotContain(_players[0].Calls, c => c.StartsWith("seek:"));
+    }
+
+    [Fact]
+    public void ALengthToldLate_IsTakenOnTheNextTick()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: null);
+
+        _players[0].Duration = TimeSpan.FromSeconds(60);
+        playback.Tick();
+
+        Assert.True(playback.CanSeek);
+        Assert.Equal(60, playback.DurationSeconds);
+        Assert.Equal("0:00 / 1:00", playback.TimeText);
+    }
+
+    [Fact]
+    public void Leaving_ForgetsWhereItWas()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Seek(30);
+
+        playback.Leave();
+
+        Assert.False(playback.CanSeek);
+        Assert.False(playback.ShowsFrame);
+        Assert.Equal((0.0, 0.0), (playback.PositionSeconds, playback.DurationSeconds));
+        Assert.Equal("", playback.TimeText);
+        playback.Tick();       // nothing shown: harmless
+        playback.Seek(5);
+        playback.BeginScrub();
+        playback.EndScrub();
+        Assert.Equal(0, playback.PositionSeconds);
+    }
+
+    [Fact]
+    public void AVideoThatFails_HasNoBar()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        _players[0].RaiseFailed();
+
+        Assert.False(playback.CanSeek);
+        Assert.False(playback.ShowsFrame);
+        playback.Tick();
+        playback.Seek(5);
+        Assert.Equal(0, playback.PositionSeconds);
     }
 
     [Fact]
@@ -104,19 +386,19 @@ public class VideoPlaybackTests
     }
 
     [Fact]
-    public void Toggle_PausesAndPlays()
+    public void Toggle_PlaysAndPauses()
     {
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
         _players[0].RaiseOpened();
 
         playback.Toggle();
-        Assert.False(playback.IsPlaying);
-        Assert.Equal("pause", _players[0].LastPlayOrPause);
-
-        playback.ToggleCommand.Execute(null);
         Assert.True(playback.IsPlaying);
         Assert.Equal("play", _players[0].LastPlayOrPause);
+
+        playback.ToggleCommand.Execute(null);
+        Assert.False(playback.IsPlaying);
+        Assert.Equal("pause", _players[0].LastPlayOrPause);
     }
 
     [Fact]
@@ -125,12 +407,14 @@ public class VideoPlaybackTests
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
 
-        playback.Toggle();                // paused before it has opened…
+        playback.Toggle();                // played before it has opened…
+        playback.Toggle();                // …and paused again
+        playback.Toggle();                // …and played
         _players[0].RaiseOpened(640, 360);
 
         Assert.True(playback.IsReady);
-        Assert.False(playback.IsPlaying); // …and it stays paused once it has
-        Assert.Equal("pause", _players[0].LastPlayOrPause);
+        Assert.True(playback.IsPlaying);  // …so it plays once it has
+        Assert.Equal("play", _players[0].LastPlayOrPause);
         Assert.Equal((640, 360), playback.NaturalSize);
     }
 
@@ -202,12 +486,14 @@ public class VideoPlaybackTests
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
         playback.Show(@"C:\v\b.mp4");
+        playback.Toggle(); // b plays
 
         _players[0].RaiseOpened();
         _players[0].RaiseEnded();
         _players[0].RaiseFailed();
 
         Assert.False(playback.IsReady);
+        Assert.False(playback.CanSeek);
         Assert.True(playback.IsPlaying);
         Assert.False(playback.HasFailed);
         Assert.False(_players[1].IsClosed);
@@ -282,6 +568,7 @@ public class VideoPlaybackTests
     {
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
+        playback.Toggle(); // playing
 
         playback.Pause();
         playback.Pause();
@@ -324,11 +611,14 @@ public class VideoPlaybackTests
         playback.Toggle();
         playback.ToggleMute();
         playback.SetVolume(0.7);
+        playback.Seek(3);
 
         foreach (var name in new[]
                  {
                      nameof(VideoPlayback.IsVideoShown), nameof(VideoPlayback.IsReady), nameof(VideoPlayback.IsPlaying),
                      nameof(VideoPlayback.IsMuted), nameof(VideoPlayback.Volume), nameof(VideoPlayback.StatusLine),
+                     nameof(VideoPlayback.ShowsFrame), nameof(VideoPlayback.CanSeek), nameof(VideoPlayback.DurationSeconds),
+                     nameof(VideoPlayback.PositionSeconds), nameof(VideoPlayback.TimeText),
                  })
             Assert.Contains(name, changed);
     }

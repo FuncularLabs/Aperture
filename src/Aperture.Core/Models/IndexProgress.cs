@@ -25,6 +25,9 @@ public sealed class IndexProgress
     /// </summary>
     public int OnlineOnly { get; init; }
 
+    /// <summary>The online-only files are read after every other file (the user's answer: in the background).</summary>
+    public bool OnlineOnlyLast { get; init; }
+
     public string? CurrentFile { get; init; }
 
     /// <summary>
@@ -43,6 +46,9 @@ public sealed class IndexResult
     public int Removed { get; init; }
     public int ThumbnailsGenerated { get; init; }
     public int Failed { get; init; }
+
+    /// <summary>Online-only files the run left alone (not read) because the user said to skip them.</summary>
+    public int SkippedOnlineOnly { get; init; }
 
     public int TotalOnDisk => Added + Updated + Skipped;
 }
