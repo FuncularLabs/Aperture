@@ -1174,7 +1174,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         bool indexing;
         lock (_indexLock)
-            indexing = _activeIndexers > 0;
+            indexing = _activeIndexers > 0 || _runEndsPending > 0; // as IsIndexing: "up to date" only once caught up (R4-3)
 
         if (indexing)
             SyncStatus = string.IsNullOrEmpty(IndexingText) ? "Indexing…" : IndexingText;
@@ -2773,7 +2773,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var run = 0;
         RunOnUi(() =>
         {
-            run = _indexRuns.Start(root.Id); // posted ahead of the run's reports when called off the UI thread
+            run = _indexRuns.Start(root.Id); // posted (or run) ahead of the run's first report, which is posted after it
             if (Roots.FirstOrDefault(r => r.Id == root.Id) is { } vm)
             {
                 vm.IsIndexing = true;
@@ -2806,7 +2806,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             lock (_indexLock)
             {
                 _activeIndexers--;
-                _runEndsPending++; // in the same step: no report in between finds nothing indexing (review R3-8)
+                _runEndsPending++; // in the same step: a report still on its way finds the run ending, not gone (R3-8)
                 _indexCts.Remove(root.Id);
                 paused = canceled && _pausedRoots.Contains(root.Id);
                 cts.Dispose(); // inside the lock — StopIndex cancels under it (see StopIndex)

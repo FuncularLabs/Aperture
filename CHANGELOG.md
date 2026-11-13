@@ -32,6 +32,9 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   than once for every folder shown.
 
 ### Fixed
+- **The folder tree keeps folders open.** In a new library, opening a subfolder (or closing one
+  top-level folder) no longer closes the top-level folders it had opened by default the next
+  time the tree is refreshed.
 - **Every library shows its count.** A library you aren't in showed no count until it had been
   open and left; each one's count is now read from its own files when the list is shown.
 - A background read could meet a change you were making (removing a folder, saving tags) and

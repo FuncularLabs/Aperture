@@ -83,8 +83,8 @@ public class IndexingResponsivenessTests
         }
     }
 
-    // A fresh library opens its top-level folders without remembering it (a rebuild then restores only the folders the
-    // user expanded), so the tests expand it as the user would: one that was closed, opened.
+    // A fresh library opens its top-level folders by default; the tests that need a folder's expansion remembered expand
+    // it as the user would: one that was closed, opened.
     private static void ExpandAsTheUserDoes(FolderNodeVm node)
     {
         node.IsExpanded = false;
@@ -746,9 +746,10 @@ public class IndexingResponsivenessTests
         Sta.Run(() =>
         {
             using var f = new Fixture(Photos(2));
+            var applied = 0;
+            f.Vm.ViewApplied += () => applied++;
             f.Vm.ShowVideos = !f.Vm.ShowVideos; // the user's change: loud
-            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(600)); // it lands
-            Assert.False(f.Vm.IsLoadingView);
+            Assert.True(Sta.PumpUntil(() => applied >= 1 && !f.Vm.IsLoadingView, Wait)); // it lands
             var shown = 0;
             f.Vm.PropertyChanged += (_, e) =>
             {
@@ -756,9 +757,9 @@ public class IndexingResponsivenessTests
                     shown++;
             };
 
+            var before = applied;
             f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null); // a background refresh afterwards
-            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
-            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(600));
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted && applied > before && !f.Vm.IsLoadingView, Wait));
 
             Assert.Equal(0, shown);
         });
@@ -795,6 +796,9 @@ public class IndexingResponsivenessTests
             Assert.True(Sta.PumpUntil(() => holding.IsSet, Wait));
             f.Vm.AddFolder(Path.Combine(f.Photos.Path, "second"), includeSubfolders: true);
             Assert.True(Sta.PumpUntil(() => maxes.Contains(330.0), Wait), "maxes: " + string.Join(",", maxes.Distinct()));
+            var second = f.Vm.Roots.Single(r => r.Alias == "second");
+            Assert.True(Sta.PumpUntil(() => !second.IsIndexing, Wait));
+            Assert.Equal(300.0, f.Vm.IndexMax); // the second's run has ended: the bar is the first folder's alone (R4-1)
             release.Set();
             Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(120)));
 
@@ -870,25 +874,57 @@ public class IndexingResponsivenessTests
     [Fact]
     public void TheWindow_SaysIndexingOnce_FromARunsStartToItsRefresh()
     {
-        // Review R3-8: a run's count of runs indexing dropped on its own thread before its end reached the window, so a
-        // report still queued then found nothing indexing — the bar swept early and "indexing" went off and back on.
+        // Review R3-8, R4-2: a run's last report reaches the window in two hops (Progress posts it, and the view model posts
+        // it on again), so it can be handled after the run's own end, which counted it out of "indexing" before its
+        // refresh had landed: the bar swept early and "indexing" went off and back on. This makes that order happen: the
+        // window is kept busy as the run's last report is posted, until the run's task has completed. And all the while
+        // the top bar's pill never says "up to date" (review R4-3).
         Sta.Run(() =>
         {
-            using var f = new Fixture();
+            using var f = new Fixture(Photos(3)); // rows already shown: the pill has a count to call "up to date"
             var folder = Path.Combine(f.Photos.Path, "new");
-            foreach (var file in Photos(600))
+            foreach (var file in Photos(30))
                 TestImages.Write(Path.Combine(folder, file), 32, 24);
+            f.Library.WrapIndexProgress = (_, progress) =>
+                progress is null ? null : new BusyWindowAtTheEnd(progress, Dispatcher.CurrentDispatcher);
             var changes = new List<bool>();
+            var stalePills = new List<string>();
             f.Vm.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(MainViewModel.IsIndexing))
                     changes.Add(f.Vm.IsIndexing);
+                if (e.PropertyName == nameof(MainViewModel.SyncStatus) && f.Vm.IsIndexing && f.Vm.SyncStatus.Contains("up to date"))
+                    stalePills.Add(f.Vm.SyncStatus);
             };
 
             f.Vm.AddFolder(folder, includeSubfolders: true);
-            Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(120)));
+            Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(60)));
 
             Assert.Equal([true, false], changes);
+            Assert.Empty(stalePills);
+            Assert.Equal(33, f.Vm.TotalItemCount);
         });
+    }
+
+    // Hands a run's reports on; at its last one, keeps the window busy (a dispatcher operation that waits) from just before
+    // the report is posted until a moment after, when the run's task has completed and its end is queued behind it.
+    private sealed class BusyWindowAtTheEnd(IProgress<IndexProgress> inner, Dispatcher window) : IProgress<IndexProgress>
+    {
+        public void Report(IndexProgress value)
+        {
+            if (value.Phase != IndexPhase.Done)
+            {
+                inner.Report(value);
+                return;
+            }
+            var release = new ManualResetEventSlim();
+            window.BeginInvoke(() => release.Wait(TimeSpan.FromSeconds(5)));
+            inner.Report(value);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300); // the run returns at once after its last report: its end is queued by then
+                release.Set();
+            });
+        }
     }
 }
