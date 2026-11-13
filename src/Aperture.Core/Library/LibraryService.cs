@@ -425,6 +425,7 @@ public sealed class LibraryService : IDisposable
             IndexStarting?.Invoke(root);
 
             var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, ct);
+            progress = WrapIndexProgress?.Invoke(root, progress) ?? progress;
             // The token is observed inside IndexRoot (per-file + per-batch); it is deliberately NOT passed
             // to Task.Run, so the delegate always runs its finally and disposes the linked source — a
             // pre-cancelled Task.Run would skip the body and leak it.
@@ -554,6 +555,9 @@ public sealed class LibraryService : IDisposable
             _watchers.Clear();
         }
     }
+
+    /// <summary>Test seam: wraps the progress a run of <see cref="IndexRootAsync"/> reports to (to hold the run).</summary>
+    internal Func<Root, IProgress<IndexProgress>?, IProgress<IndexProgress>?>? WrapIndexProgress { get; set; }
 
     /// <summary>Test seam: runs as <see cref="IndexRootAsync"/> starts an index of a root, on the caller's thread.</summary>
     internal Action<Root>? IndexStarting { get; set; }

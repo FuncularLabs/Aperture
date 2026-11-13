@@ -87,7 +87,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _loudBuildPending; // a user's change asked for a grid build that hasn't landed yet
 
     // The refresh worker (0.9.1 plan, I1–I3), UI thread only: what's been asked for since it last took its work, and
-    // whether it's running. _runEndsPending: runs that have ended whose refresh hasn't landed (still "indexing" till then).
+    // whether it's running. _runEndsPending: runs that have ended whose refresh hasn't landed (still "indexing" till then);
+    // guarded by _indexLock with _activeIndexers, as a run moves from one to the other in one step (review R3-8).
     private bool _refreshRows;
     private bool _refreshTree;
     private readonly HashSet<long> _refreshCounts = [];
@@ -218,7 +219,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             // animates for most of the wait and the tiles appear as soon as possible.
             var inputs = CaptureBuildInputs();
             ViewBuild build;
-            try { build = await Task.Run(() => ComputeView(inputs)); }
+            try
+            {
+                build = await Task.Run(() =>
+                {
+                    ComputingStartupView?.Invoke();
+                    return ComputeView(inputs);
+                });
+            }
             catch (OperationCanceledException) { return; }
             if (_closing)
                 return;
@@ -231,10 +239,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         // The folder tree fills in afterward; it doesn't gate seeing the photos. Built even when a data-change rebuild
         // superseded startup's grid (before or during its compute), and from the rows shown now, whatever built a tree
-        // before them (a folder added while startup read, say): reviews R1-A3, R2-3, R2-5. It keeps the user's place.
+        // before them (a folder added while startup read, say): reviews R1-A3, R2-3, R2-5. It keeps the user's place:
+        // the selection (SelectDefaultNode follows the location) and what's expanded (RestoreExpansion).
         BuildTree();
         SelectDefaultNode();
     }
+
+    /// <summary>Test seam: runs inside startup's grid compute, off the UI thread, before it computes.</summary>
+    internal Action? ComputingStartupView { get; set; }
 
     private void LoadAnnotations()
     {
@@ -2272,7 +2284,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// ApplyView is posted at Background (below Input) so queued tree arrows drain
     /// first. The existing Loading… spinner covers a slow rebuild after the tree node
     /// has already moved; a <paramref name="quiet"/> one (a background refresh's, while folders are
-    /// indexed) shows none: the tiles the user is looking at are still right, just not all of them yet.
+    /// indexed) shows none of its own — the tiles the user is looking at are still right, just not all of
+    /// them yet — unless it takes over a user's request that hasn't landed (review R2-6), which still does.
     /// </summary>
     private async void RequestBuildView(bool quiet = false)
     {
@@ -2539,7 +2552,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_restoringExpansion)
             return;
-        _expandedFolders ??= [];
+        // The first change the user makes: remember the folders the tree opened by default too, or the next rebuild would
+        // open only what the user did (review R3-6: a subfolder opened inside a default-open folder, then that folder shut).
+        _expandedFolders ??= [.. FolderTree.Where(n => n.IsExpanded && !ReferenceEquals(n, node)).Select(n => n.Key)];
         if (expanded)
             _expandedFolders.Add(node.Key);
         else
@@ -2791,6 +2806,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             lock (_indexLock)
             {
                 _activeIndexers--;
+                _runEndsPending++; // in the same step: no report in between finds nothing indexing (review R3-8)
                 _indexCts.Remove(root.Id);
                 paused = canceled && _pausedRoots.Contains(root.Id);
                 cts.Dispose(); // inside the lock — StopIndex cancels under it (see StopIndex)
@@ -2818,7 +2834,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 var removed = result?.Removed ?? 0;
                 var dataChanged = streaming || canceled || added + (result?.Updated ?? 0) + removed > 0;
                 var foldersShifted = streaming || canceled || added + removed > 0; // folders shift when items come or go
-                _runEndsPending++;
                 RequestRefresh(rows: dataChanged, tree: foldersShifted, countRoot: root.Id, runEnd: true);
                 UpdateIndexingText();
             });
@@ -2878,7 +2893,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
                 if (runEnds > 0)
                 {
-                    _runEndsPending = Math.Max(0, _runEndsPending - runEnds);
+                    lock (_indexLock)
+                        _runEndsPending = Math.Max(0, _runEndsPending - runEnds);
                     UpdateIndexingText();
                 }
             }
@@ -3042,15 +3058,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         rootVm.Status = IndexingMessage.RootStatus(p);
         _indexRuns.Report(run, p); // dropped once the run has ended: a report posted late mustn't bring it back
 
-        // Drive the progress bars from every folder being indexed: the files done over the files to do, in all of them,
-        // and moving while any is counting (review R2-7: it followed whichever folder reported last).
-        var (indeterminate, value, max) = _indexRuns.Bar();
-        IndexIndeterminate = indeterminate;
-        if (!indeterminate)
-        {
-            IndexMax = max;
-            IndexValue = value;
-        }
 
         // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done. At most
         // once an interval, though: each read counts the whole folder, and a run that changes nothing reports its batches
@@ -3087,14 +3094,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateIndexingText()
     {
-        int active;
+        int active, ending;
         lock (_indexLock)
         {
             active = _activeIndexers;
+            ending = _runEndsPending;
         }
 
         // Still "indexing" until each ended run's refresh has landed: the grid and the counts catch up first.
-        IsIndexing = active > 0 || _runEndsPending > 0;
+        IsIndexing = active > 0 || ending > 0;
 
         if (!IsIndexing)
         {
@@ -3108,7 +3116,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         if (_indexRuns.Count > 0) // else every run has ended, its refresh still to land: the lines stay as they were
+        {
             (IndexingText, IndexingNote) = _indexRuns.Lines(id => Roots.FirstOrDefault(r => r.Id == id)?.Alias ?? "");
+            // The bars, from every folder being indexed: the files done over the files to do in all of them, moving while
+            // any is counting (review R2-7); here, so a run's end counts too (R3-7), not only the next report.
+            var (indeterminate, value, max) = _indexRuns.Bar();
+            IndexIndeterminate = indeterminate;
+            if (!indeterminate)
+            {
+                IndexMax = max;
+                IndexValue = value;
+            }
+        }
         UpdateSyncStatus();
     }
 

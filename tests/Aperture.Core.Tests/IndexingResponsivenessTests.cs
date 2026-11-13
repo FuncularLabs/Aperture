@@ -2,6 +2,7 @@ using System.Windows.Threading;
 using Aperture.App.Services;
 using Aperture.App.ViewModels;
 using Aperture.Core.Library;
+using Aperture.Core.Models;
 using Aperture.Core.Tests.Support;
 
 namespace Aperture.Core.Tests;
@@ -625,7 +626,10 @@ public class IndexingResponsivenessTests
             vm.ResumeRootIndexCommand.Execute(vm.Roots.Single()); // a run whose end's refresh is held
             Assert.True(Sta.PumpUntil(() => heldRefresh.IsSet, Wait));
             releaseStartup.Set();
-            Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3, Wait)); // the startup read lands first
+            // The startup read lands first, and startup finishes (its tree built from its rows), so only the refresh
+            // read again can bring the new folder into the tree (review round 3's sweep: startup's own tree hid it).
+            Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3 && vm.FolderTree.Count == 1 && !vm.IsLoadingView, Wait));
+            Assert.DoesNotContain("New", vm.FolderTree.Single().Children.Select(c => c.Name));
             releaseRefresh.Set();
 
             Assert.True(Sta.PumpUntil(() => !vm.IsIndexing && vm.RefreshIdle.IsCompleted && vm.TotalItemCount == 4, Wait),
@@ -716,6 +720,175 @@ public class IndexingResponsivenessTests
 
             Assert.Equal(1, shown);
             Assert.False(f.Vm.IsLoadingView);
+        });
+    }
+
+    // --- Review round 3 -----------------------------------------------------------------------------------------------
+
+    // Hands a run's reports on, and holds the run (on its own thread) after its first "Indexing" one until released.
+    private sealed class HoldAfterTheCount(IProgress<IndexProgress> inner, ManualResetEventSlim holding, ManualResetEventSlim release)
+        : IProgress<IndexProgress>
+    {
+        public void Report(IndexProgress value)
+        {
+            inner.Report(value);
+            if (value.Phase != IndexPhase.Indexing || holding.IsSet)
+                return;
+            holding.Set();
+            release.Wait(TimeSpan.FromSeconds(20));
+        }
+    }
+
+    [Fact]
+    public void ALaterRefresh_IsQuietAgain_OnceAUsersChangeHasLanded()
+    {
+        // Review R3-1 (the reviewer's probe): the user's change keeps "Loading…" wanted only until its build lands.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(2));
+            f.Vm.ShowVideos = !f.Vm.ShowVideos; // the user's change: loud
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(600)); // it lands
+            Assert.False(f.Vm.IsLoadingView);
+            var shown = 0;
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.IsLoadingView) && f.Vm.IsLoadingView)
+                    shown++;
+            };
+
+            f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null); // a background refresh afterwards
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(600));
+
+            Assert.Equal(0, shown);
+        });
+    }
+
+    [Fact]
+    public void TwoFoldersIndexedAtOnce_TheBarAddsThemUp()
+    {
+        // Review R3-2 (the reviewer's probe): the window's bar is both folders' files while both are indexed.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            var maxes = new List<double>();
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.IndexMax))
+                    maxes.Add(f.Vm.IndexMax);
+            };
+            foreach (var (name, count) in new[] { ("first", 300), ("second", 30) })
+            {
+                var folder = Path.Combine(f.Photos.Path, name);
+                foreach (var file in Photos(count))
+                    TestImages.Write(Path.Combine(folder, file), 32, 24);
+            }
+            // The first folder's run waits once it has said how many files it has (before it writes anything), so the
+            // second is indexed while the first is too: the two runs' database writes would otherwise take turns.
+            var holding = new ManualResetEventSlim();
+            var release = new ManualResetEventSlim();
+            f.Library.WrapIndexProgress = (root, progress) => root.Alias != "first" || progress is null
+                ? progress
+                : new HoldAfterTheCount(progress, holding, release);
+
+            f.Vm.AddFolder(Path.Combine(f.Photos.Path, "first"), includeSubfolders: true);
+            Assert.True(Sta.PumpUntil(() => holding.IsSet, Wait));
+            f.Vm.AddFolder(Path.Combine(f.Photos.Path, "second"), includeSubfolders: true);
+            Assert.True(Sta.PumpUntil(() => maxes.Contains(330.0), Wait), "maxes: " + string.Join(",", maxes.Distinct()));
+            release.Set();
+            Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(120)));
+
+            Assert.Equal(330, f.Vm.TotalItemCount);
+        });
+    }
+
+    [Fact]
+    public void TheStartupTree_IsBuilt_WhenARefreshLandsDuringItsGridCompute()
+    {
+        // Review R3-3: startup's other overtaken case (a refresh landing while it computes its grid).
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var folder = new TempDir();
+            foreach (var file in Photos(3))
+                TestImages.Write(Path.Combine(folder.Path, file), 32, 24);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(folder.Path, "Photos"));
+            var computing = new ManualResetEventSlim();
+            var release = new ManualResetEventSlim();
+            var vm = new MainViewModel(library, new ThumbnailService(library))
+            {
+                StartupReconcileDelay = TimeSpan.FromHours(1),
+                ComputingStartupView = () =>
+                {
+                    computing.Set();
+                    release.Wait(TimeSpan.FromSeconds(10));
+                },
+            };
+            try
+            {
+                Assert.True(Sta.PumpUntil(() => computing.IsSet, Wait)); // startup reaches its compute through this thread
+                vm.RequestRefresh(rows: true, tree: false, countRoot: null); // lands while startup computes its grid
+                Assert.True(Sta.PumpUntil(() => vm.RefreshIdle.IsCompleted, Wait));
+                release.Set();
+
+                Assert.True(Sta.PumpUntil(() => vm.FolderTree.Count == 1 && !vm.IsLoadingView, Wait),
+                    $"the tree was never built: {vm.FolderTree.Count} nodes, loading {vm.IsLoadingView}, rows {vm.TotalItemCount}");
+            }
+            finally
+            {
+                release.Set();
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void AFreshLibrary_KeepsTheFoldersItOpenedByDefault_WhenTheUserExpandsASubfolder()
+    {
+        // Review R3-6 (and the quirk the 0.9.1 batch's report names): a fresh library opens its top-level folders without
+        // remembering it, so the first subfolder the user opened was remembered alone, and the next rebuild of the tree
+        // closed the folder around it.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(1, @"Trip\Day")]);
+            var root = f.Vm.FolderTree.Single();
+            Assert.True(root.IsExpanded); // open by default
+
+            root.Children.Single(c => c.Name == "Trip").IsExpanded = true; // the user's first expansion
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null);  // the tree built again
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+
+            var rebuilt = f.Vm.FolderTree.Single();
+            Assert.True(rebuilt.IsExpanded);
+            Assert.True(rebuilt.Children.Single(c => c.Name == "Trip").IsExpanded);
+        });
+    }
+
+    [Fact]
+    public void TheWindow_SaysIndexingOnce_FromARunsStartToItsRefresh()
+    {
+        // Review R3-8: a run's count of runs indexing dropped on its own thread before its end reached the window, so a
+        // report still queued then found nothing indexing — the bar swept early and "indexing" went off and back on.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            var folder = Path.Combine(f.Photos.Path, "new");
+            foreach (var file in Photos(600))
+                TestImages.Write(Path.Combine(folder, file), 32, 24);
+            var changes = new List<bool>();
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.IsIndexing))
+                    changes.Add(f.Vm.IsIndexing);
+            };
+
+            f.Vm.AddFolder(folder, includeSubfolders: true);
+            Assert.True(Sta.PumpUntil(f.Settled, TimeSpan.FromSeconds(120)));
+
+            Assert.Equal([true, false], changes);
         });
     }
 }

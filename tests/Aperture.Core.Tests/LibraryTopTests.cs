@@ -279,7 +279,7 @@ public class LibraryTopTests
                 var filling = flips.FindIndex(f => !f.Indeterminate);
                 Assert.True(filling >= 0, "the bar never filled");
                 var swept = flips.Skip(filling).First(f => f.Indeterminate); // once files are done: the clean-up sweeps
-                Assert.Equal(600, swept.Value);
+                Assert.True(600 == swept.Value, string.Join(" ", flips.Select(f => $"{(f.Indeterminate ? "sweep" : "fill")}@{f.Value}")));
             }
             finally
             {
