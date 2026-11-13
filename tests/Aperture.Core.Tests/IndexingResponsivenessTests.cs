@@ -526,9 +526,10 @@ public class IndexingResponsivenessTests
         Sta.Run(() =>
         {
             using var f = new Fixture([.. Photos(1), .. Photos(1, @"A\B\C"), .. Photos(1, @"A\D"), .. Photos(1, "E")]);
+            Core.Library.FolderIndex.BuildCalls = 0; // on this, the UI thread: before the refresh (review R2-1)
             f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null);
             Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
-            Core.Library.FolderIndex.BuildCalls = 0; // on this, the UI thread
+            Assert.Equal(0, Core.Library.FolderIndex.BuildCalls); // the refresh built it, in the background
 
             var root = f.Vm.FolderTree.Single();
             ExpandAsTheUserDoes(root);
@@ -606,6 +607,115 @@ public class IndexingResponsivenessTests
             {
                 System.Globalization.CultureInfo.CurrentCulture = culture;
             }
+        });
+    }
+
+    // --- Review round 2 -----------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ARunsEnd_OvertakenByTheStartupRead_StillEndsTheIndexing_AndBuildsTheTree()
+    {
+        // Review R2-2: the refresh read again after being overtaken carries the run's end and its tree with it.
+        var releaseStartup = new ManualResetEventSlim();
+        var heldRefresh = new ManualResetEventSlim();
+        var releaseRefresh = new ManualResetEventSlim();
+        WithHeldStartup(3, (_, vm, _, folder) =>
+        {
+            TestImages.Write(Path.Combine(folder, "New", "n.jpg"), 32, 24);
+            vm.ResumeRootIndexCommand.Execute(vm.Roots.Single()); // a run whose end's refresh is held
+            Assert.True(Sta.PumpUntil(() => heldRefresh.IsSet, Wait));
+            releaseStartup.Set();
+            Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3, Wait)); // the startup read lands first
+            releaseRefresh.Set();
+
+            Assert.True(Sta.PumpUntil(() => !vm.IsIndexing && vm.RefreshIdle.IsCompleted && vm.TotalItemCount == 4, Wait),
+                "the run's end never landed");
+            Assert.Contains("New", vm.FolderTree.Single().Children.Select(c => c.Name));
+        }, releaseStartup, heldRefresh, releaseRefresh);
+    }
+
+    [Fact]
+    public void AFolderAddedDuringStartup_LeavesTheOthersTreeAsTheStartupReadShowsIt()
+    {
+        // Review R2-5 (the reviewer's probe): adding a folder builds a tree from no rows while startup still reads; the
+        // startup's rows, when they land, must build it again — not leave the other folders without their subfolders.
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var folder = new TempDir();
+            using var added = new TempDir();
+            TestImages.Write(Path.Combine(folder.Path, "Trip", "a.jpg"), 32, 24);
+            TestImages.Write(Path.Combine(folder.Path, "Trip", "b.jpg"), 32, 24);
+            TestImages.Write(Path.Combine(added.Path, "n.jpg"), 32, 24);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(folder.Path, "Photos"));
+            var heldStartup = new ManualResetEventSlim();
+            var releaseStartup = new ManualResetEventSlim();
+            var heldNext = new ManualResetEventSlim();
+            var releaseNext = new ManualResetEventSlim();
+            var reads = 0;
+            library.ReadingContents = () =>
+            {
+                if (Interlocked.Increment(ref reads) == 1)
+                {
+                    heldStartup.Set();
+                    releaseStartup.Wait(TimeSpan.FromSeconds(20));
+                }
+                else
+                {
+                    heldNext.Set();
+                    releaseNext.Wait(TimeSpan.FromSeconds(20));
+                }
+            };
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            try
+            {
+                Assert.True(heldStartup.Wait(Wait));
+                vm.AddFolder(added.Path, includeSubfolders: true); // added while startup still reads
+                Assert.True(Sta.PumpUntil(() => heldNext.IsSet, Wait)); // the added folder's refresh, held (a long run)
+                releaseStartup.Set();
+                Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == 2, Wait));
+                Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+
+                var photos = vm.FolderTree.Single(n => n.Name == "Photos");
+                Assert.True(photos.HasChildren, "Photos' Trip subfolder is missing from the tree after startup landed");
+            }
+            finally
+            {
+                releaseStartup.Set();
+                releaseNext.Set();
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AUsersChange_ShowsLoading_EvenIfARefreshTakesOverItsBuild(bool refresh)
+    {
+        // Review R2-6 (the reviewer's probe): a quiet refresh asked for within a user's change's debounce took its build,
+        // and with it the "Loading…" the change should show.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(2));
+            var shown = 0;
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.IsLoadingView) && f.Vm.IsLoadingView)
+                    shown++;
+            };
+
+            f.Vm.ShowVideos = !f.Vm.ShowVideos; // the user's change: its build shows "Loading…"
+            if (refresh)
+                f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null); // a refresh asked for meanwhile
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(600));
+
+            Assert.Equal(1, shown);
+            Assert.False(f.Vm.IsLoadingView);
         });
     }
 }

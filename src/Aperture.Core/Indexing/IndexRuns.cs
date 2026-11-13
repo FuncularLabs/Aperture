@@ -34,9 +34,23 @@ public sealed class IndexRuns
     /// <summary>The run has ended.</summary>
     public void End(int run) => _runs.Remove(run);
 
+    /// <summary>
+    /// The progress bar for the folders being indexed: indeterminate (moving) while any is counting, cleaning up or yet
+    /// to report; otherwise the files done in all of them over the files to do in all of them.
+    /// </summary>
+    public (bool Indeterminate, double Value, double Max) Bar()
+    {
+        var latest = Newest().Select(f => f.Progress).ToList();
+        if (latest.Count == 0 || latest.Any(p => p is not { Phase: IndexPhase.Indexing, Total: > 0 }))
+            return (true, 0, 0);
+        return (false, latest.Sum(p => p!.Processed), latest.Sum(p => p!.Total));
+    }
+
     /// <summary>The headline and the friendly line for the folders being indexed (see <see cref="IndexingMessage.For"/>).</summary>
     public (string Headline, string Note) Lines(Func<long, string> aliasOf) =>
-        IndexingMessage.For([.. _runs.Values
-            .GroupBy(r => r.RootId)
-            .Select(folder => (aliasOf(folder.Key), folder.Last().Progress))]); // runs in start order: Last is the newest
+        IndexingMessage.For([.. Newest().Select(f => (aliasOf(f.RootId), f.Progress))]);
+
+    // Each folder being indexed, with its newest run's latest report (runs are kept in start order: Last is the newest).
+    private IEnumerable<(long RootId, IndexProgress? Progress)> Newest() =>
+        _runs.Values.GroupBy(r => r.RootId).Select(folder => (folder.Key, folder.Last().Progress));
 }

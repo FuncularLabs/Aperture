@@ -61,12 +61,20 @@ public class LibraryTopTests
             try
             {
                 vm.AddFolder(photos.Path, includeSubfolders: true);
-                var node = Assert.Single(vm.FolderTree);
+                Assert.Single(vm.FolderTree);
+                // The folder's node, as the tree has it: the tree is built again when the startup read lands (the
+                // folder was added before it did), so the node is replaced mid-run (review R2-5).
                 var seenWhileIndexing = new List<int>();
-                node.PropertyChanged += (_, e) =>
+                void Watch(FolderNodeVm node) => node.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
                         seenWhileIndexing.Add(node.Count);
+                };
+                Watch(vm.FolderTree.Single());
+                vm.FolderTree.CollectionChanged += (_, e) =>
+                {
+                    foreach (var added in e.NewItems?.OfType<FolderNodeVm>() ?? [])
+                        Watch(added);
                 };
 
                 Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(60)));
@@ -102,12 +110,20 @@ public class LibraryTopTests
             try
             {
                 vm.AddFolder(photos.Path, includeSubfolders: true);
-                var node = Assert.Single(vm.FolderTree);
+                Assert.Single(vm.FolderTree);
+                // The folder's node, as the tree has it: the tree is built again when the startup read lands (the
+                // folder was added before it did), so the node is replaced mid-run (review R2-5).
                 var seenWhileIndexing = new List<int>();
-                node.PropertyChanged += (_, e) =>
+                void Watch(FolderNodeVm node) => node.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
                         seenWhileIndexing.Add(node.Count);
+                };
+                Watch(vm.FolderTree.Single());
+                vm.FolderTree.CollectionChanged += (_, e) =>
+                {
+                    foreach (var added in e.NewItems?.OfType<FolderNodeVm>() ?? [])
+                        Watch(added);
                 };
 
                 Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));

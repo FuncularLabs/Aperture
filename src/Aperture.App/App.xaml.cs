@@ -214,6 +214,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         ReleaseWindow(); // a backstop: closing the window (Shutdown closes it too) has already given it up
+        _window?.Playback.Leave(); // a backstop too: a video's volume is saved as it's left (the window closing did it)
         RecordItemCount();
         _viewModel?.PrepareForClose();
 

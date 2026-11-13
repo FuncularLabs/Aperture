@@ -84,9 +84,54 @@ public class IndexRunsTests : IDisposable
         runs.End(run);
 
         runs.Report(run, P(1, 2)); // posted before its end, handled after
-        runs.End(run);             // and an end twice is harmless
 
-        Assert.Equal(0, runs.Count);
+        Assert.Equal(0, runs.Count); // it didn't bring the run back (review R2-4: a second End used to hide that)
         Assert.Equal(("", ""), runs.Lines(Alias));
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());
+    }
+
+    [Fact]
+    public void AnEndTwice_IsHarmless()
+    {
+        var runs = new IndexRuns();
+        var first = runs.Start(1);
+        var other = runs.Start(2);
+        runs.End(first);
+        runs.End(first);
+
+        Assert.Equal(1, runs.Count);
+        runs.End(other);
+        Assert.Equal(0, runs.Count);
+    }
+
+    [Fact]
+    public void TheBar_AddsTheFoldersUp_AndMovesWhileAnyIsCounting()
+    {
+        // Review R2-7: with several folders indexed, the bar followed whichever reported last.
+        var runs = new IndexRuns();
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());              // nothing indexed
+        var photos = runs.Start(1);
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());              // started, not yet reporting
+        runs.Report(photos, P(3, 10));
+        Assert.Equal((false, 3.0, 10.0), runs.Bar());
+        var cloud = runs.Start(2);
+        runs.Report(cloud, new IndexProgress { RootAlias = "x", Phase = IndexPhase.Scanning, Processed = 40 });
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());              // one still counting: no fraction yet
+        runs.Report(cloud, P(5, 30));
+        Assert.Equal((false, 8.0, 40.0), runs.Bar());            // both folders, added up
+        var again = runs.Start(1);                               // the first folder again: its newest run speaks
+        runs.Report(again, P(1, 10));
+        Assert.Equal((false, 6.0, 40.0), runs.Bar());
+        runs.Report(cloud, new IndexProgress { RootAlias = "x", Phase = IndexPhase.Pruning });
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());              // cleaning up: no fraction
+    }
+
+    [Fact]
+    public void TheBar_OfAFolderWithNoFiles_Moves()
+    {
+        var runs = new IndexRuns();
+        runs.Report(runs.Start(1), P(0, 0));
+
+        Assert.Equal((true, 0.0, 0.0), runs.Bar());
     }
 }
