@@ -49,11 +49,12 @@ public sealed class ItemStore(ApertureDatabase database)
         return map;
     }
 
+    // Read through the reader provider: these run off the UI thread (see ApertureDatabase.ReadProvider).
     public int CountForRoot(long rootId) =>
-        _db.Provider.Query<ItemRow>().Where(i => i.RootId == rootId).Count();
+        _db.ReadProvider.Query<ItemRow>().Where(i => i.RootId == rootId).Count();
 
     /// <summary>Total indexed items across all roots — used to size the thumbnail cache budget.</summary>
-    public int TotalCount() => _db.Provider.Query<ItemRow>().Count();
+    public int TotalCount() => _db.ReadProvider.Query<ItemRow>().Count();
 
     /// <summary>All items for a root, newest first. Convenience for tests and M2 wiring.</summary>
     public List<MediaItem> GetForRoot(long rootId) =>
@@ -68,8 +69,14 @@ public sealed class ItemStore(ApertureDatabase database)
     /// <c>[RemoteProperty]</c> attributes on <see cref="LibraryRowEntity"/> (no hand-written JOIN).
     /// The multi-level default order is applied in memory (the app re-sorts per the user's chosen sort).
     /// </summary>
-    public List<LibraryRow> GetIncludedUnion() =>
-        _db.Provider.Query<LibraryRowEntity>().Where(x => x.RootIncluded).ToList()
+    public List<LibraryRow> GetIncludedUnion() => IncludedUnion(_db.ReadProvider);
+
+    /// <summary>
+    /// <see cref="GetIncludedUnion"/> over any provider: the open library's, or a read-only one over another library's
+    /// files (<see cref="LibraryCount"/>), so both count by the same query.
+    /// </summary>
+    internal static List<LibraryRow> IncludedUnion(Funcular.Data.Orm.Sqlite.SqliteOrmDataProvider provider) =>
+        provider.Query<LibraryRowEntity>().Where(x => x.RootIncluded).ToList()
             .OrderByDescending(SortKey)
             .ThenBy(x => x.RootAlias, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.FileName, StringComparer.OrdinalIgnoreCase)

@@ -60,4 +60,49 @@ public sealed class ApertureSettings
     /// an empty array is a real state — the user collapsed everything — and is respected.
     /// </summary>
     public string[]? ExpandedFolders { get; set; }
+
+    /// <summary>
+    /// The order the user dragged the library's top-level folders into, by root id; <c>null</c> until they first do
+    /// (the folders are then alphabetical). Read leniently: a value that isn't a list of ids is ignored, never costing
+    /// the other settings.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(LenientIdListConverter))]
+    public long[]? RootOrder { get; set; }
+}
+
+/// <summary>
+/// Reads a list of ids leniently: the whole numbers in a JSON array, each once, in order; anything else (a string, an
+/// object, a fraction, a null) is skipped, and a value that isn't an array reads as none. Writes a plain array.
+/// </summary>
+public sealed class LenientIdListConverter : System.Text.Json.Serialization.JsonConverter<long[]?>
+{
+    // A null in the file comes here too, so it reads as none rather than failing the whole file.
+    public override bool HandleNull => true;
+
+    public override long[]? Read(
+        ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
+    {
+        using var doc = System.Text.Json.JsonDocument.ParseValue(ref reader);
+        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return null;
+        var ids = new List<long>();
+        foreach (var e in doc.RootElement.EnumerateArray())
+            if (e.ValueKind == System.Text.Json.JsonValueKind.Number && e.TryGetInt64(out var id) && !ids.Contains(id))
+                ids.Add(id);
+        return [.. ids];
+    }
+
+    public override void Write(
+        System.Text.Json.Utf8JsonWriter writer, long[]? value, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartArray();
+        foreach (var id in value)
+            writer.WriteNumberValue(id);
+        writer.WriteEndArray();
+    }
 }

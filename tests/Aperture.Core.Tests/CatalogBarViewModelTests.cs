@@ -69,10 +69,10 @@ public class CatalogBarViewModelTests
         public List<NewLibraryFolder> HandedOver { get; } = [];
         public List<string?> ActiveWhenHandedOver { get; } = [];
 
-        public Fixture()
+        public Fixture(Func<string, int?>? countLibrary = null)
         {
             Service = CatalogService.Open(Outer.Combine("catalogs.json"), Outer.Combine("default"));
-            Bar = new CatalogBarViewModel(Service, Dialogs, LibrariesDir, PicturesDir);
+            Bar = new CatalogBarViewModel(Service, Dialogs, LibrariesDir, PicturesDir, countLibrary);
             Bar.NewLibraryFolderChosen += (_, folder) =>
             {
                 HandedOver.Add(folder);
@@ -120,16 +120,20 @@ public class CatalogBarViewModelTests
     }
 
     [Fact]
-    public async Task Libraries_CarryEachLibrarysLastCount()
+    public async Task Libraries_CarryEachLibrarysLastCount_UntilItsOwnFilesAreRead()
     {
-        await using var f = new Fixture();
+        var held = new ManualResetEventSlim();
+        await using var f = new Fixture(dir => { held.Wait(TimeSpan.FromSeconds(10)); return LibraryCount.Read(dir); });
         var work = f.AddLibrary("Work");
         f.Service.Registry.SetItemCount(work.Id, 42);
 
         f.Bar.Refresh();
 
-        Assert.Equal(42, f.Bar.Libraries.Single(l => l.Name == "Work").ItemCount);
-        Assert.Null(f.Bar.Libraries.Single(l => l.Name == "Default").ItemCount); // never recorded
+        Assert.Equal(42, f.Bar.Libraries.Single(l => l.Name == "Work").ItemCount); // at once: the count it had
+        Assert.Null(f.Bar.Libraries.Single(l => l.Name == "Default").ItemCount);   // the open one: its live count instead
+        held.Set();
+        await f.Bar.PendingCounts;
+        Assert.Equal(0, f.Bar.Libraries.Single(l => l.Name == "Work").ItemCount);  // then what its files say (it's empty)
     }
 
     [Fact]
@@ -448,6 +452,7 @@ public class CatalogBarViewModelTests
     {
         await using var f = new Fixture();
         var usb = f.AddLibrary("USB");
+        await f.Bar.PendingCounts; // its count is read (and remembered) before the drive drops: only the delete may move it
         var unplugged = f.Outer.Combine("USB-unplugged");
         f.Service.Registry.BetweenReadAndChange = () => Directory.Move(usb.Dir, unplugged); // the drive drops mid-delete
         f.Dialogs.Confirms.Enqueue(true);
@@ -508,5 +513,211 @@ public class CatalogBarViewModelTests
         Assert.True(isError);
         Assert.StartsWith("The library operation failed", message);
         Assert.False(f.Bar.IsBusy);
+    }
+
+    // --- Order (0.9.1 batch, item 5) ----------------------------------------------------------------
+
+    private static async Task<CatalogBarViewModel> NextLaunch(Fixture f)
+    {
+        // Another session over the same list file: what the user sees after a restart.
+        var service = CatalogService.Open(f.Outer.Combine("catalogs.json"), f.Outer.Combine("default"));
+        var bar = new CatalogBarViewModel(service, f.Dialogs, f.LibrariesDir, f.PicturesDir, _ => null);
+        await service.DisposeAsync();
+        return bar;
+    }
+
+    [Fact]
+    public async Task TheList_IsAlphabetical_UntilALibraryIsMoved_ThenFollowsTheOrder_AcrossARestart()
+    {
+        await using var f = new Fixture(_ => null);
+        var zoo = f.AddLibrary("zoo");
+        f.AddLibrary("Apple");
+        Assert.Equal("Apple, [Default], zoo", Listed(f.Bar));
+
+        f.Bar.MoveLibrary(zoo.Id, 0);
+
+        Assert.Equal("zoo, Apple, [Default]", Listed(f.Bar));
+        Assert.Equal("zoo, Apple, [Default]", Listed(await NextLaunch(f)));
+    }
+
+    [Fact]
+    public async Task MoveLibrary_ToEachPlace()
+    {
+        await using var f = new Fixture(_ => null);
+        var a = f.AddLibrary("A");
+        f.AddLibrary("B");
+        Assert.Equal("A, B, [Default]", Listed(f.Bar));
+
+        f.Bar.MoveLibrary(a.Id, 2);  // the last place
+        Assert.Equal("B, [Default], A", Listed(f.Bar));
+        f.Bar.MoveLibrary(a.Id, 1);
+        Assert.Equal("B, A, [Default]", Listed(f.Bar));
+        f.Bar.MoveLibrary(a.Id, 1);  // where it is: nothing to save
+        Assert.Equal("B, A, [Default]", Listed(f.Bar));
+        f.Bar.MoveLibrary("gone", 0); // a library another window removed meanwhile
+        Assert.Equal("B, A, [Default]", Listed(f.Bar));
+        Assert.Empty(f.Dialogs.Messages);
+    }
+
+    [Fact]
+    public async Task ALibraryAddedLater_GoesAtTheEnd()
+    {
+        await using var f = new Fixture(_ => null);
+        var b = f.AddLibrary("B");
+        f.Bar.MoveLibrary(b.Id, 1); // after Default: an order of the user's own
+
+        f.AddLibrary("Apple");
+
+        Assert.Equal("[Default], B, Apple", Listed(f.Bar));
+    }
+
+    [Fact]
+    public async Task AMoveThatCannotBeSaved_SaysSo_AndTheOrderStaysAsItWas()
+    {
+        await using var f = new Fixture(_ => null);
+        var zoo = f.AddLibrary("zoo");
+        var path = f.Outer.Combine("catalogs.json");
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            f.Bar.MoveLibrary(zoo.Id, 0);
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.Equal("[Default], zoo", Listed(f.Bar));
+        var (message, isError) = Assert.Single(f.Dialogs.Messages);
+        Assert.True(isError);
+        Assert.Contains("couldn't save its list of libraries", message);
+    }
+
+    // --- Counts of the libraries that aren't open (0.9.1 batch, item 6) ---------------------------------
+
+    [Fact]
+    public async Task EveryOtherLibrary_GetsItsCount_ReadFromItsOwnFiles()
+    {
+        var asked = new List<string>();
+        await using var f = new Fixture(dir =>
+        {
+            lock (asked)
+                asked.Add(dir);
+            return Path.GetFileName(dir) switch { "Work" => 7, "Home" => 3, _ => 99 };
+        });
+        var work = f.AddLibrary("Work");
+        var home = f.AddLibrary("Home");
+        await f.Bar.PendingCounts;
+
+        Assert.Equal((7, 3), (f.Bar.Libraries.Single(l => l.Id == work.Id).ItemCount,
+            f.Bar.Libraries.Single(l => l.Id == home.Id).ItemCount));
+        Assert.Null(f.Bar.Libraries.Single(l => l.IsActive).ItemCount); // the open one shows its live count, not a read
+        lock (asked)
+            Assert.DoesNotContain(f.Service.ActiveCatalog!.Dir, asked);
+    }
+
+    [Fact]
+    public async Task TheCount_IsRemembered_ForTheNextLaunch()
+    {
+        await using var f = new Fixture(_ => 7);
+        var work = f.AddLibrary("Work");
+        await f.Bar.PendingCounts;
+
+        Assert.Equal(7, new CatalogRegistry(f.Outer.Combine("catalogs.json")).List().Single(c => c.Id == work.Id).ItemCount);
+        Assert.Equal(7, (await NextLaunch(f)).Libraries.Single(l => l.Id == work.Id).ItemCount); // shown before any read
+    }
+
+    [Fact]
+    public async Task ALibraryWhoseFilesCannotBeRead_KeepsTheCountItHad()
+    {
+        await using var f = new Fixture(_ => null);
+        var work = f.AddLibrary("Work");
+        f.Service.Registry.SetItemCount(work.Id, 42);
+        var unrecorded = f.AddLibrary("Unrecorded");
+
+        f.Bar.Refresh();
+        await f.Bar.PendingCounts;
+
+        Assert.Equal(42, f.Bar.Libraries.Single(l => l.Id == work.Id).ItemCount);
+        Assert.Null(f.Bar.Libraries.Single(l => l.Id == unrecorded.Id).ItemCount);
+        Assert.Equal(42, f.Service.Registry.List().Single(c => c.Id == work.Id).ItemCount);
+    }
+
+    [Fact]
+    public async Task ACountFromAnOlderRefresh_IsDropped()
+    {
+        var firstRead = new ManualResetEventSlim();
+        var reading = new ManualResetEventSlim();
+        var reads = 0;
+        await using var f = new Fixture(_ =>
+        {
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                reading.Set();
+                firstRead.Wait(TimeSpan.FromSeconds(10)); // the first refresh's read is slow
+                return 5;
+            }
+            return 9;
+        });
+        var work = f.AddLibrary("Work"); // refresh 1: its read is held
+        Assert.True(reading.Wait(TimeSpan.FromSeconds(10)));
+        var older = f.Bar.PendingCounts;
+
+        f.Bar.Refresh();                 // refresh 2: reads 9 once the first read lets go of the library
+        firstRead.Set();
+        await older;
+        await f.Bar.PendingCounts;
+
+        Assert.Equal(9, f.Bar.Libraries.Single(l => l.Id == work.Id).ItemCount); // the old 5 lands nowhere
+        Assert.Equal(9, f.Service.Registry.List().Single(c => c.Id == work.Id).ItemCount);
+    }
+
+    [Fact]
+    public async Task ACountThatLands_ChangesTheItemTheListShows()
+    {
+        // The list isn't rebuilt for a count: the item it shows says its count changed, for the binding.
+        var held = new ManualResetEventSlim();
+        await using var f = new Fixture(_ => { held.Wait(TimeSpan.FromSeconds(10)); return 7; });
+        var work = f.AddLibrary("Work");
+        var item = f.Bar.Libraries.Single(l => l.Id == work.Id);
+        var changed = new List<string?>();
+        item.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        held.Set();
+        await f.Bar.PendingCounts;
+
+        Assert.Same(item, f.Bar.Libraries.Single(l => l.Id == work.Id));
+        Assert.Equal(7, item.ItemCount);
+        Assert.Equal([nameof(LibraryListItem.ItemCount)], changed);
+    }
+
+    [Fact]
+    public async Task DeleteFiles_WaitsForACountReadOfThatLibrary()
+    {
+        // A read holds the library's database open while it runs: deleting its files meanwhile would leave some behind.
+        var held = new ManualResetEventSlim();
+        var reading = new ManualResetEventSlim();
+        await using var f = new Fixture(dir =>
+        {
+            reading.Set();
+            held.Wait(TimeSpan.FromSeconds(10));
+            return LibraryCount.Read(dir);
+        });
+        var work = f.AddLibrary("Work");
+        Assert.True(reading.Wait(TimeSpan.FromSeconds(10)));
+        f.Dialogs.Confirms.Enqueue(true);
+
+        f.Bar.DeleteFilesCommand.Execute(work.Id);
+        var deleting = f.Bar.PendingOperation!;
+        await Task.Delay(200);
+        Assert.False(deleting.IsCompleted); // waiting for the read
+        Assert.True(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+
+        held.Set();
+        await deleting;
+        Assert.Equal("[Default]", Listed(f.Bar));
+        Assert.False(File.Exists(Path.Combine(work.Dir, ApertureDatabase.MetadataFileName)));
+        Assert.Empty(f.Dialogs.Messages);
     }
 }

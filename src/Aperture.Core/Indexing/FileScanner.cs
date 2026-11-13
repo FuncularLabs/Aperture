@@ -5,7 +5,11 @@ namespace Aperture.Core.Indexing;
 
 /// <summary>A supported media file found under a root.</summary>
 public readonly record struct ScannedFile(
-    string FullPath, string RelPath, string Ext, long SizeBytes, long MTimeTicks, MediaKind Kind);
+    string FullPath, string RelPath, string Ext, long SizeBytes, long MTimeTicks, MediaKind Kind)
+{
+    /// <summary>Online only (a cloud placeholder): reading it downloads it first (<see cref="CloudFiles"/>).</summary>
+    public bool IsOnlineOnly { get; init; }
+}
 
 /// <summary>
 /// Finds supported media files under a root — the whole tree, or just the root's own folder when
@@ -14,11 +18,20 @@ public readonly record struct ScannedFile(
 /// </summary>
 public static class FileScanner
 {
+    /// <summary>How many files a scan finds between two reports of its count.</summary>
+    public const int TallyStep = 250;
+
+    /// <summary>
+    /// Finds the supported files under <paramref name="rootPath"/>. <paramref name="onProgress"/>, if given, hears the
+    /// count so far every <see cref="TallyStep"/> files found, and once at the end with the total.
+    /// </summary>
     public static List<ScannedFile> Scan(
-        string rootPath, bool includeVideos = true, CancellationToken ct = default, bool recursive = true)
+        string rootPath, bool includeVideos = true, CancellationToken ct = default, bool recursive = true,
+        Action<ScanTally>? onProgress = null)
     {
         var root = Path.GetFullPath(rootPath);
         var results = new List<ScannedFile>();
+        var onlineOnly = 0;
 
         foreach (var file in SafeEnumerateFiles(root, ct, recursive))
         {
@@ -44,9 +57,17 @@ public static class FileScanner
                 ext,
                 info.Length,
                 info.LastWriteTimeUtc.Ticks,
-                SupportedFormats.KindOf(ext)));
+                SupportedFormats.KindOf(ext))
+            {
+                IsOnlineOnly = CloudFiles.IsOnlineOnly(info.Attributes), // read with the size and time: no extra disk call
+            });
+            if (results[^1].IsOnlineOnly)
+                onlineOnly++;
+            if (results.Count % TallyStep == 0)
+                onProgress?.Invoke(new ScanTally(results.Count, onlineOnly));
         }
 
+        onProgress?.Invoke(new ScanTally(results.Count, onlineOnly)); // the total: counting is done
         return results;
     }
 

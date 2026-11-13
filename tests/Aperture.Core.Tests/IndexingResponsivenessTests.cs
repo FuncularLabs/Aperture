@@ -1,0 +1,379 @@
+using System.Windows.Threading;
+using Aperture.App.Services;
+using Aperture.App.ViewModels;
+using Aperture.Core.Library;
+using Aperture.Core.Tests.Support;
+
+namespace Aperture.Core.Tests;
+
+/// <summary>
+/// The window stays responsive while folders are indexed (0.9.1 batch, item 3: "Run indexing in the background so the
+/// rest of the app stays fully responsive"). The indexer always ran off the UI thread; what froze the window was what
+/// each run handed back to it: every row read again (and the grid built) every 1.2 s while a folder streamed in, a
+/// folder's count once a second, and the rows and the tree again at every run's end. Those reads now run in the
+/// background through one refresh at a time, which merges what's asked for while it runs, and never shows rows older
+/// than a change the user made meanwhile. Real view models on real libraries; the library's ReadingContents and
+/// ReadingCount hooks see (and hold) the real reads.
+/// </summary>
+public class IndexingResponsivenessTests
+{
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
+
+    private sealed class Fixture : IDisposable
+    {
+        public TempDir Data { get; } = new();
+        public TempDir Photos { get; } = new();
+        public LibraryService Library { get; }
+        public MainViewModel Vm { get; }
+        public int UiThread { get; } = Environment.CurrentManagedThreadId;
+
+        // Every contents and count read the library makes from now on, with the thread it ran on.
+        public List<int> ContentReads { get; } = [];
+        public List<int> CountReads { get; } = [];
+
+        // Set to hold the next contents read (after its queries) until Release; it records whether the test let it go.
+        private ManualResetEventSlim? _hold;
+        public ManualResetEventSlim Held { get; } = new();
+        public bool HoldTimedOut { get; private set; }
+
+        public Fixture(params string[] files)
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            foreach (var file in files)
+                TestImages.Write(Path.Combine(Photos.Path, file), 32, 24);
+            Library = new LibraryService(Data.Path);
+            if (files.Length > 0)
+                Library.IndexRoot(Library.AddRoot(Photos.Path, "Photos"));
+            Vm = new MainViewModel(Library, new ThumbnailService(Library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            Assert.True(Sta.PumpUntil(() => Vm.LoadedItemCount is not null && !Vm.IsLoadingView && Vm.RefreshIdle.IsCompleted, Wait));
+            Library.ReadingContents = () =>
+            {
+                lock (ContentReads)
+                    ContentReads.Add(Environment.CurrentManagedThreadId);
+                var hold = Interlocked.Exchange(ref _hold, null);
+                if (hold is null)
+                    return;
+                Held.Set();
+                HoldTimedOut = !hold.Wait(TimeSpan.FromSeconds(5));
+            };
+            Library.ReadingCount = _ =>
+            {
+                lock (CountReads)
+                    CountReads.Add(Environment.CurrentManagedThreadId);
+            };
+        }
+
+        public ManualResetEventSlim HoldNextRead()
+        {
+            var release = new ManualResetEventSlim();
+            Held.Reset();
+            _hold = release;
+            return release;
+        }
+
+        public bool Settled() => !Vm.IsIndexing && Vm.RefreshIdle.IsCompleted && !Vm.IsLoadingView;
+
+        public void Dispose()
+        {
+            Vm.PrepareForClose();
+            Library.ShutdownAsync().GetAwaiter().GetResult();
+            Photos.Dispose();
+            Data.Dispose();
+        }
+    }
+
+    // A fresh library opens its top-level folders without remembering it (a rebuild then restores only the folders the
+    // user expanded), so the tests expand it as the user would: one that was closed, opened.
+    private static void ExpandAsTheUserDoes(FolderNodeVm node)
+    {
+        node.IsExpanded = false;
+        node.IsExpanded = true;
+    }
+
+    private static string[] Photos(int count, string dir = "") =>
+        [.. Enumerable.Range(0, count).Select(i => Path.Combine(dir, $"p{i:000}.jpg"))];
+
+    [Fact]
+    public void Streaming_ReadsOffTheUiThread()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            var folder = Path.Combine(f.Photos.Path, "new");
+            foreach (var file in Photos(450))
+                TestImages.Write(Path.Combine(folder, file), 32, 24);
+
+            f.Vm.AddFolder(folder, includeSubfolders: true); // a new folder streams its thumbnails in as it's indexed
+            Assert.True(Sta.PumpUntil(f.Settled, Wait));
+
+            Assert.Equal(450, f.Vm.TotalItemCount);
+            lock (f.ContentReads)
+            {
+                Assert.True(f.ContentReads.Count >= 2, $"{f.ContentReads.Count} reads: the stream's and the run's end at least");
+                Assert.DoesNotContain(f.UiThread, f.ContentReads);
+            }
+        });
+    }
+
+    [Fact]
+    public void TheClimbingCount_IsReadOffTheUiThread()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            var folder = Path.Combine(f.Photos.Path, "new");
+            foreach (var file in Photos(450))
+                TestImages.Write(Path.Combine(folder, file), 32, 24);
+
+            f.Vm.AddFolder(folder, includeSubfolders: true);
+            Assert.True(Sta.PumpUntil(f.Settled, Wait));
+
+            Assert.Equal(450, f.Vm.Roots.Single().Count);
+            lock (f.CountReads)
+            {
+                Assert.True(f.CountReads.Count >= 2, $"{f.CountReads.Count} count reads: one while indexing, one at the end");
+                Assert.DoesNotContain(f.UiThread, f.CountReads);
+            }
+        });
+    }
+
+    [Fact]
+    public void TheRunsEnd_RefreshesOffTheUiThread()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            TestImages.Write(Path.Combine(f.Photos.Path, "later.jpg"), 32, 24);
+
+            f.Vm.ResumeRootIndexCommand.Execute(f.Vm.Roots.Single()); // a re-index of a folder the grid already shows
+            Assert.True(Sta.PumpUntil(() => f.Settled() && f.Vm.TotalItemCount == 4, Wait));
+
+            Assert.Equal(4, f.Vm.Roots.Single().Count);
+            lock (f.ContentReads)
+            {
+                Assert.NotEmpty(f.ContentReads);
+                Assert.DoesNotContain(f.UiThread, f.ContentReads);
+            }
+            lock (f.CountReads)
+                Assert.DoesNotContain(f.UiThread, f.CountReads);
+        });
+    }
+
+    [Fact]
+    public void AHeldRead_LeavesTheWindowResponsive()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            TestImages.Write(Path.Combine(f.Photos.Path, "later.jpg"), 32, 24);
+            var release = f.HoldNextRead(); // the run's end reads slowly, as on a weak PC
+
+            f.Vm.ResumeRootIndexCommand.Execute(f.Vm.Roots.Single());
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+
+            // Input posted while the read is held is handled while it's held, not after.
+            bool? ranWhileHeld = null;
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, () => ranWhileHeld = !release.IsSet);
+            Assert.True(Sta.PumpUntil(() => ranWhileHeld is not null, Wait));
+            Assert.True(ranWhileHeld);
+            release.Set();
+
+            Assert.True(Sta.PumpUntil(() => f.Settled() && f.Vm.TotalItemCount == 4, Wait));
+            Assert.False(f.HoldTimedOut, "the read was let go by the test, not by its time-out: it ran off the UI thread");
+        });
+    }
+
+    [Fact]
+    public void ARunsEnd_AskedForDuringAnotherRefresh_IsStillDone()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(3), .. Photos(2, "Trip")]);
+            var root = f.Vm.Roots.Single();
+            // Two more photos indexed behind the window's back: the next refresh that counts the folder finds 7.
+            TestImages.Write(Path.Combine(f.Photos.Path, "Trip", "t1.jpg"), 32, 24);
+            TestImages.Write(Path.Combine(f.Photos.Path, "New", "n1.jpg"), 32, 24);
+            f.Library.IndexRoot(f.Library.GetRoots().Single());
+            var release = f.HoldNextRead();
+
+            f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null);   // one refresh, held
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: root.Id); // a run's end, while it's held
+            f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null);   // then another stream tick
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+
+            Assert.Equal(7, root.Count);                                     // the run's end's count…
+            Assert.Contains(f.Vm.FolderTree.Single().Children.Select(c => c.Name), n => n == "New"); // …and its tree
+            Assert.Equal(7, f.Vm.TotalItemCount);
+        });
+    }
+
+    [Fact]
+    public void RequestsDuringARefresh_AreDoneOnce_Afterwards()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            var release = f.HoldNextRead();
+
+            f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null);
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+            for (var i = 0; i < 5; i++)
+                f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null);
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+
+            lock (f.ContentReads)
+                Assert.Equal(2, f.ContentReads.Count); // the held one, then one for all five
+        });
+    }
+
+    [Fact]
+    public void HidingAFolder_DuringARefreshRead_StaysHidden()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(2, "Trip")]);
+            var release = f.HoldNextRead();
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null);   // reads the rows with Trip shown, then is held
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+
+            var trip = f.Vm.FolderTree.Single().Children.Single(c => c.Name == "Trip");
+            trip.IsShown = false;                                          // the user hides Trip meanwhile
+            Assert.True(Sta.PumpUntil(() => f.Vm.TotalItemCount == 1, Wait));
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted && !f.Vm.IsLoadingView, Wait));
+
+            Assert.Equal(1, f.Vm.TotalItemCount);                          // the older rows weren't shown
+            Assert.False(f.Vm.FolderTree.Single().Children.Single(c => c.Name == "Trip").IsShown);
+        });
+    }
+
+    [Fact]
+    public void RemovingAFolder_DuringARefreshRead_StaysRemoved()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            var release = f.HoldNextRead();
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: f.Vm.Roots.Single().Id);
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+
+            f.Vm.RemoveRootCommand.Execute(f.Vm.Roots.Single());
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted && !f.Vm.IsLoadingView, Wait));
+
+            Assert.Equal(0, f.Vm.TotalItemCount);
+            Assert.Empty(f.Vm.FolderTree);
+            Assert.Empty(f.Vm.Roots);
+        });
+    }
+
+    [Fact]
+    public void TheStartupRead_LandingAfterAChange_IsNotShown()
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var photos = new TempDir();
+            foreach (var file in Photos(3))
+                TestImages.Write(Path.Combine(photos.Path, file), 32, 24);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var held = new ManualResetEventSlim();
+            var release = new ManualResetEventSlim();
+            var first = 1;
+            library.ReadingContents = () =>
+            {
+                if (Interlocked.Exchange(ref first, 0) == 0)
+                    return;
+                held.Set();
+                release.Wait(TimeSpan.FromSeconds(10)); // the startup read, slow
+            };
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            try
+            {
+                Assert.True(held.Wait(Wait));
+                vm.RemoveRootCommand.Execute(vm.Roots.Single()); // removed while the startup read is under way
+                release.Set();
+                Assert.True(Sta.PumpUntil(() => !vm.IsLoadingView && vm.RefreshIdle.IsCompleted, Wait));
+                Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+
+                Assert.Equal(0, vm.TotalItemCount); // its rows (read before the removal) weren't shown
+                Assert.Empty(vm.FolderTree);
+            }
+            finally
+            {
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void AFailedRead_KeepsTheRows()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            f.Library.ReadingContents = () => throw new IOException("the disk went away");
+
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null);
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+
+            Assert.Equal(3, f.Vm.TotalItemCount);
+            Assert.Single(f.Vm.FolderTree);
+            f.Library.ReadingContents = null;
+            TestImages.Write(Path.Combine(f.Photos.Path, "later.jpg"), 32, 24);
+            f.Library.IndexRoot(f.Library.GetRoots().Single());
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null); // and the next refresh works
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted && f.Vm.TotalItemCount == 4, Wait));
+        });
+    }
+
+    [Fact]
+    public void TheTree_UsesTheIndex()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(1, @"A\B\C"), .. Photos(1, @"A\D"), .. Photos(1, "E")]);
+            Core.Library.FolderTree.SubfoldersCalls = 0;
+
+            var root = f.Vm.FolderTree.Single();
+            ExpandAsTheUserDoes(root);
+            var a = root.Children.Single(c => c.Name == "A");
+            a.IsExpanded = true;
+            a.Children.Single(c => c.Name == "B").IsExpanded = true;
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null); // the tree built again, its expansion restored
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+
+            Assert.Equal(["C"], f.Vm.FolderTree.Single().Children.Single(c => c.Name == "A").Children
+                .Single(c => c.Name == "B").Children.Select(c => c.Name));
+            Assert.Equal(0, Core.Library.FolderTree.SubfoldersCalls); // the index, not a walk over every row per folder
+        });
+    }
+
+    [Fact]
+    public void HidingAFolder_RebuildsTheTreeFromTheNewRows()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(2, @"Trip\Day 1"), .. Photos(1, @"Trip\Day 2")]);
+            var root = f.Vm.FolderTree.Single();
+            ExpandAsTheUserDoes(root);
+            var trip = root.Children.Single(c => c.Name == "Trip");
+            trip.IsExpanded = true;
+
+            trip.Children.Single(c => c.Name == "Day 1").IsShown = false;
+            Assert.True(Sta.PumpUntil(() => f.Vm.TotalItemCount == 2, Wait));
+
+            var tripNow = f.Vm.FolderTree.Single().Children.Single(c => c.Name == "Trip");
+            Assert.Equal(1, tripNow.Count);
+            var day1 = tripNow.Children.Single(c => c.Name == "Day 1");
+            Assert.False(day1.IsShown);
+            Assert.Equal(2, day1.Count);
+        });
+    }
+}

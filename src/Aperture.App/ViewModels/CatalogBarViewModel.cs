@@ -1,16 +1,31 @@
 using System.Windows.Input;
 using Aperture.App.Mvvm;
 using Aperture.App.Services;
+using Aperture.Core.Formatting;
 using Aperture.Core.Library;
 using Aperture.Core.Storage;
 
 namespace Aperture.App.ViewModels;
 
 /// <summary>
-/// A library as the nav lists it. <see cref="ItemCount"/> is how many items it showed when last open (the open library
-/// shows its live count instead); <c>null</c> if not recorded yet.
+/// A library as the nav lists it. <see cref="ItemCount"/> is how many items it shows when open: the count recorded for
+/// it, until its own files have been read (the open library shows its live count instead); <c>null</c> if unknown.
 /// </summary>
-public sealed record LibraryListItem(string Id, string Name, string Dir, bool IsActive, int? ItemCount);
+public sealed class LibraryListItem(string id, string name, string dir, bool isActive, int? itemCount) : ObservableObject
+{
+    private int? _itemCount = itemCount;
+
+    public string Id { get; } = id;
+    public string Name { get; } = name;
+    public string Dir { get; } = dir;
+    public bool IsActive { get; } = isActive;
+
+    public int? ItemCount
+    {
+        get => _itemCount;
+        internal set => SetProperty(ref _itemCount, value);
+    }
+}
 
 /// <summary>The folder New library was asked to put in the new library, and whether with its subfolders.</summary>
 public sealed record NewLibraryFolder(string Path, bool IncludeSubfolders);
@@ -33,12 +48,27 @@ public sealed class CatalogBarViewModel : ObservableObject
     private bool _isBusy;
     private bool _isExpanded = true;
 
-    public CatalogBarViewModel(CatalogService catalog, ICatalogDialogs dialogs, string librariesDir, string? picturesDir = null)
+    // Counting the libraries that aren't open (0.9.1 batch, item 6): a read of one library at a time, under _countGate,
+    // which deleting a library's files waits for (a read holds its database open); a refresh starts a new generation,
+    // and a read from an older one lands nowhere.
+    private readonly Func<string, int?> _countLibrary;
+    private readonly SemaphoreSlim _countGate = new(1, 1);
+    private readonly SynchronizationContext? _ui;
+    private int _countGeneration;
+
+    /// <param name="countLibrary">
+    /// Reads a library's count from its own folder (<see cref="LibraryCount.Read"/> unless a test gives another).
+    /// </param>
+    public CatalogBarViewModel(
+        CatalogService catalog, ICatalogDialogs dialogs, string librariesDir, string? picturesDir = null,
+        Func<string, int?>? countLibrary = null)
     {
         _catalog = catalog;
         _dialogs = dialogs;
         _librariesDir = librariesDir;
         _picturesDir = picturesDir ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        _countLibrary = countLibrary ?? LibraryCount.Read;
+        _ui = SynchronizationContext.Current;
 
         SwitchCommand = new RelayCommand<string>(id => Start(() => _catalog.SwitchToAsync(id)), _ => !IsBusy);
         NewLibraryCommand = new RelayCommand(() => Start(NewLibraryAsync), () => !IsBusy);
@@ -54,7 +84,10 @@ public sealed class CatalogBarViewModel : ObservableObject
     /// <summary>The open library's name (the title bar shows it).</summary>
     public string ActiveName => _catalog.ActiveCatalog?.Name ?? "Library";
 
-    /// <summary>Every library, by name; the open one has <see cref="LibraryListItem.IsActive"/>.</summary>
+    /// <summary>
+    /// Every library, in the order the user dragged them into (alphabetical until then, and for libraries added since);
+    /// the open one has <see cref="LibraryListItem.IsActive"/>.
+    /// </summary>
     public IReadOnlyList<LibraryListItem> Libraries { get; private set; } = [];
 
     /// <summary>Whether the nav shows the list (the LIBRARIES header collapses it). For this session.</summary>
@@ -94,17 +127,97 @@ public sealed class CatalogBarViewModel : ObservableObject
     /// <summary>The command that is running (or last ran). Tests await it; the app doesn't need to.</summary>
     internal Task? PendingOperation { get; private set; }
 
-    /// <summary>Re-reads the library list, so the nav shows every library and which one is open.</summary>
+    /// <summary>The latest refresh's reads of the other libraries' counts. Tests await it; the app doesn't need to.</summary>
+    internal Task PendingCounts { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Re-reads the library list, so the nav shows every library and which one is open, then reads each other
+    /// library's count from its own files in the background.
+    /// </summary>
     public void Refresh()
     {
         var activeId = _catalog.ActiveCatalog?.Id;
-        Libraries = _catalog.Registry.List()
-            .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
+        var registry = _catalog.Registry;
+        Libraries = ListOrder.Apply(registry.List(), registry.Order, c => c.Id, c => c.Name)
             .Select(c => new LibraryListItem(c.Id, c.Name, c.Dir, c.Id == activeId, c.ItemCount))
             .ToList();
         OnPropertyChanged(nameof(ActiveName));
         OnPropertyChanged(nameof(Libraries));
         CommandManager.InvalidateRequerySuggested(); // Remove/Delete follow which library is open
+        PendingCounts = ReadCountsAsync(++_countGeneration, [.. Libraries.Where(l => !l.IsActive)]);
+    }
+
+    /// <summary>
+    /// Moves a library to <paramref name="toIndex"/> in the list (an index into the list without it) and keeps that
+    /// order, as dropping it there after a drag does. If the list can't be saved, says so and the order stays as it was.
+    /// </summary>
+    public void MoveLibrary(string id, int toIndex)
+    {
+        var ids = Libraries.Select(l => l.Id).ToList();
+        var moved = ListOrder.Move(ids, id, toIndex);
+        if (moved.SequenceEqual(ids))
+            return;
+        if (!_catalog.Registry.SetOrder(moved))
+            _dialogs.ShowMessage("Aperture",
+                "Aperture couldn't save its list of libraries, so the new order wasn't kept.", isError: true);
+        Refresh();
+    }
+
+    // Each library's count from its own files, one at a time; a changed count is remembered for the next launch, and
+    // shown on the item (on the UI thread when there is one). A refresh since this one started makes it stop.
+    private Task ReadCountsAsync(int generation, List<LibraryListItem> others)
+    {
+        if (others.Count == 0)
+            return Task.CompletedTask;
+        return Task.Run(async () =>
+        {
+            foreach (var item in others)
+            {
+                int? count;
+                await _countGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    if (generation != Volatile.Read(ref _countGeneration))
+                        return;
+                    count = _countLibrary(item.Dir);
+                }
+                catch (Exception)
+                {
+                    count = null; // a label, best effort: the item keeps the count it had
+                }
+                finally
+                {
+                    _countGate.Release();
+                }
+                if (count is not { } known || generation != Volatile.Read(ref _countGeneration))
+                    continue;
+                if (known != item.ItemCount)
+                    _catalog.Registry.SetItemCount(item.Id, known); // off the UI thread: it can wait on another window
+                if (_ui is null)
+                    item.ItemCount = known;
+                else
+                    await OnUi(() => item.ItemCount = known).ConfigureAwait(false); // so PendingCounts covers it
+            }
+        });
+    }
+
+    // Runs an action on the UI thread, done when it has run there.
+    private Task OnUi(Action action)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ui!.Post(_ =>
+        {
+            try
+            {
+                action();
+                done.SetResult();
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        }, null);
+        return done.Task;
     }
 
     private bool IsOpen(string? id) => id is not null && id == _catalog.ActiveCatalog?.Id;
@@ -183,7 +296,16 @@ public sealed class CatalogBarViewModel : ObservableObject
         if (!_dialogs.Confirm("Delete library files", DeleteWarning(entry)))
             return;
 
-        var result = await _catalog.DeleteFilesAsync(id);
+        CatalogDeletion result;
+        await _countGate.WaitAsync(); // a count read holds the library's database open: let it finish first
+        try
+        {
+            result = await _catalog.DeleteFilesAsync(id);
+        }
+        finally
+        {
+            _countGate.Release();
+        }
         if (result.Outcome == CatalogDeletionOutcome.PartiallyDeleted)
             _dialogs.ShowMessage("Aperture",
                 $"\"{entry.Name}\" was removed from the list, but the files below couldn't be deleted " +

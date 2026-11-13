@@ -61,6 +61,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _searchText = "";
     private string _statusText = "No folders yet — add one to begin.";
     private string _indexingText = "";
+    private string _indexingNote = "";
     private bool _isIndexing;
     private bool _indexIndeterminate = true;
     private double _indexValue;
@@ -78,6 +79,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private IReadOnlyList<TileVm> _selectedTiles = [];
     private List<LibraryRow> _allRows = [];
     private IReadOnlyList<HiddenFolder> _hiddenFolders = []; // subfolders hidden with their checkbox (out of _allRows)
+
+    // Every assignment of the rows bumps _rowsVersion and drops the folder index (built from them when next needed): a
+    // read in the background is shown only if no assignment came after it started (0.9.1 plan, I4).
+    private int _rowsVersion;
+    private FolderIndex? _folderIndex;
+
+    // The refresh worker (0.9.1 plan, I1–I3), UI thread only: what's been asked for since it last took its work, and
+    // whether it's running. _runEndsPending: runs that have ended whose refresh hasn't landed (still "indexing" till then).
+    private bool _refreshRows;
+    private bool _refreshTree;
+    private readonly HashSet<long> _refreshCounts = [];
+    private int _refreshRunEnds;
+    private int _runEndsPending;
+    private TaskCompletionSource? _refreshRunning;
+
+    // Each run in progress, by root id: its latest report (null until its first). UI thread only.
+    private readonly Dictionary<long, IndexProgress?> _runs = [];
 
     // The current view's tiles, keyed by item id. A rebuild that keeps the same items (streaming index,
     // background reconcile, watcher, filter/sort) reuses these instances instead of allocating new ones —
@@ -173,10 +191,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var generation = ++_buildGeneration;
         IsLoadingView = true;
 
+        var version = _rowsVersion;
+        LibraryContents contents;
+        FolderIndex index;
         try
         {
-            (_allRows, _hiddenFolders) = await Task.Run(_library.GetContents);
-            _rowsRead = true;
+            contents = await _library.GetContentsAsync();
+            index = await Task.Run(() => FolderIndex.Build(contents.Rows, contents.Hidden));
         }
         catch (Exception) when (_closing)
         {
@@ -184,8 +205,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         if (_closing)
             return;
-        OnPropertyChanged(nameof(TotalItemCount));
-        OnPropertyChanged(nameof(LoadedItemCount));
+        // A change since the read began (a folder removed or hidden meanwhile) has newer rows already: keep those (I4).
+        if (version == _rowsVersion)
+            SetRows(contents, index);
         if (generation != _buildGeneration)
             return; // a data-change rebuild already superseded startup
 
@@ -1014,6 +1036,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _indexingText;
         private set => SetProperty(ref _indexingText, value);
+    }
+
+    /// <summary>
+    /// The friendly line under <see cref="IndexingText"/> while anything is indexed ("This might take a while…", and how
+    /// many online-only files it will download); empty otherwise (0.9.1 batch, item 4).
+    /// </summary>
+    public string IndexingNote
+    {
+        get => _indexingNote;
+        private set => SetProperty(ref _indexingNote, value);
     }
 
     /// <summary>True while any folder is being indexed — drives the status-bar progress bar.</summary>
@@ -2025,10 +2057,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Roots --------------------------------------------------------------
 
+    /// <summary>
+    /// Moves a top-level folder to <paramref name="toIndex"/> in the folder list (an index into the list without it)
+    /// and keeps that order with the library, as dropping it there after a drag does (0.9.1 batch, item 5).
+    /// </summary>
+    public void MoveRoot(long rootId, int toIndex)
+    {
+        var ids = Roots.Select(r => r.Id).ToList();
+        var moved = ListOrder.Move(ids, rootId, toIndex);
+        if (moved.SequenceEqual(ids))
+            return; // its own place, or a folder no longer here: no order of the user's own is written
+        Roots.Move(ids.IndexOf(rootId), moved.IndexOf(rootId)); // the same RootVm, whatever it's doing, moved
+        _library.Settings.Update(s => s.RootOrder = [.. moved]);
+        BuildTree(); // keeps what's expanded (RestoreExpansion)
+        SelectPath(_location.RootId, _location.RelDir);
+    }
+
     private void LoadRoots()
     {
         Roots.Clear();
-        foreach (var root in _library.GetRoots())
+        // The user's order, then any folder added since, by name (the order folders always had).
+        var roots = ListOrder.Apply(_library.GetRoots(), _library.Settings.Current.RootOrder, r => r.Id, r => r.Alias,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var root in roots)
         {
             var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged)
             {
@@ -2159,13 +2210,22 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Re-reads the union of included items. Call only when the underlying data changed.</summary>
-    private void LoadRows()
+    private void LoadRows() => SetRows(_library.GetContents(), null);
+
+    // The rows the window shows are now these: a new version, with the folder index that goes with them (built from them
+    // when next needed, unless a read in the background built it already).
+    private void SetRows(LibraryContents contents, FolderIndex? index)
     {
-        (_allRows, _hiddenFolders) = _library.GetContents();
+        (_allRows, _hiddenFolders) = (contents.Rows, contents.Hidden);
+        _folderIndex = index;
+        _rowsVersion++;
         _rowsRead = true;
         OnPropertyChanged(nameof(TotalItemCount));
         OnPropertyChanged(nameof(LoadedItemCount));
     }
+
+    // The folder tree's subfolders for the rows shown, worked out once per version of them (I6).
+    private FolderIndex Index => _folderIndex ??= FolderIndex.Build(_allRows, _hiddenFolders);
 
     /// <summary>Rebuilds the grid synchronously from the cached rows (startup / one-off data changes).</summary>
     private void BuildViewImmediate() => ApplyView(ComputeView(CaptureBuildInputs()));
@@ -2386,7 +2446,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         FolderTree.Clear();
         foreach (var rootVm in Roots)
         {
-            var subs = Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootVm.Id, "");
+            var subs = Index.Subfolders(rootVm.Id, "");
             FolderTree.Add(new FolderNodeVm(
                 rootVm.Id, "", rootVm.Alias, isRoot: true, hasChildren: subs.Count > 0,
                 rootVm, TreeCount(rootVm), LoadChildNodes, OnNodeExpandedChanged));
@@ -2448,7 +2508,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private List<FolderNodeVm> LoadChildNodes(long rootId, string relDir) =>
-        Core.Library.FolderTree.Subfolders(_allRows, _hiddenFolders, rootId, relDir)
+        Index.Subfolders(rootId, relDir)
             .Select(s => new FolderNodeVm(
                 rootId, s.RelDir, s.Name, isRoot: false, s.HasChildren, null, s.Count,
                 LoadChildNodes, OnNodeExpandedChanged, s.IsShown, OnFolderShownChanged))
@@ -2657,6 +2717,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         RunOnUi(() =>
         {
+            _runs[root.Id] = null;
             if (Roots.FirstOrDefault(r => r.Id == root.Id) is { } vm)
             {
                 vm.IsIndexing = true;
@@ -2698,40 +2759,132 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 if (_closing)
                     return; // the library is being disposed; skip bookkeeping that would read it
 
+                _runs.Remove(root.Id);
                 var rootVm = Roots.FirstOrDefault(r => r.Id == root.Id);
                 if (rootVm is not null)
                 {
-                    rootVm.Count = _library.CountForRoot(root.Id);
                     rootVm.Status = paused ? "paused" : "";
                     rootVm.IsIndexing = false;
                     rootVm.IsPaused = paused;
                 }
                 OnPropertyChanged(nameof(HasPausedRoots));
-                UpdateIndexingText();
 
-                // Only rebuild when the index actually changed the library (or we streamed partials
-                // and need a final complete pass). A no-op reconcile — the common case a couple of
-                // seconds after startup — must not rebuild the grid + tree and repaint everything.
-                // A cancelled run may have committed partial work, so show that too.
+                // The folder's count, and the rows and the tree only when the index actually changed the library (or we
+                // streamed partials and need a final complete pass), all read in the background (0.9.1 plan, I1). A no-op
+                // reconcile — the common case a couple of seconds after startup — must not rebuild the grid + tree and
+                // repaint everything. A cancelled run may have committed partial work, so show that too.
                 var added = result?.Added ?? 0;
                 var removed = result?.Removed ?? 0;
                 var dataChanged = streaming || canceled || added + (result?.Updated ?? 0) + removed > 0;
-                if (dataChanged)
-                {
-                    LoadRows();
-                    RequestBuildView(); // debounced + off-thread + tile reuse, so the reconcile stays smooth
-                }
-                if (streaming || canceled || added + removed > 0) // folders shift when items are added/removed
-                {
-                    BuildTree();
-                    SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
-                }
+                var foldersShifted = streaming || canceled || added + removed > 0; // folders shift when items come or go
+                _runEndsPending++;
+                RequestRefresh(rows: dataChanged, tree: foldersShifted, countRoot: root.Id, runEnd: true);
+                UpdateIndexingText();
             });
 
             // Don't re-arm the watcher on a stopped run — a file event would restart the very
             // indexing the user just paused — nor on a library that's closing for a catalog switch.
             if (watchAfter && !canceled && !_closing)
                 _library.Watch(root);
+        }
+    }
+
+    /// <summary>
+    /// Asks for the rows (and the grid built from them), the folder tree, and a folder's count, read in the background
+    /// and applied here (0.9.1 plan, I1). Asked while a refresh runs, it's done once that one has, with everything asked
+    /// meanwhile (I3). <paramref name="runEnd"/>: a run's end, which keeps the window "indexing" till it lands. UI
+    /// thread only; internal for tests.
+    /// </summary>
+    internal void RequestRefresh(bool rows, bool tree, long? countRoot, bool runEnd = false)
+    {
+        if (_closing)
+            return;
+        _refreshRows |= rows;
+        _refreshTree |= tree;
+        if (countRoot is { } rootId)
+            _refreshCounts.Add(rootId);
+        if (runEnd)
+            _refreshRunEnds++;
+        if (_refreshRunning is null)
+            RunRefreshes();
+    }
+
+    /// <summary>Done once the refresh worker has nothing left to do (for tests).</summary>
+    internal Task RefreshIdle => _refreshRunning?.Task ?? Task.CompletedTask;
+
+    // One refresh at a time: takes everything asked for so far, does it, and goes again while more has been asked.
+    private async void RunRefreshes()
+    {
+        var running = _refreshRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            while (!_closing && (_refreshRows || _refreshTree || _refreshCounts.Count > 0 || _refreshRunEnds > 0))
+            {
+                var (rows, tree, runEnds) = (_refreshRows, _refreshTree, _refreshRunEnds);
+                long[] roots = [.. _refreshCounts];
+                (_refreshRows, _refreshTree, _refreshRunEnds) = (false, false, 0);
+                _refreshCounts.Clear();
+
+                await RefreshOnceAsync(rows, tree, roots);
+
+                if (runEnds > 0)
+                {
+                    _runEndsPending = Math.Max(0, _runEndsPending - runEnds);
+                    UpdateIndexingText();
+                }
+            }
+        }
+        finally
+        {
+            _refreshRunning = null;
+            running.SetResult();
+        }
+    }
+
+    // Reads off the UI thread (the library's tracked reads, through its reader provider), then applies here: the counts,
+    // the rows if no change has replaced them since the read began (I4), and the tree from whatever rows are current.
+    // A read that fails keeps what the window shows (I5).
+    private async Task RefreshOnceAsync(bool rows, bool tree, long[] countRoots)
+    {
+        var version = _rowsVersion;
+        (LibraryContents Contents, FolderIndex Index)? read = null;
+        var counts = new List<(long RootId, int Count)>();
+        try
+        {
+            if (rows)
+            {
+                var contents = await _library.GetContentsAsync();
+                read = (contents, await Task.Run(() => FolderIndex.Build(contents.Rows, contents.Hidden)));
+            }
+            foreach (var rootId in countRoots)
+                counts.Add((rootId, await _library.CountForRootAsync(rootId)));
+        }
+        catch (Exception ex)
+        {
+            if (_closing)
+                return; // the library is closing: nothing to apply
+            Debug.WriteLine($"Refresh read failed: {ex}");
+        }
+        if (_closing)
+            return;
+
+        foreach (var (rootId, count) in counts)
+        {
+            if (Roots.FirstOrDefault(r => r.Id == rootId) is not { } rootVm)
+                continue; // removed meanwhile
+            rootVm.Count = count;
+            if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
+                node.Count = TreeCount(rootVm);
+        }
+        if (read is { } fresh && version == _rowsVersion)
+        {
+            SetRows(fresh.Contents, fresh.Index);
+            RequestBuildView(); // debounced + off-thread + tile reuse, so the refresh stays smooth
+        }
+        if (tree)
+        {
+            BuildTree();
+            SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
         }
     }
 
@@ -2834,13 +2987,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (rootVm is null)
             return;
 
-        rootVm.Status = p.Phase switch
-        {
-            IndexPhase.Scanning => "scanning…",
-            IndexPhase.Indexing => $"indexing {p.Processed:n0} / {p.Total:n0}",
-            IndexPhase.Pruning => "cleaning up…",
-            _ => "",
-        };
+        rootVm.Status = IndexingMessage.RootStatus(p);
+        if (_runs.ContainsKey(rootId))
+            _runs[rootId] = p; // not after its end: a report posted late mustn't bring the run back
 
         // Drive the progress bars: a real fraction while indexing files, otherwise indeterminate.
         if (p.Phase == IndexPhase.Indexing && p.Total > 0)
@@ -2858,11 +3007,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // once an interval, though: each read counts the whole folder, and a run that changes nothing reports its batches
         // all at once.
         if (p.Phase == IndexPhase.Indexing && _countReads.IsDue(rootId))
-        {
-            rootVm.Count = _library.CountForRoot(rootId);
-            if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
-                node.Count = TreeCount(rootVm);
-        }
+            RequestRefresh(rows: false, tree: false, countRoot: rootId); // read in the background (I1)
         UpdateIndexingText();
 
         // Throttled live refresh so thumbnails appear as they're indexed.
@@ -2872,8 +3017,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (now - _lastStreamRefreshTick > 1200)
             {
                 _lastStreamRefreshTick = now;
-                LoadRows();
-                BuildViewImmediate();
+                RequestRefresh(rows: true, tree: false, countRoot: null); // read and built in the background (I1)
             }
         }
     }
@@ -2900,11 +3044,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             active = _activeIndexers;
         }
 
-        IsIndexing = active > 0;
+        // Still "indexing" until each ended run's refresh has landed: the grid and the counts catch up first.
+        IsIndexing = active > 0 || _runEndsPending > 0;
 
-        if (active == 0)
+        if (!IsIndexing)
         {
             IndexingText = "";
+            IndexingNote = "";
             IndexIndeterminate = true; // reset for the next run
             // Refresh the pill here too: a reconcile that changed nothing skips the view rebuild that
             // would otherwise have done it, which would leave the pill reading "indexing…" forever.
@@ -2912,10 +3058,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var busy = Roots.Where(r => !string.IsNullOrEmpty(r.Status)).ToList();
-        IndexingText = busy.Count == 1
-            ? $"{busy[0].Alias}: {busy[0].Status}"
-            : $"Indexing {active} folder{(active == 1 ? "" : "s")}…";
+        if (_runs.Count > 0) // else every run has ended, its refresh still to land: the lines stay as they were
+            (IndexingText, IndexingNote) = IndexingMessage.For(
+                [.. _runs.Select(run => (Roots.FirstOrDefault(r => r.Id == run.Key)?.Alias ?? "", run.Value))]);
         UpdateSyncStatus();
     }
 

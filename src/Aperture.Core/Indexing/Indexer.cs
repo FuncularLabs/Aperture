@@ -25,11 +25,23 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var nowTicks = DateTime.UtcNow.Ticks;
 
         progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning });
-        var files = FileScanner.Scan(root.Path, includeVideos, ct, root.Recursive);
+        // Count first, and say how the count climbs: a big tree (or one on a slow or cloud drive) takes a while to walk.
+        var files = FileScanner.Scan(root.Path, includeVideos, ct, root.Recursive, t =>
+            progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning, Processed = t.Found }));
 
         var existing = new ItemStore(_db).GetExisting(root.Id);
         var thumbInfo = new ThumbnailStore(_db).GetInfo();
         var expectedThumbs = ThumbSizes.All.Length;
+
+        // A file is unchanged when its size and time match its row; its thumbnails are fresh when all of them are cached
+        // from this version of it. The run reads every file but an unchanged one with fresh thumbnails.
+        bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) =>
+            existing.TryGetValue(file.RelPath, out row) && row.MTimeTicks == file.MTimeTicks && row.SizeBytes == file.SizeBytes;
+        bool ThumbsFresh(long itemId, ScannedFile file) =>
+            thumbInfo.TryGetValue(itemId, out var ti) && ti.Count >= expectedThumbs && ti.SrcMtimeTicks == file.MTimeTicks;
+
+        // The online-only files among those it will read: each is downloaded to be read (the slow part on a cloud drive).
+        var onlineOnly = files.Count(f => f.IsOnlineOnly && !(IsUnchanged(f, out var r) && ThumbsFresh(r.Id, f)));
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         int added = 0, updated = 0, skipped = 0, thumbsGenerated = 0, failed = 0;
@@ -53,18 +65,13 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 seen.Add(file.RelPath);
                 processed++;
 
-                if (existing.TryGetValue(file.RelPath, out var row)
-                    && row.MTimeTicks == file.MTimeTicks
-                    && row.SizeBytes == file.SizeBytes)
+                if (IsUnchanged(file, out var row))
                 {
                     // Unchanged file. Regenerate thumbnails only if the cache is incomplete
                     // OR its source mtime no longer matches this file — the latter catches a
                     // realigned cache (metadata rebuilt, ids now map to different files) that
                     // would otherwise serve the wrong image for this item.
-                    var thumbsFresh = thumbInfo.TryGetValue(row.Id, out var ti)
-                                      && ti.Count >= expectedThumbs
-                                      && ti.SrcMtimeTicks == file.MTimeTicks;
-                    if (!thumbsFresh)
+                    if (!ThumbsFresh(row.Id, file))
                     {
                         var set = GenerateThumbnails(file);
                         if (set is null)
@@ -109,6 +116,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                         Phase = IndexPhase.Indexing,
                         Processed = processed,
                         Total = files.Count,
+                        OnlineOnly = onlineOnly,
                         CurrentFile = file.RelPath,
                     });
                 }
@@ -130,7 +138,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         }
 
         // Prune rows whose files disappeared from disk.
-        progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Pruning });
+        progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly });
         var removedIds = existing
             .Where(kv => !seen.Contains(kv.Key))
             .Select(kv => kv.Value.Id)
@@ -147,6 +155,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             Phase = IndexPhase.Done,
             Processed = files.Count,
             Total = files.Count,
+            OnlineOnly = onlineOnly,
         });
 
         return new IndexResult

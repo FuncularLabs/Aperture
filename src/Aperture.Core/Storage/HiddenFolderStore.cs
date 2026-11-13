@@ -10,7 +10,11 @@ public sealed class HiddenFolderStore(ApertureDatabase database)
 {
     private readonly ApertureDatabase _db = database;
 
-    public List<HiddenFolderRow> GetAll() => [.. _db.Provider.GetList<HiddenFolderRow>()];
+    public List<HiddenFolderRow> GetAll() => All(_db.Provider);
+
+    /// <summary><see cref="GetAll"/> over any provider (see <see cref="ItemStore.IncludedUnion"/>).</summary>
+    internal static List<HiddenFolderRow> All(Funcular.Data.Orm.Sqlite.SqliteOrmDataProvider provider) =>
+        [.. provider.GetList<HiddenFolderRow>()];
 
     /// <summary>Hides a folder; hiding one that's already hidden changes nothing.</summary>
     public void Hide(long rootId, string relDir)

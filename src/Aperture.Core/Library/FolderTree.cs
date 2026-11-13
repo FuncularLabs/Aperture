@@ -12,6 +12,13 @@ public sealed record FolderEntry(string Name, string RelDir, int Count, bool Has
 public static class FolderTree
 {
     /// <summary>
+    /// How many times this thread has walked the rows for a folder's subfolders (for tests: the window's tree reads a
+    /// <see cref="FolderIndex"/> instead).
+    /// </summary>
+    [ThreadStatic]
+    internal static int SubfoldersCalls;
+
+    /// <summary>
     /// The subfolders of <paramref name="relDir"/> in root <paramref name="rootId"/>, by name, last first. A
     /// subfolder appears if it holds a shown item, or leads to a hidden folder (so that folder can be shown again).
     /// A hidden subfolder is listed unticked, with its own item count and nothing to expand; one holding no items
@@ -20,6 +27,7 @@ public static class FolderTree
     public static List<FolderEntry> Subfolders(
         IReadOnlyList<LibraryRow> rows, IReadOnlyList<HiddenFolder> hidden, long rootId, string relDir)
     {
+        SubfoldersCalls++;
         var shown = new Dictionary<string, (string RelDir, int Count, bool HasChildren)>(StringComparer.OrdinalIgnoreCase);
         foreach (var r in rows)
         {

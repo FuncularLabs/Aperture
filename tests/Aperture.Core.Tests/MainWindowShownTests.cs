@@ -71,8 +71,15 @@ public class MainWindowShownTests
             library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
             service.RecordItemCount(7); // when it was last left — while it's open, the list shows its live count instead
             var workDir = outer.Combine("Work");
-            using (new LibraryService(workDir)) { }
-            service.Registry.SetItemCount(service.Registry.Add("Work", workDir).Id, 42);
+            using var workPhotos = new TempDir();
+            foreach (var file in new[] { "w1.jpg", "w2.jpg" })
+                TestImages.Write(Path.Combine(workPhotos.Path, file), 64, 48);
+            using (var work = new LibraryService(workDir))
+            {
+                work.IndexRoot(work.AddRoot(workPhotos.Path, "Work photos"));
+                work.ShutdownAsync().GetAwaiter().GetResult();
+            }
+            service.Registry.SetItemCount(service.Registry.Add("Work", workDir).Id, 42); // recorded when it was last left
             var bar = new CatalogBarViewModel(service, new NoDialogs(), outer.Combine("Aperture Libraries"), outer.Combine("Pictures"));
             var vm = new MainViewModel(library, new ThumbnailService(library), bar);
             var window = OffScreen(new MainWindow { Width = 1200, Height = 800, DataContext = vm });
@@ -87,12 +94,13 @@ public class MainWindowShownTests
 
                 window.Show(); // a binding the window can't make with this view model throws here, or as it's laid out
                 Assert.Equal(["Work (42)"], Counts()); // the open library's items aren't read yet (that waits for this thread): no "(0)"
-                Assert.Equal("", everything.Text);     // nor beside Everything
+                Assert.Equal("", everything.Text);     // nor beside Everything; Work shows the count it had, at once
 
                 Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == 3 && !vm.IsLoadingView, TimeSpan.FromSeconds(10)));
+                Assert.True(Sta.PumpUntil(() => bar.PendingCounts.IsCompleted, TimeSpan.FromSeconds(10)));
                 Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300)); // layout and bindings settle
 
-                Assert.Equal(["Default (3)", "Work (42)"], Counts());
+                Assert.Equal(["Default (3)", "Work (2)"], Counts()); // then what Work's own files say (0.9.1 batch, item 6)
                 Assert.Equal("(3)", everything.Text.Trim());
 
                 var spinner = Assert.Single(Descendants((DependencyObject)window.FindName("IndexingCard")).OfType<ShapePath>());

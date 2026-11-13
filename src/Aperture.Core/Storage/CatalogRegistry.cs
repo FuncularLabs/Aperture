@@ -70,6 +70,13 @@ internal sealed class CatalogRegistryState
 
     /// <summary>True once the Default catalog has been registered, so removing it later sticks.</summary>
     public bool DefaultSeeded { get; set; }
+
+    /// <summary>
+    /// The order the user dragged the libraries into, by id; <c>null</c> until they first do (the list is then
+    /// alphabetical). Ids of libraries no longer listed mean nothing. Kept as raw JSON and read leniently
+    /// (<see cref="CatalogRegistry"/>): a value that isn't a list of ids must never set the whole list aside.
+    /// </summary>
+    public JsonElement? Order { get; set; }
 }
 
 /// <summary>
@@ -115,6 +122,7 @@ public sealed class CatalogRegistry
     private string? _activeId;    // the library this window has open
     private string? _preferredId; // the user's latest switch (any window) — what the next launch opens
     private bool _defaultSeeded;
+    private List<string>? _order; // the user's order (ids), or null: alphabetical
     private bool _readFailed;     // the last read found the file but couldn't read it: never save over it
 
     /// <summary><c>%LOCALAPPDATA%\Aperture Libraries\catalogs.json</c> — outside every catalog's folder.</summary>
@@ -189,6 +197,29 @@ public sealed class CatalogRegistry
     {
         lock (_gate) return _catalogs.Select(Clone).ToList();
     }
+
+    /// <summary>
+    /// The order the user dragged the libraries into (ids, each once), or <c>null</c> if they never have: the list is
+    /// then shown alphabetically. A snapshot.
+    /// </summary>
+    public IReadOnlyList<string>? Order
+    {
+        get { lock (_gate) return _order?.ToList(); }
+    }
+
+    /// <summary>
+    /// Keeps the order the user dragged the libraries into: <paramref name="ids"/>, less ids not listed and repeats.
+    /// Returns <c>false</c> if the list couldn't be saved; the order is then as it was.
+    /// </summary>
+    public bool SetOrder(IReadOnlyList<string> ids) => Mutate(() =>
+    {
+        var previous = _order;
+        _order = ids.Where(id => _catalogs.Any(c => c.Id == id)).Distinct().ToList();
+        if (Save())
+            return true;
+        _order = previous;
+        return false;
+    });
 
     /// <summary>The active catalog, or <c>null</c> if none is registered.</summary>
     public CatalogEntry? Active
@@ -617,6 +648,7 @@ public sealed class CatalogRegistry
 
         _catalogs = catalogs;
         _defaultSeeded |= disk.DefaultSeeded;
+        _order = ReadOrder(disk.Order);
         _activeId = catalogs.Any(c => c.Id == active) ? active : null;
         // What the next launch opens is the user's latest switch in any window — the file's choice, while listed.
         if (catalogs.Any(c => c.Id == disk.ActiveId))
@@ -711,6 +743,7 @@ public sealed class CatalogRegistry
                 Catalogs = _catalogs.Select(c => (CatalogEntry?)Clone(c)).ToList(),
                 ActiveId = _preferredId ?? _activeId,
                 DefaultSeeded = _defaultSeeded,
+                Order = _order is null ? null : JsonSerializer.SerializeToElement(_order),
             };
             using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
             {
@@ -742,6 +775,19 @@ public sealed class CatalogRegistry
     }
 
     private static string NewId() => Guid.NewGuid().ToString("N");
+
+    // The ids in the file's order: the non-blank strings of an array, each once; anything else is no order at all.
+    private static List<string>? ReadOrder(JsonElement? order)
+    {
+        if (order is not { ValueKind: JsonValueKind.Array } ids)
+            return null;
+        return ids.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .Where(id => id.Length > 0)
+            .Distinct()
+            .ToList();
+    }
 
     private static CatalogEntry Clone(CatalogEntry e) =>
         new() { Id = e.Id, Name = e.Name, Dir = e.Dir, LastOpenedTicks = e.LastOpenedTicks, ItemCount = e.ItemCount };

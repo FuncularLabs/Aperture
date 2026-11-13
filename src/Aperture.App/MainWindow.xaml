@@ -558,15 +558,31 @@
             </DockPanel>
         </Border>
 
-        <!-- Status bar -->
-        <Border DockPanel.Dock="Bottom" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+        <!-- Status bar. While anything is indexed, a bar across the whole window along its top edge (0.9.1 batch, item 4),
+             and the friendly line beside the item count. -->
+        <Border x:Name="StatusBar" DockPanel.Dock="Bottom" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
                 BorderThickness="0,1,0,0" KeyboardNavigation.TabNavigation="None">
+            <Grid>
+            <ProgressBar x:Name="IndexingBar" Height="3" VerticalAlignment="Top" HorizontalAlignment="Stretch"
+                         Foreground="{StaticResource Accent}" Background="Transparent" BorderThickness="0"
+                         IsIndeterminate="{Binding IndexIndeterminate}"
+                         Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"
+                         Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}" />
             <Grid Margin="12,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
                            VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding IndexingNote}" Foreground="{StaticResource Muted}" FontSize="12"
+                           VerticalAlignment="Center" Margin="14,0,10,0" TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding IndexingNote}"
+                           Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}" />
                 <!-- Indexing feedback: label + a determinate bar (indeterminate while scanning),
                      with pause/stop while it runs and resume once paused. -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                 Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource Accent}" FontSize="12"
@@ -593,6 +609,7 @@
                                 ToolTip="Resume paused folders — already-indexed files are skipped" />
                     </StackPanel>
                 </StackPanel>
+            </Grid>
             </Grid>
         </Border>
 
@@ -652,8 +669,10 @@
                             </StackPanel>
                         </Button>
                     </DockPanel>
-                    <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Catalog.Libraries}" Margin="8,0,8,2"
-                                  Focusable="False"
+                    <ItemsControl x:Name="LibraryList" DockPanel.Dock="Top" ItemsSource="{Binding Catalog.Libraries}"
+                                  Margin="8,0,8,2" Focusable="False" AllowDrop="True"
+                                  PreviewMouseLeftButtonDown="OnLibraryListPreviewDown" PreviewMouseMove="OnLibraryListPreviewMove"
+                                  DragOver="OnLibraryListDragOver" DragLeave="OnReorderDragLeave" Drop="OnLibraryListDrop"
                                   Visibility="{Binding Catalog.IsExpanded, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -797,6 +816,8 @@
                               KeyboardNavigation.TabNavigation="Once"
                               SelectedItemChanged="OnTreeSelectedChanged" PreviewKeyDown="OnTreeKeyDown"
                               PreviewMouseLeftButtonDown="OnTreePreviewMouseLeftButtonDown"
+                              PreviewMouseMove="OnTreePreviewMove" AllowDrop="True"
+                              DragOver="OnTreeDragOver" DragLeave="OnReorderDragLeave" Drop="OnTreeDrop"
                               PreviewGotKeyboardFocus="OnTreePreviewGotKeyboardFocus">
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
@@ -1179,7 +1200,9 @@
                     <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="Indexing" Foreground="{StaticResource CanvasInk}" FontSize="14" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding IndexingText}" Foreground="{StaticResource CanvasInk}" FontSize="12"
-                                   Opacity="0.85" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" />
+                                   Opacity="0.85" Margin="0,2,0,2" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding IndexingNote}" Foreground="{StaticResource CanvasInk}" FontSize="11"
+                                   Opacity="0.7" Margin="0,0,0,6" TextWrapping="Wrap" MaxWidth="480" />
                         <ProgressBar Height="4" MinWidth="240" Foreground="{StaticResource Accent}" Background="#3A3E46"
                                      BorderThickness="0"
                                      Value="{Binding IndexValue, Mode=OneWay}" Maximum="{Binding IndexMax, Mode=OneWay}"

@@ -44,6 +44,7 @@ public sealed class LibraryService : IDisposable
     // them to settle before the database is disposed, rather than racing a half-written transaction.
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly List<Task> _indexTasks = [];
+    private readonly List<Task> _readTasks = []; // the window's reads in the background: waited for too (guarded by _indexLock)
     private readonly Lock _indexLock = new();
     private volatile bool _shuttingDown; // read lock-free by GetOrCreateThumbnail; written under _indexLock
     private bool _tornDown;
@@ -242,8 +243,19 @@ public sealed class LibraryService : IDisposable
     /// </summary>
     public LibraryContents GetContents()
     {
-        var rows = _items.GetIncludedUnion();
-        var hidden = _hidden.GetAll();
+        // Both through the reader provider: this is read off the UI thread, and must never join a change the UI thread
+        // has under way on the shared provider (a folder's removal, a tag save).
+        var contents = Contents(_items.GetIncludedUnion(), HiddenFolderStore.All(_db.ReadProvider));
+        ReadingContents?.Invoke(); // after the reads: a test that holds here holds rows read before whatever it does next
+        return contents;
+    }
+
+    /// <summary>
+    /// What a library shows, from its included folders' rows and its hidden subfolders: the rule
+    /// <see cref="GetContents"/> follows, and <see cref="Storage.LibraryCount"/> for a library that isn't open.
+    /// </summary>
+    internal static LibraryContents Contents(List<LibraryRow> rows, List<Storage.HiddenFolderRow> hidden)
+    {
         if (hidden.Count == 0)
             return new LibraryContents(rows, []);
 
@@ -274,7 +286,42 @@ public sealed class LibraryService : IDisposable
         || (dir.Length > folder.Length && dir[folder.Length] == Path.DirectorySeparatorChar
             && dir.StartsWith(folder, StringComparison.OrdinalIgnoreCase));
 
-    public int CountForRoot(long rootId) => _items.CountForRoot(rootId);
+    public int CountForRoot(long rootId)
+    {
+        var count = _items.CountForRoot(rootId);
+        ReadingCount?.Invoke(rootId);
+        return count;
+    }
+
+    /// <summary>
+    /// <see cref="GetContents"/> on a background thread, tracked like an index run: <see cref="ShutdownAsync"/> waits for
+    /// it. Throws <see cref="ObjectDisposedException"/> once the library is closing.
+    /// </summary>
+    public Task<LibraryContents> GetContentsAsync() => ReadInBackground(GetContents);
+
+    /// <summary><see cref="CountForRoot"/> on a background thread, tracked as <see cref="GetContentsAsync"/> is.</summary>
+    public Task<int> CountForRootAsync(long rootId) => ReadInBackground(() => CountForRoot(rootId));
+
+    private Task<T> ReadInBackground<T>(Func<T> read)
+    {
+        lock (_indexLock)
+        {
+            ObjectDisposedException.ThrowIf(_shuttingDown, this);
+            var task = Task.Run(read);
+            _readTasks.RemoveAll(t => t.IsCompleted);
+            _readTasks.Add(task);
+            return task;
+        }
+    }
+
+    /// <summary>The library's database (for tests).</summary>
+    internal ApertureDatabase Database => _db;
+
+    /// <summary>Test seam: runs inside every read of the library's contents, after its queries, on the thread reading.</summary>
+    internal Action? ReadingContents { get; set; }
+
+    /// <summary>Test seam: runs inside every read of a folder's count, after its query, on the thread reading.</summary>
+    internal Action<long>? ReadingCount { get; set; }
 
     /// <summary>
     /// Cached thumbnail bytes for an item. Pass <paramref name="expectedSrcMtimeTicks"/>
@@ -436,7 +483,7 @@ public sealed class LibraryService : IDisposable
         lock (_indexLock)
         {
             _shuttingDown = true;
-            pending = _indexTasks.Where(t => !t.IsCompleted).ToArray();
+            pending = [.. _indexTasks.Concat(_readTasks).Where(t => !t.IsCompleted)];
         }
 
         TryCancelShutdown();

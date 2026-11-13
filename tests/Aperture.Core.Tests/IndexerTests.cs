@@ -231,8 +231,71 @@ public class IndexerTests
         Assert.Contains(IndexPhase.Done, phases);
     }
 
+    [Fact]
+    public void Scanning_ReportsTheCount_ThenIndexingCarriesTheTotal_AndTheOnlineOnlyFiles()
+    {
+        // 0.9.1 batch, item 4: count the files first, and show the count climbing while they're counted.
+        using var scope = new ApertureScope();
+        for (var i = 0; i < 300; i++)
+            File.WriteAllText(scope.Library.Combine($"f{i}.jpg"), "x"); // not decodable: quick to "index" (a failure)
+        var cloud = scope.Library.Combine("f0.jpg");
+        File.SetAttributes(cloud, File.GetAttributes(cloud) | FileAttributes.Offline);
+        var root = scope.AddLibraryRoot();
+
+        var reports = new List<IndexProgress>();
+        scope.Indexer.IndexRoot(root, new SynchronousSink(reports));
+
+        // The start, every 250 found, the total. How many are online-only is said once the run knows which it will read.
+        var scanning = reports.Where(r => r.Phase == IndexPhase.Scanning).Select(r => (r.Processed, r.OnlineOnly));
+        Assert.Equal([(0, 0), (250, 0), (300, 0)], scanning);
+        var indexing = reports.Where(r => r.Phase == IndexPhase.Indexing).ToList();
+        Assert.NotEmpty(indexing);
+        Assert.All(indexing, r => Assert.Equal((300, 1), (r.Total, r.OnlineOnly)));
+        var done = Assert.Single(reports, r => r.Phase == IndexPhase.Done);
+        Assert.Equal((300, 300, 1), (done.Processed, done.Total, done.OnlineOnly));
+        Assert.Equal(IndexPhase.Scanning, reports[0].Phase);
+    }
+
+    [Fact]
+    public void OnlineOnly_CountsTheFilesItWillRead_AndNotTheOnesItSkips()
+    {
+        // Each online-only file a run reads is downloaded to read it; one it skips (unchanged, thumbnails cached) isn't.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "here.jpg", "cloud1.jpg", "cloud2.jpg" })
+            TestImages.Write(scope.Library.Combine(name), 64, 48);
+        foreach (var name in new[] { "cloud1.jpg", "cloud2.jpg" })
+            MakeOnlineOnly(scope.Library.Combine(name));
+        var root = scope.AddLibraryRoot();
+
+        Assert.Equal(2, OnlineOnlyReported(scope, root));        // a first run reads every file
+        Assert.Equal(0, OnlineOnlyReported(scope, root));        // nothing changed: nothing is read
+
+        var touched = scope.Library.Combine("cloud2.jpg");
+        File.SetLastWriteTimeUtc(touched, File.GetLastWriteTimeUtc(touched).AddMinutes(1));
+        Assert.Equal(1, OnlineOnlyReported(scope, root));        // the one that changed
+
+        scope.Thumbnails.DeleteForItems([.. scope.Items.GetForRoot(root.Id).Where(i => i.FileName == "cloud1.jpg").Select(i => i.Id)]);
+        Assert.Equal(1, OnlineOnlyReported(scope, root));        // unchanged, but its thumbnails are gone: read again
+    }
+
+    private static void MakeOnlineOnly(string path) => File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Offline);
+
+    // What a run's indexing reports (and its last one) say about online-only files; every report after the scan agrees.
+    private static int OnlineOnlyReported(ApertureScope scope, Root root)
+    {
+        var reports = new List<IndexProgress>();
+        scope.Indexer.IndexRoot(root, new SynchronousSink(reports));
+        var afterScan = reports.Where(r => r.Phase != IndexPhase.Scanning).Select(r => r.OnlineOnly).Distinct().ToList();
+        return Assert.Single(afterScan);
+    }
+
     private sealed class SynchronousProgress(List<IndexPhase> sink) : IProgress<IndexProgress>
     {
         public void Report(IndexProgress value) => sink.Add(value.Phase);
+    }
+
+    private sealed class SynchronousSink(List<IndexProgress> sink) : IProgress<IndexProgress>
+    {
+        public void Report(IndexProgress value) => sink.Add(value);
     }
 }

@@ -372,6 +372,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnTreePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        _reorderPressed = (e.OriginalSource as FrameworkElement)?.DataContext as FolderNodeVm is { IsRoot: true } root
+            ? root
+            : null; // a top-level folder pressed may be dragged into another place (it's selected, as any press does)
+        _reorderStart = e.GetPosition(this);
         var action = LibraryPaneFocus.OnTreePreviewClick(e.OriginalSource as DependencyObject);
         if (action == LibraryPaneFocus.TreeClickAction.Leave)
             return;
@@ -1024,6 +1028,196 @@ public partial class MainWindow : Window
         if (LibraryPaneFocus.ShouldFocusContentsPane(
                 e.OriginalSource as DependencyObject, Keyboard.FocusedElement))
             ItemsList.Focus();
+    }
+
+    // --- Reorder drags: the libraries, and a library's top-level folders (0.9.1 batch, item 5) ---
+    // A press on a library or a top-level folder, then a move past the system's drag distance, drags it within its list
+    // (a private data format, so the window's drop of folders from Explorer never sees it). The drop lands in the gap
+    // the pointer is nearest (DropIndex), and the move is made once the drop has returned. A drop on its own place,
+    // outside the list, or Esc (which ends the drag) changes nothing.
+
+    private const string LibraryReorderFormat = "Aperture.Reorder.Library";
+    private const string RootReorderFormat = "Aperture.Reorder.Root";
+
+    private object? _reorderPressed; // the library or top-level folder pressed, until a drag starts or the button's up
+    private Point _reorderStart;
+    private InsertionLine? _insertion;
+
+    private void OnLibraryListPreviewDown(object sender, MouseButtonEventArgs e)
+    {
+        _reorderPressed = (e.OriginalSource as FrameworkElement)?.DataContext as LibraryListItem;
+        _reorderStart = e.GetPosition(this);
+    }
+
+    private void OnLibraryListPreviewMove(object sender, MouseEventArgs e)
+    {
+        if (TakeReorderDrag(e) is LibraryListItem library)
+            DragToReorder(LibraryList, LibraryReorderFormat, library.Id);
+    }
+
+    private void OnTreePreviewMove(object sender, MouseEventArgs e)
+    {
+        if (TakeReorderDrag(e) is FolderNodeVm { IsRoot: true } root)
+            DragToReorder(FolderTreeView, RootReorderFormat, root.RootId);
+    }
+
+    // The pressed item once the pointer has moved past the drag distance with the button down (once per press).
+    private object? TakeReorderDrag(MouseEventArgs e)
+    {
+        if (_reorderPressed is null)
+            return null;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _reorderPressed = null;
+            return null;
+        }
+        var at = e.GetPosition(this);
+        if (Math.Abs(at.X - _reorderStart.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(at.Y - _reorderStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return null;
+        var pressed = _reorderPressed;
+        _reorderPressed = null;
+        return pressed;
+    }
+
+    private void DragToReorder(FrameworkElement list, string format, object id)
+    {
+        try
+        {
+            DragDrop.DoDragDrop(list, new DataObject(format, id), DragDropEffects.Move);
+        }
+        finally
+        {
+            HideInsertion();
+        }
+    }
+
+    private void OnLibraryListDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(LibraryReorderFormat))
+            return; // not a library: the window decides (folders from Explorer are added)
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+        ShowInsertion(LibraryList, LibraryRows(), e.GetPosition(LibraryList).Y);
+    }
+
+    private void OnLibraryListDrop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(LibraryReorderFormat) || ViewModel?.Catalog is not { } catalog)
+            return;
+        e.Handled = true;
+        HideInsertion();
+        var id = (string)e.Data.GetData(LibraryReorderFormat);
+        var slot = DropIndex.At(e.GetPosition(LibraryList).Y, LibraryRows());
+        var moved = Core.Formatting.ListOrder.MoveToSlot([.. catalog.Libraries.Select(l => l.Id)], id, slot);
+        // After the drop returns: a message the move might show must not hold the drag open.
+        Dispatcher.BeginInvoke(() => catalog.MoveLibrary(id, moved.IndexOf(id)));
+    }
+
+    private void OnTreeDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(RootReorderFormat))
+            return;
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+        ShowInsertion(FolderTreeView, RootRows(), e.GetPosition(FolderTreeView).Y);
+    }
+
+    private void OnTreeDrop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(RootReorderFormat) || ViewModel is not { } vm)
+            return;
+        e.Handled = true;
+        HideInsertion();
+        var rootId = (long)e.Data.GetData(RootReorderFormat);
+        var slot = DropIndex.At(e.GetPosition(FolderTreeView).Y, RootRows());
+        var moved = Core.Formatting.ListOrder.MoveToSlot([.. vm.FolderTree.Select(n => n.RootId)], rootId, slot);
+        Dispatcher.BeginInvoke(() => vm.MoveRoot(rootId, moved.IndexOf(rootId)));
+    }
+
+    private void OnReorderDragLeave(object sender, DragEventArgs e) => HideInsertion();
+
+    // Each library's row in the list, top and height in the list's frame.
+    private List<(double Top, double Height)> LibraryRows()
+    {
+        var rows = new List<(double Top, double Height)>();
+        for (var i = 0; i < LibraryList.Items.Count; i++)
+            if (LibraryList.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement row)
+                rows.Add((row.TranslatePoint(new Point(0, 0), LibraryList).Y, row.ActualHeight));
+        return rows;
+    }
+
+    // Each top-level folder's own row (its header, not the folders shown inside it), in the tree's frame.
+    private List<(double Top, double Height)> RootRows()
+    {
+        var rows = new List<(double Top, double Height)>();
+        for (var i = 0; i < FolderTreeView.Items.Count; i++)
+        {
+            if (FolderTreeView.ItemContainerGenerator.ContainerFromIndex(i) is not System.Windows.Controls.TreeViewItem item)
+                continue;
+            var header = item.Template?.FindName("PART_Header", item) as FrameworkElement ?? item;
+            rows.Add((header.TranslatePoint(new Point(0, 0), FolderTreeView).Y, header.ActualHeight));
+        }
+        return rows;
+    }
+
+    // A line in the gap the drop would land in: above a row, or below the last.
+    private void ShowInsertion(FrameworkElement list, List<(double Top, double Height)> rows, double y)
+    {
+        if (rows.Count == 0)
+            return;
+        var slot = DropIndex.At(y, rows);
+        var lineY = slot < rows.Count ? rows[slot].Top : ListBottom(list, rows);
+        if (_insertion?.AdornedElement != list)
+        {
+            HideInsertion();
+            if (System.Windows.Documents.AdornerLayer.GetAdornerLayer(list) is not { } layer)
+                return;
+            _insertion = new InsertionLine(list, (Brush)FindResource("Accent"));
+            layer.Add(_insertion);
+        }
+        _insertion.Y = lineY;
+    }
+
+    // Below the last row: for the tree, below everything its last folder shows.
+    private double ListBottom(FrameworkElement list, List<(double Top, double Height)> rows) =>
+        ReferenceEquals(list, FolderTreeView)
+        && FolderTreeView.ItemContainerGenerator.ContainerFromIndex(FolderTreeView.Items.Count - 1) is FrameworkElement last
+            ? last.TranslatePoint(new Point(0, last.ActualHeight), FolderTreeView).Y
+            : rows[^1].Top + rows[^1].Height;
+
+    private void HideInsertion()
+    {
+        if (_insertion is null)
+            return;
+        System.Windows.Documents.AdornerLayer.GetAdornerLayer(_insertion.AdornedElement)?.Remove(_insertion);
+        _insertion = null;
+    }
+
+    /// <summary>The line a reorder drag shows where the drop would land.</summary>
+    private sealed class InsertionLine : System.Windows.Documents.Adorner
+    {
+        private readonly Pen _pen;
+        private double _y;
+
+        public InsertionLine(UIElement list, Brush brush) : base(list)
+        {
+            _pen = new Pen(brush, 2);
+            _pen.Freeze();
+            IsHitTestVisible = false;
+        }
+
+        public double Y
+        {
+            set
+            {
+                _y = value;
+                InvalidateVisual();
+            }
+        }
+
+        protected override void OnRender(DrawingContext dc) =>
+            dc.DrawLine(_pen, new Point(6, _y), new Point(Math.Max(6, AdornedElement.RenderSize.Width - 6), _y));
     }
 
     // --- Drag a tile (or the whole selection) out to the shell as real file(s) ---

@@ -490,6 +490,35 @@ public class MainWindowTemplateTests
         });
     }
 
+    [Fact]
+    public void TheStatusBar_HasAFullWidthBoundProgressBar_AndTheCardAndBarTheFriendlyLine()
+    {
+        // 0.9.1 batch, item 4: "a progress bar along the bottom of the app with friendly messaging".
+        Sta.Run(() =>
+        {
+            var window = new MainWindow();
+
+            var bar = Assert.IsType<ProgressBar>(window.FindName("IndexingBar"));
+            Assert.Equal(HorizontalAlignment.Stretch, bar.HorizontalAlignment); // across the window
+            Assert.True(double.IsNaN(bar.Width));
+            Assert.Equal("IsIndexing", BindingOperations.GetBinding(bar, UIElement.VisibilityProperty)?.Path.Path);
+            Assert.Same(window.FindResource("BoolToVis"), BindingOperations.GetBinding(bar, UIElement.VisibilityProperty)!.Converter);
+            Assert.Equal("IndexValue", BindingOperations.GetBinding(bar, RangeBase.ValueProperty)?.Path.Path);
+            Assert.Equal("IndexMax", BindingOperations.GetBinding(bar, RangeBase.MaximumProperty)?.Path.Path);
+            Assert.Equal("IndexIndeterminate", BindingOperations.GetBinding(bar, ProgressBar.IsIndeterminateProperty)?.Path.Path);
+            var statusBar = Assert.IsAssignableFrom<FrameworkElement>(window.FindName("StatusBar"));
+            Assert.Equal(Dock.Bottom, DockPanel.GetDock(statusBar));
+            Assert.Contains(bar, LogicalDescendants(statusBar));
+            Assert.Contains(LogicalDescendants(statusBar).OfType<TextBlock>(),
+                t => BindingOperations.GetBinding(t, TextBlock.TextProperty)?.Path.Path == "IndexingNote");
+
+            var card = Assert.IsAssignableFrom<FrameworkElement>(window.FindName("IndexingCard"));
+            Assert.Contains(LogicalDescendants(card).OfType<TextBlock>(),
+                t => BindingOperations.GetBinding(t, TextBlock.TextProperty)?.Path.Path == "IndexingNote");
+            window.Close();
+        });
+    }
+
     private static IEnumerable<DependencyObject> LogicalDescendants(DependencyObject node)
     {
         foreach (var child in LogicalTreeHelper.GetChildren(node).OfType<DependencyObject>())

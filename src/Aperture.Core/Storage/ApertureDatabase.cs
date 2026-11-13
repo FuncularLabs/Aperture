@@ -28,6 +28,8 @@ public sealed class ApertureDatabase : IDisposable
     private readonly string _metadataConnectionString;
     private readonly string _thumbnailConnectionString;
     private SqliteOrmDataProvider? _provider;
+    private SqliteOrmDataProvider? _readProvider;
+    private readonly Lock _readProviderGate = new();
     private bool _disposed;
 
     public ApertureDatabase(string directory)
@@ -66,6 +68,22 @@ public sealed class ApertureDatabase : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             return _provider ??= new SqliteOrmDataProvider(_metadataConnectionString);
+        }
+    }
+
+    /// <summary>
+    /// A second FunkyORM provider over the metadata DB, for reads off the UI thread: it never begins a transaction, so
+    /// a read through it never joins one the shared <see cref="Provider"/> has open on another thread.
+    /// </summary>
+    public SqliteOrmDataProvider ReadProvider
+    {
+        get
+        {
+            lock (_readProviderGate) // asked for from several threads at once (the window's reads, the cache prune)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _readProvider ??= new SqliteOrmDataProvider(_metadataConnectionString);
+            }
         }
     }
 
@@ -144,6 +162,11 @@ public sealed class ApertureDatabase : IDisposable
 
         _provider?.Dispose();
         _provider = null;
+        lock (_readProviderGate)
+        {
+            _readProvider?.Dispose();
+            _readProvider = null;
+        }
         ClearPool(_metadataConnectionString);
         ClearPool(_thumbnailConnectionString);
     }
