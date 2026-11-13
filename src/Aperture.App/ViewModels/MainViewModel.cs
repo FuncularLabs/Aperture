@@ -2125,9 +2125,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void LoadRoots()
     {
         Roots.Clear();
-        // The user's order, then any folder added since, by name (the order folders always had).
-        var roots = ListOrder.Apply(_library.GetRoots(), _library.Settings.Current.RootOrder, r => r.Id, r => r.Alias,
-            StringComparer.OrdinalIgnoreCase);
+        var roots = InRootOrder(_library.GetRoots(), r => r.Id, r => r.Alias);
         foreach (var root in roots)
         {
             var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged)
@@ -2138,9 +2136,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // The user's order, then any folder added since, by name (the order folders always had).
+    private List<T> InRootOrder<T>(IEnumerable<T> roots, Func<T, long> id, Func<T, string> name) =>
+        ListOrder.Apply(roots, _library.Settings.Current.RootOrder, id, name, StringComparer.OrdinalIgnoreCase);
+
+    // A folder added or renamed takes the place a restart would give it (LoadRoots), at once: by name until the user has
+    // moved one, then after the ones in their order (release review REL-2). The same RootVms, moved.
+    private void SortRoots()
+    {
+        var sorted = InRootOrder(Roots, r => r.Id, r => r.Alias);
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var from = Roots.IndexOf(sorted[i]);
+            if (from != i)
+                Roots.Move(from, i);
+        }
+    }
+
     private void OnRootAliasChanged(RootVm rootVm, string alias)
     {
         _library.SetAlias(rootVm.Id, alias);
+        SortRoots();
         BuildTree();
         RequestBuildView(); // captions reference {alias}
     }
@@ -2202,6 +2218,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var root = _library.AddRoot(path, alias, recursive);
         var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged);
         Roots.Add(vm);
+        SortRoots();
         BuildTree();
         NavigateTo(root.Id, ""); // jump to the new folder so its thumbnails stream in as they're indexed
         _ = IndexRootAsync(root, watchAfter: true, forceStream: true);

@@ -32,6 +32,16 @@ public class IndexingResponsivenessTests
         public List<int> ContentReads { get; } = [];
         public List<int> CountReads { get; } = [];
 
+        public int ContentReadCount
+        {
+            get { lock (ContentReads) return ContentReads.Count; }
+        }
+
+        public int CountReadCount
+        {
+            get { lock (CountReads) return CountReads.Count; }
+        }
+
         // Set to hold the next contents read (after its queries) until Release; it records whether the test let it go.
         private ManualResetEventSlim? _hold;
         public ManualResetEventSlim Held { get; } = new();
@@ -104,9 +114,15 @@ public class IndexingResponsivenessTests
             foreach (var file in Photos(450))
                 TestImages.Write(Path.Combine(folder, file), 32, 24);
 
+            // The stream's read made before the run goes on, so it and the run's end's can't be merged (REL-1).
+            HoldAfterTheFirstSave? hold = null;
+            f.Library.WrapIndexProgress = (_, progress) =>
+                progress is null ? null : hold = new HoldAfterTheFirstSave(progress, () => f.ContentReadCount);
+
             f.Vm.AddFolder(folder, includeSubfolders: true); // a new folder streams its thumbnails in as it's indexed
             Assert.True(Sta.PumpUntil(f.Settled, Wait));
 
+            Assert.True(hold!.ReadCame, "the first batch's rows weren't read while the run waited");
             Assert.Equal(450, f.Vm.TotalItemCount);
             lock (f.ContentReads)
             {
@@ -126,9 +142,14 @@ public class IndexingResponsivenessTests
             foreach (var file in Photos(450))
                 TestImages.Write(Path.Combine(folder, file), 32, 24);
 
+            HoldAfterTheFirstSave? hold = null; // the count read while indexing, made before the run goes on (REL-1)
+            f.Library.WrapIndexProgress = (_, progress) =>
+                progress is null ? null : hold = new HoldAfterTheFirstSave(progress, () => f.CountReadCount);
+
             f.Vm.AddFolder(folder, includeSubfolders: true);
             Assert.True(Sta.PumpUntil(f.Settled, Wait));
 
+            Assert.True(hold!.ReadCame, "the folder wasn't counted while the run waited");
             Assert.Equal(450, f.Vm.Roots.Single().Count);
             lock (f.CountReads)
             {

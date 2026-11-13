@@ -180,9 +180,14 @@ public class QuickLookDetailTests
         File.SetLastWriteTimeUtc(path, new DateTime(2024, 7, 1, 12, 0, 0, DateTimeKind.Utc));
         library.IndexRoot(library.GetRoots().Single());
         vm.RefreshView();
-        Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == count && !vm.IsLoadingView, Wait), "the view wasn't rebuilt");
+        // The view itself, not only the rows: the rows are read first and the view is built after them (REL-3).
+        Assert.True(Sta.PumpUntil(() => vm.TotalItemCount == count && !vm.IsLoadingView && Shows(vm, "n.jpg"), Wait),
+            "the view wasn't rebuilt");
         Settle();
     }
+
+    private static bool Shows(MainViewModel vm, string fileName) =>
+        vm.ItemsView?.Cast<object>().OfType<TileVm>().Any(tile => tile.FileName == fileName) == true;
 
     private static void WithLibrary(int photos, Action<MainViewModel, LibraryService, string> body)
     {

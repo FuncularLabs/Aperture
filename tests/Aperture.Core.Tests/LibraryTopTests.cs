@@ -60,6 +60,12 @@ public class LibraryTopTests
             var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromSeconds(30) };
             try
             {
+                // The run waits after its first saved batch until the folder shows that batch's count: the count is read
+                // in the background, and a slow start would otherwise read it after the next batch was saved (REL-1).
+                var sawTheFirstBatch = 0;
+                HoldAfterTheFirstSave? hold = null;
+                library.WrapIndexProgress = (_, progress) =>
+                    progress is null ? null : hold = new HoldAfterTheFirstSave(progress, () => Volatile.Read(ref sawTheFirstBatch));
                 vm.AddFolder(photos.Path, includeSubfolders: true);
                 Assert.Single(vm.FolderTree);
                 // The folder's node, as the tree has it: the tree is built again when the startup read lands (the
@@ -69,6 +75,8 @@ public class LibraryTopTests
                 {
                     if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
                         seenWhileIndexing.Add(node.Count);
+                    if (e.PropertyName == nameof(FolderNodeVm.Count) && node.Count == 200)
+                        Volatile.Write(ref sawTheFirstBatch, 1);
                 };
                 Watch(vm.FolderTree.Single());
                 vm.FolderTree.CollectionChanged += (_, e) =>
@@ -79,6 +87,7 @@ public class LibraryTopTests
 
                 Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(60)));
 
+                Assert.True(hold!.ReadCame, "the first batch's count wasn't shown while the run waited");
                 Assert.Contains(200, seenWhileIndexing); // after the first saved batch, before the end
                 Assert.Equal(250, Assert.Single(vm.FolderTree).Count);
             }
@@ -109,6 +118,11 @@ public class LibraryTopTests
             };
             try
             {
+                // As above: the run waits after its first saved batch until the folder shows 200 (REL-1).
+                var sawTheFirstBatch = 0;
+                HoldAfterTheFirstSave? hold = null;
+                library.WrapIndexProgress = (_, progress) =>
+                    progress is null ? null : hold = new HoldAfterTheFirstSave(progress, () => Volatile.Read(ref sawTheFirstBatch));
                 vm.AddFolder(photos.Path, includeSubfolders: true);
                 Assert.Single(vm.FolderTree);
                 // The folder's node, as the tree has it: the tree is built again when the startup read lands (the
@@ -118,6 +132,8 @@ public class LibraryTopTests
                 {
                     if (e.PropertyName == nameof(FolderNodeVm.Count) && vm.IsIndexing)
                         seenWhileIndexing.Add(node.Count);
+                    if (e.PropertyName == nameof(FolderNodeVm.Count) && node.Count == 200)
+                        Volatile.Write(ref sawTheFirstBatch, 1);
                 };
                 Watch(vm.FolderTree.Single());
                 vm.FolderTree.CollectionChanged += (_, e) =>
@@ -128,6 +144,7 @@ public class LibraryTopTests
 
                 Assert.True(Sta.PumpUntil(() => !vm.IsIndexing, TimeSpan.FromSeconds(120)));
 
+                Assert.True(hold!.ReadCame, "the first batch's count wasn't shown while the run waited");
                 Assert.Contains(200, seenWhileIndexing); // the first report is read at once
                 Assert.DoesNotContain(400, seenWhileIndexing); // the next, within the interval, isn't
                 Assert.Equal(600, Assert.Single(vm.FolderTree).Count); // the end is

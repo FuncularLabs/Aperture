@@ -18,7 +18,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - **Drag to reorder.** Drag a library in the **LIBRARIES** list, or a top-level folder under
   **FOLDERS**, to put it where you want it. The order is kept (the libraries' with the library
   list, each library's folders with that library). Until you move one, both lists stay
-  alphabetical; anything added later goes at the end.
+  alphabetical; once you have, anything added later goes at the end, alphabetically.
 - **Indexing progress along the bottom.** While Aperture indexes, a bar runs along the bottom of
   the window. It counts the files first ("Counting files in Photos… 12,345 so far"), then shows
   how far it is ("Indexing Photos: 1,234 of 12,345 files"), with a note that it might take a
@@ -39,6 +39,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   time the tree is refreshed.
 - **Every library shows its count.** A library you aren't in showed no count until it had been
   open and left; each one's count is now read from its own files when the list is shown.
+- A folder you add, or rename, takes its place in the folder list at once; it went at the end
+  until Aperture was started again.
 - A background read could meet a change you were making (removing a folder, saving tags) and
   end Aperture; background reads now never see a change before it's saved. A folder removed
   or hidden while the library was still loading no longer comes back until the next change.

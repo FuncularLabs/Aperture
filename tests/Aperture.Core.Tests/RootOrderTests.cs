@@ -170,6 +170,74 @@ public class RootOrderTests
         });
     }
 
+    // --- Release review (REL-2): the list a restart would show, at once ------------------------------------------------
+
+    [Fact]
+    public void AFolderAdded_TakesItsPlaceByName_UntilOneIsMoved()
+    {
+        // It went at the end until Aperture started again (the CHANGELOG says the list stays alphabetical).
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            var dir = Path.Combine(f.Photos.Path, "Aardvark");
+            TestImages.Write(Path.Combine(dir, "p.jpg"), 32, 24);
+
+            f.Vm.AddFolder(dir, includeSubfolders: true);
+
+            Assert.Equal("Aardvark, alpha, Beta, Gamma", f.RootList()); // at once
+            Assert.Equal("Aardvark, alpha, Beta, Gamma", f.Tree());
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsIndexing, Wait));
+            Assert.Equal("Aardvark, alpha, Beta, Gamma", f.Tree());
+            Assert.Null(f.Library.Settings.Current.RootOrder); // no order of the user's own written
+            f.Reopen();
+            Assert.Equal("Aardvark, alpha, Beta, Gamma", f.Tree());
+        });
+    }
+
+    [Fact]
+    public void ARenamedFolder_TakesItsPlaceByName_UntilOneIsMoved()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+
+            f.Vm.Roots.Single(r => r.Alias == "Gamma").Alias = "Aardvark";
+
+            Assert.Equal("Aardvark, alpha, Beta", f.RootList());
+            Assert.Equal("Aardvark, alpha, Beta", f.Tree());
+            Assert.Null(f.Library.Settings.Current.RootOrder);
+            f.Reopen();
+            Assert.Equal("Aardvark, alpha, Beta", f.Tree());
+        });
+    }
+
+    [Fact]
+    public void OnceOneIsMoved_ARenamedFolder_KeepsItsPlace_AndFoldersAddedGoAfter_ByName()
+    {
+        // What a restart shows (the user's order, then the rest by name), shown at once: two folders added after a move
+        // go after the moved ones, by name, not in the order they were added.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Vm.MoveRoot(f.Ids["Gamma"], 0); // Gamma, alpha, Beta
+
+            f.Vm.Roots.Single(r => r.Alias == "alpha").Alias = "Zulu";
+            Assert.Equal("Gamma, Zulu, Beta", f.Tree());
+            foreach (var name in new[] { "Zed", "Aardvark" })
+            {
+                var dir = Path.Combine(f.Photos.Path, name);
+                TestImages.Write(Path.Combine(dir, "p.jpg"), 32, 24);
+                f.Vm.AddFolder(dir, includeSubfolders: true);
+            }
+
+            Assert.Equal("Gamma, Zulu, Beta, Aardvark, Zed", f.RootList());
+            Assert.Equal("Gamma, Zulu, Beta, Aardvark, Zed", f.Tree());
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsIndexing, Wait));
+            f.Reopen();
+            Assert.Equal("Gamma, Zulu, Beta, Aardvark, Zed", f.Tree());
+        });
+    }
+
     [Fact]
     public void TheSelectedFolder_StaysSelected()
     {
