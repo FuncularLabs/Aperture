@@ -16,6 +16,10 @@ public sealed class FolderIndex
 
     private readonly Dictionary<(long RootId, string RelDir), FolderEntry[]> _levels;
 
+    /// <summary>How many indexes this thread has built (for tests: the window builds its index off the UI thread).</summary>
+    [ThreadStatic]
+    internal static int BuildCalls;
+
     private FolderIndex(Dictionary<(long RootId, string RelDir), FolderEntry[]> levels) => _levels = levels;
 
     /// <summary>The subfolders of <paramref name="relDir"/> in root <paramref name="rootId"/>, as the tree lists them.</summary>
@@ -30,6 +34,7 @@ public sealed class FolderIndex
     /// </summary>
     public static FolderIndex Build(IReadOnlyList<LibraryRow> rows, IReadOnlyList<HiddenFolder> hidden)
     {
+        BuildCalls++;
         var levels = new Dictionary<(long RootId, string RelDir), Level>(KeyComparer.Instance);
 
         Level LevelOf(long rootId, string relDir)

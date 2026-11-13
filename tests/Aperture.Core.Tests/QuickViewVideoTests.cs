@@ -81,6 +81,8 @@ public class QuickViewVideoTests
                 }),
             };
             window.PlaybackPrefs = prefsPath is null ? PlaybackPrefsStore.InMemory() : new PlaybackPrefsStore(prefsPath);
+            var closed = false;
+            window.Closed += (_, _) => closed = true;
             try
             {
                 window.Show();
@@ -95,7 +97,8 @@ public class QuickViewVideoTests
             }
             finally
             {
-                window.Close();
+                if (!closed)
+                    window.Close();
                 vm.PrepareForClose();
                 library.ShutdownAsync().GetAwaiter().GetResult();
             }
@@ -257,6 +260,33 @@ public class QuickViewVideoTests
             Assert.False(v.Vm.QuickLookOpen);
             Assert.True(v.Player.IsClosed);
         }, still: Still16By9);
+    }
+
+    [Fact]
+    public void TheVideosOwnFrame_IsTheVideo_OnceItHasOpened()
+    {
+        // Review R1-B6: with no still, the whole area is the video until it opens; then its own (16:9) frame is.
+        WithQuickView(["v0.mp4"], v =>
+        {
+            v.Player.RaiseOpened(1920, 1080);
+            Settle();
+
+            v.Window.QuickLookClick(v.Middle, clickCount: 1);
+            Assert.Equal("pause", v.Player.LastPlayOrPause);
+            v.Window.QuickLookClick(new Point(v.Area.ActualWidth / 2, 3), clickCount: 1); // above its frame
+            Assert.False(v.Vm.QuickLookOpen);
+        });
+    }
+
+    [Fact]
+    public void ClosingTheWindow_ClosesTheVideo()
+    {
+        WithQuickView(["v0.mp4"], v =>
+        {
+            v.Window.Close();
+
+            Assert.True(v.Player.IsClosed);
+        });
     }
 
     [Fact]

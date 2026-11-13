@@ -101,6 +101,20 @@ public class RootOrderTests
     }
 
     [Fact]
+    public void AMoveToItsOwnPlace_WritesNoOrder()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+
+            f.Vm.MoveRoot(f.Ids["alpha"], 0); // where it is
+
+            Assert.Null(f.Library.Settings.Current.RootOrder);
+            Assert.Equal("alpha, Beta, Gamma", f.Tree());
+        });
+    }
+
+    [Fact]
     public void MoveRoot_ToEachPlace()
     {
         Sta.Run(() =>

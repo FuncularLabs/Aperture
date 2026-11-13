@@ -36,7 +36,7 @@ on your machine — it never uploads anything or phones home.
 - **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
   each other's folders, tags, or search results. They're listed under **LIBRARIES** in the
   folder pane: click one to switch to it, drag one to reorder the list. Each library has its
-  own index, thumbnail cache, and settings, and shows how many items it holds.
+  own index, thumbnail cache, and settings, and shows its item count.
 - **One window.** Starting Aperture while it's already open brings the open window to the
   front (restored if it was minimized) instead of opening a second one.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and

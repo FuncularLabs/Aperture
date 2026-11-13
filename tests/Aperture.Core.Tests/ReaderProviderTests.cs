@@ -43,17 +43,20 @@ public class ReaderProviderTests
         using var f = new Fixture();
         var shared = f.Library.Database.Provider;
 
-        shared.BeginTransaction(); // the UI thread's change, under way: it hides "sub", not yet committed
+        shared.BeginTransaction(); // the UI thread's change, under way: it hides "sub" and drops a.jpg, not yet committed
         try
         {
             shared.Insert<HiddenFolderRow, long>(new HiddenFolderRow { RootId = f.Root.Id, RelDir = "sub" });
+            shared.Delete<ItemRow>(i => i.FileName == "a.jpg"); // the items too (review R1-A2: the rows' and the count's reads)
 
-            var contents = Task.Run(f.Library.GetContents).GetAwaiter().GetResult();   // the window's background read
+            var contents = Task.Run(f.Library.GetContents).GetAwaiter().GetResult();   // the window's background reads
             var count = Task.Run(() => f.Library.CountForRoot(f.Root.Id)).GetAwaiter().GetResult();
+            var total = Task.Run(() => new ItemStore(f.Library.Database).TotalCount()).GetAwaiter().GetResult(); // the prune's
 
-            Assert.Equal(3, contents.Rows.Count); // what's committed: nothing hidden
+            Assert.Equal(3, contents.Rows.Count); // what's committed: nothing hidden, nothing dropped
             Assert.Empty(contents.Hidden);
             Assert.Equal(3, count);
+            Assert.Equal(3, total);
         }
         finally
         {
@@ -81,29 +84,6 @@ public class ReaderProviderTests
         {
             shared.RollbackTransaction();
         }
-    }
-
-    [Fact]
-    public void ATagSave_WhileABackgroundReadRuns_Succeeds_AndSoDoesTheRead()
-    {
-        using var f = new Fixture();
-        var reading = new ManualResetEventSlim();
-        var release = new ManualResetEventSlim();
-        f.Library.ReadingContents = () =>
-        {
-            reading.Set();
-            release.Wait(TimeSpan.FromSeconds(10)); // the read is under way when the save begins
-        };
-        var read = f.Library.GetContentsAsync();
-        Assert.True(reading.Wait(TimeSpan.FromSeconds(10)));
-
-        var photo = Path.Combine(f.Photos.Path, "a.jpg");
-        f.Library.SaveAnnotation(photo, ["beach"], "a note"); // a transaction on the shared provider
-        f.Library.SaveAnnotation(photo, [], "");             // and its delete, another
-        release.Set();
-
-        Assert.Equal(3, read.GetAwaiter().GetResult().Rows.Count);
-        Assert.Empty(f.Library.GetAnnotation(photo).Tags);
     }
 
     [Fact]

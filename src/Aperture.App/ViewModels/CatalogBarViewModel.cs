@@ -53,7 +53,7 @@ public sealed class CatalogBarViewModel : ObservableObject
     // and a read from an older one lands nowhere.
     private readonly Func<string, int?> _countLibrary;
     private readonly SemaphoreSlim _countGate = new(1, 1);
-    private readonly SynchronizationContext? _ui;
+    private readonly SynchronizationContext _ui;
     private int _countGeneration;
 
     /// <param name="countLibrary">
@@ -68,7 +68,7 @@ public sealed class CatalogBarViewModel : ObservableObject
         _librariesDir = librariesDir;
         _picturesDir = picturesDir ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
         _countLibrary = countLibrary ?? LibraryCount.Read;
-        _ui = SynchronizationContext.Current;
+        _ui = SynchronizationContext.Current ?? new SynchronizationContext(); // without a UI thread (tests): the pool
 
         SwitchCommand = new RelayCommand<string>(id => Start(() => _catalog.SwitchToAsync(id)), _ => !IsBusy);
         NewLibraryCommand = new RelayCommand(() => Start(NewLibraryAsync), () => !IsBusy);
@@ -193,10 +193,7 @@ public sealed class CatalogBarViewModel : ObservableObject
                     continue;
                 if (known != item.ItemCount)
                     _catalog.Registry.SetItemCount(item.Id, known); // off the UI thread: it can wait on another window
-                if (_ui is null)
-                    item.ItemCount = known;
-                else
-                    await OnUi(() => item.ItemCount = known).ConfigureAwait(false); // so PendingCounts covers it
+                await OnUi(() => item.ItemCount = known).ConfigureAwait(false); // so PendingCounts covers it
             }
         });
     }
@@ -205,7 +202,7 @@ public sealed class CatalogBarViewModel : ObservableObject
     private Task OnUi(Action action)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ui!.Post(_ =>
+        _ui.Post(_ =>
         {
             try
             {

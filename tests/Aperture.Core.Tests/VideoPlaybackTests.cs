@@ -56,20 +56,51 @@ public class VideoPlaybackTests
     }
 
     [Fact]
-    public void AChange_IsSavedAtOnce()
+    public void AMute_IsSavedAtOnce_AndAVolume_AsTheVideoIsLeft()
     {
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
 
         playback.SetMuted(false);
         Assert.Equal(new PlaybackPrefs(false, 0.5), _store.Load());
-        playback.SetVolume(0.3);
-        Assert.Equal(new PlaybackPrefs(false, 0.3), _store.Load());
+        playback.SetVolume(0.4);
+        playback.SetVolume(0.3);                                   // a slider dragged: no file written for each step
+        Assert.Equal(new PlaybackPrefs(false, 0.5), _store.Load());
+        playback.Leave();
+        Assert.Equal(new PlaybackPrefs(false, 0.3), _store.Load()); // saved as the video is left
 
         // A new playback (a restart) starts as it was left.
         var next = new VideoPlayback(_store, () => { var p = new FakeVideoPlayer(); _players.Add(p); return p; });
         next.Show(@"C:\v\b.mp4");
         Assert.Equal((false, 0.3), (_players[^1].IsMuted, _players[^1].Volume));
+    }
+
+    [Fact]
+    public void AVolumeSet_IsSavedWhenTheNextVideoIsShown()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        playback.SetVolume(0.2);
+
+        playback.Show(@"C:\v\b.mp4");
+
+        Assert.Equal(new PlaybackPrefs(true, 0.2), _store.Load());
+    }
+
+    [Fact]
+    public void AVisit_DoesNotInheritTheLastVideosEnd()
+    {
+        // Review R1-B7: after a video played to its end, the next one's first play after a pause went back to its start.
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened();
+        _players[0].RaiseEnded();
+
+        playback.Show(@"C:\v\b.mp4");
+        playback.Toggle(); // pause
+        playback.Toggle(); // and play on
+
+        Assert.DoesNotContain("rewind", _players[1].Calls);
     }
 
     [Fact]

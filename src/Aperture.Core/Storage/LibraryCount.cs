@@ -13,7 +13,10 @@ public static class LibraryCount
 {
     /// <summary>
     /// The library in <paramref name="dataDir"/>'s count, or <c>null</c> if it has no database there or it can't be
-    /// read. Read only: it creates nothing, writes nothing and keeps no connection open after it returns.
+    /// read. Read only: it creates no database where none is, never writes the library's own (it's opened read-only),
+    /// and keeps no connection open after it returns. SQLite may leave its two working files beside the database
+    /// (<c>-wal</c>, <c>-shm</c>), as any open of the library does; the next open of it tidies them, and Delete library
+    /// files removes them. A library without hidden subfolders is counted by SQL, without reading its rows.
     /// </summary>
     public static int? Read(string dataDir)
     {
@@ -21,16 +24,13 @@ public static class LibraryCount
         if (!File.Exists(path))
             return null; // not created: a missing library (an unplugged drive) stays missing
 
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = path,
-            Mode = SqliteOpenMode.ReadOnly, // never creates the file, never writes it
-            Pooling = false,                // no handle kept after the read: Delete library files can go straight on
-        }.ToString();
         try
         {
-            using var provider = new SqliteOrmDataProvider(connectionString);
-            return LibraryService.Contents(ItemStore.IncludedUnion(provider), HiddenFolderStore.All(provider)).Rows.Count;
+            using var provider = new SqliteOrmDataProvider(ConnectionStringFor(path));
+            var hidden = HiddenFolderStore.All(provider);
+            return hidden.Count == 0
+                ? ItemStore.IncludedCount(provider) // the common case: nothing hidden, so no rows to read (review R1-A9)
+                : LibraryService.Contents(ItemStore.IncludedUnion(provider), hidden).Rows.Count;
         }
         catch (Exception)
         {
@@ -39,4 +39,12 @@ public static class LibraryCount
             return null;
         }
     }
+
+    /// <summary>How another library's database is opened to count it.</summary>
+    internal static string ConnectionStringFor(string path) => new SqliteConnectionStringBuilder
+    {
+        DataSource = path,
+        Mode = SqliteOpenMode.ReadOnly, // never creates the file, never writes it
+        Pooling = false,                // no handle kept after the read: Delete library files can go straight on
+    }.ToString();
 }

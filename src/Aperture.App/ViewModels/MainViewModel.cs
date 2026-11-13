@@ -94,8 +94,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private int _runEndsPending;
     private TaskCompletionSource? _refreshRunning;
 
-    // Each run in progress, by root id: its latest report (null until its first). UI thread only.
-    private readonly Dictionary<long, IndexProgress?> _runs = [];
+    // The runs in progress and each one's latest report, by run (a folder can be indexed twice at once). UI thread only.
+    private readonly IndexRuns _indexRuns = new();
+
+    // Set once the folder tree has been built for this library (a startup overtaken by a refresh still builds it).
+    private bool _treeBuilt;
 
     // The current view's tiles, keyed by item id. A rebuild that keeps the same items (streaming index,
     // background reconcile, watcher, filter/sort) reuses these instances instead of allocating new ones —
@@ -210,7 +213,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (version == _rowsVersion)
             SetRows(contents, index);
         if (generation != _buildGeneration)
-            return; // a data-change rebuild already superseded startup
+        {
+            BuildStartupTree(); // a data-change rebuild superseded startup's grid, not its tree (review R1-A3)
+            return;
+        }
 
         // Build the grid FIRST — it's the content the user came to see. The union read and the
         // tile/section compute run off the UI thread; only ApplyView touches the UI, so the spinner
@@ -219,13 +225,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ViewBuild build;
         try { build = await Task.Run(() => ComputeView(inputs)); }
         catch (OperationCanceledException) { return; }
-        if (_closing || generation != _buildGeneration)
+        if (_closing)
             return;
+        if (generation != _buildGeneration)
+        {
+            BuildStartupTree();
+            return;
+        }
 
         ApplyView(build);
         IsLoadingView = false; // tiles are up — drop the spinner even though the tree is still to come
 
         // The folder tree fills in afterward; it doesn't gate seeing the photos.
+        BuildTree();
+        SelectDefaultNode();
+    }
+
+    // The tree, as startup builds it, unless something has built it already (a run's end, say).
+    private void BuildStartupTree()
+    {
+        if (_treeBuilt)
+            return;
         BuildTree();
         SelectDefaultNode();
     }
@@ -2258,9 +2278,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // The folder tree's subfolders for the rows shown, worked out once per version of them (I6).
     private FolderIndex Index => _folderIndex ??= FolderIndex.Build(_allRows, _hiddenFolders);
 
-    /// <summary>Rebuilds the grid synchronously from the cached rows (startup / one-off data changes).</summary>
-    private void BuildViewImmediate() => ApplyView(ComputeView(CaptureBuildInputs()));
-
     /// <summary>
     /// Debounced, last-one-wins async rebuild. Rapid triggers — arrowing the folder
     /// tree, typing in search — coalesce, and the heavy filter/sort/tile work runs off
@@ -2268,9 +2285,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// in-flight compute from folder A cannot ApplyView after the user has moved to B.
     /// ApplyView is posted at Background (below Input) so queued tree arrows drain
     /// first. The existing Loading… spinner covers a slow rebuild after the tree node
-    /// has already moved.
+    /// has already moved; a <paramref name="quiet"/> one (a background refresh's, while folders are
+    /// indexed) shows none: the tiles the user is looking at are still right, just not all of them yet.
     /// </summary>
-    private async void RequestBuildView()
+    private async void RequestBuildView(bool quiet = false)
     {
         _buildDebounce?.Cancel();
         var cts = new CancellationTokenSource();
@@ -2283,7 +2301,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (generation != _buildGeneration)
             return;
 
-        IsLoadingView = true;
+        if (!quiet)
+            IsLoadingView = true;
         var inputs = CaptureBuildInputs();
 
         try
@@ -2474,6 +2493,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void BuildTree()
     {
+        _treeBuilt = true;
         FolderTree.Clear();
         foreach (var rootVm in Roots)
         {
@@ -2746,9 +2766,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _indexCts[root.Id] = cts;
             _pausedRoots.Remove(root.Id); // starting/resuming clears any previous pause
         }
+        var run = 0;
         RunOnUi(() =>
         {
-            _runs[root.Id] = null;
+            run = _indexRuns.Start(root.Id); // posted ahead of the run's reports when called off the UI thread
             if (Roots.FirstOrDefault(r => r.Id == root.Id) is { } vm)
             {
                 vm.IsIndexing = true;
@@ -2757,7 +2778,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             UpdateIndexingText();
         });
 
-        var progress = new Progress<IndexProgress>(p => RunOnUi(() => ApplyProgress(root.Id, p, streaming)));
+        var progress = new Progress<IndexProgress>(p => RunOnUi(() => ApplyProgress(root.Id, run, p, streaming)));
 
         IndexResult? result = null;
         var canceled = false;
@@ -2790,7 +2811,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 if (_closing)
                     return; // the library is being disposed; skip bookkeeping that would read it
 
-                _runs.Remove(root.Id);
+                _indexRuns.End(run);
                 var rootVm = Roots.FirstOrDefault(r => r.Id == root.Id);
                 if (rootVm is not null)
                 {
@@ -2856,7 +2877,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 (_refreshRows, _refreshTree, _refreshRunEnds) = (false, false, 0);
                 _refreshCounts.Clear();
 
-                await RefreshOnceAsync(rows, tree, roots);
+                if (!await RefreshOnceAsync(rows, tree, roots))
+                {
+                    // Its rows were overtaken by an assignment (the startup read's, say) that may be older than they are:
+                    // read them again, and let what was waiting on this refresh wait on that one (review R1-B1).
+                    _refreshRows = true;
+                    _refreshTree |= tree;
+                    _refreshRunEnds += runEnds;
+                    continue;
+                }
 
                 if (runEnds > 0)
                 {
@@ -2873,9 +2902,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     // Reads off the UI thread (the library's tracked reads, through its reader provider), then applies here: the counts,
-    // the rows if no change has replaced them since the read began (I4), and the tree from whatever rows are current.
-    // A read that fails keeps what the window shows (I5).
-    private async Task RefreshOnceAsync(bool rows, bool tree, long[] countRoots)
+    // the rows if no assignment has replaced them since the read began (I4), and the tree from them. A read that fails
+    // keeps what the window shows (I5). False when the rows read were overtaken: they're read again.
+    private async Task<bool> RefreshOnceAsync(bool rows, bool tree, long[] countRoots)
     {
         var version = _rowsVersion;
         (LibraryContents Contents, FolderIndex Index)? read = null;
@@ -2893,11 +2922,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             if (_closing)
-                return; // the library is closing: nothing to apply
+                return true; // the library is closing: nothing to apply
             Debug.WriteLine($"Refresh read failed: {ex}");
         }
         if (_closing)
-            return;
+            return true;
 
         foreach (var (rootId, count) in counts)
         {
@@ -2907,16 +2936,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (FolderTree.FirstOrDefault(n => n.RootId == rootId) is { } node)
                 node.Count = TreeCount(rootVm);
         }
-        if (read is { } fresh && version == _rowsVersion)
+        if (read is { } fresh)
         {
+            if (version != _rowsVersion)
+                return false;
             SetRows(fresh.Contents, fresh.Index);
-            RequestBuildView(); // debounced + off-thread + tile reuse, so the refresh stays smooth
+            RequestBuildView(quiet: true); // debounced + off-thread + tile reuse, and no "Loading…" (review R1-A4)
         }
         if (tree)
         {
             BuildTree();
             SelectPath(_location.RootId, _location.RelDir); // restore tree selection/expansion
         }
+        return true;
     }
 
     /// <summary>True when at least one folder's indexing is paused and can be resumed.</summary>
@@ -3009,7 +3041,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void ApplyProgress(long rootId, IndexProgress p, bool streaming)
+    private void ApplyProgress(long rootId, int run, IndexProgress p, bool streaming)
     {
         if (_closing)
             return; // a progress post queued before teardown must not read the library being disposed
@@ -3019,8 +3051,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
 
         rootVm.Status = IndexingMessage.RootStatus(p);
-        if (_runs.ContainsKey(rootId))
-            _runs[rootId] = p; // not after its end: a report posted late mustn't bring the run back
+        _indexRuns.Report(run, p); // dropped once the run has ended: a report posted late mustn't bring it back
 
         // Drive the progress bars: a real fraction while indexing files, otherwise indeterminate.
         if (p.Phase == IndexPhase.Indexing && p.Total > 0)
@@ -3037,12 +3068,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // The indexer reports as it saves each batch: show the folder's count climbing, not only once it's done. At most
         // once an interval, though: each read counts the whole folder, and a run that changes nothing reports its batches
         // all at once.
-        if (p.Phase == IndexPhase.Indexing && _countReads.IsDue(rootId))
-            RequestRefresh(rows: false, tree: false, countRoot: rootId); // read in the background (I1)
+        if (p.Phase == IndexPhase.Indexing && p.Saved && _countReads.IsDue(rootId))
+            RequestRefresh(rows: false, tree: false, countRoot: rootId); // read in the background (I1), once there's more
         UpdateIndexingText();
 
         // Throttled live refresh so thumbnails appear as they're indexed.
-        if (streaming && p.Phase == IndexPhase.Indexing)
+        if (streaming && p.Phase == IndexPhase.Indexing && p.Saved) // the rows change only as batches are saved
         {
             var now = Environment.TickCount64;
             if (now - _lastStreamRefreshTick > 1200)
@@ -3089,9 +3120,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (_runs.Count > 0) // else every run has ended, its refresh still to land: the lines stay as they were
-            (IndexingText, IndexingNote) = IndexingMessage.For(
-                [.. _runs.Select(run => (Roots.FirstOrDefault(r => r.Id == run.Key)?.Alias ?? "", run.Value))]);
+        if (_indexRuns.Count > 0) // else every run has ended, its refresh still to land: the lines stay as they were
+            (IndexingText, IndexingNote) = _indexRuns.Lines(id => Roots.FirstOrDefault(r => r.Id == id)?.Alias ?? "");
         UpdateSyncStatus();
     }
 

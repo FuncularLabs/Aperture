@@ -49,6 +49,42 @@ public class LibraryCountTests
     }
 
     [Fact]
+    public void ALibraryWithNothingHidden_IsCountedToo()
+    {
+        // Counted by SQL, without reading its rows (review R1-A9): the number the library shows all the same.
+        using var data = new TempDir();
+        using var photos = new TempDir();
+        foreach (var name in new[] { "a.jpg", @"sub\b.jpg", @"sub\c.jpg" })
+            TestImages.Write(Path.Combine(photos.Path, name), 32, 24);
+        using var unticked = new TempDir();
+        TestImages.Write(Path.Combine(unticked.Path, "u.jpg"), 32, 24);
+        int showing;
+        using (var library = new LibraryService(data.Path))
+        {
+            library.IndexRoot(library.AddRoot(photos.Path, "Photos"));
+            var off = library.AddRoot(unticked.Path, "Off");
+            library.IndexRoot(off);
+            library.SetIncluded(off.Id, false);
+            showing = library.GetContents().Rows.Count;
+            library.ShutdownAsync().GetAwaiter().GetResult();
+        }
+
+        Assert.Equal(3, showing);
+        Assert.Equal(showing, LibraryCount.Read(data.Path));
+    }
+
+    [Fact]
+    public void ItOpensTheLibraryReadOnly_AndUnpooled()
+    {
+        // Review R1-B15: a read-write open that only reads leaves the file as it was, so no other test sees the mode.
+        var options = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(LibraryCount.ConnectionStringFor(@"C:\x\aperture.db"));
+
+        Assert.Equal(Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, options.Mode);
+        Assert.False(options.Pooling);
+        Assert.Equal(@"C:\x\aperture.db", options.DataSource);
+    }
+
+    [Fact]
     public void ReadsALibraryThatIsOpenElsewhere()
     {
         using var data = new TempDir();
@@ -106,10 +142,15 @@ public class LibraryCountTests
         var before = File.ReadAllBytes(db);
         var stamp = File.GetLastWriteTimeUtc(db);
 
+        var files = Directory.GetFiles(data.Path).Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         LibraryCount.Read(data.Path);
 
         Assert.Equal(before, File.ReadAllBytes(db));
         Assert.Equal(stamp, File.GetLastWriteTimeUtc(db));
+        // Nothing new beside it but SQLite's own working files, which any open of the library makes (review R1-A6).
+        var added = Directory.GetFiles(data.Path).Select(Path.GetFileName).Where(n => !files.Contains(n!)).ToList();
+        Assert.All(added, n => Assert.Contains(n, new[] { "aperture.db-wal", "aperture.db-shm" }));
     }
 
     [Fact]

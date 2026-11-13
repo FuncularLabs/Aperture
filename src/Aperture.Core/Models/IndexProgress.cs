@@ -20,11 +20,18 @@ public sealed class IndexProgress
     public int Total { get; init; }
 
     /// <summary>
-    /// How many of the files found are online only (cloud placeholders), so are downloaded as they're indexed.
+    /// How many of the files the run will read are online only (cloud placeholders), so are downloaded as they're
+    /// indexed. Files it skips (unchanged, their thumbnails cached) aren't counted; 0 while scanning.
     /// </summary>
     public int OnlineOnly { get; init; }
 
     public string? CurrentFile { get; init; }
+
+    /// <summary>
+    /// The report follows a batch the run has just saved to the library: its rows and counts now show more (the window
+    /// reads them again only after one of these).
+    /// </summary>
+    public bool Saved { get; init; }
 }
 
 /// <summary>Outcome of a single <c>IndexRoot</c> run.</summary>

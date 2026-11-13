@@ -15,6 +15,12 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
 {
     private const int BatchSize = 200;
 
+    /// <summary>
+    /// How often, at most, the run reports how far it is between the batches it saves (a quarter of a second): a folder
+    /// of cloud files can take minutes over its first batch. Settable for tests only.
+    /// </summary>
+    internal TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+
     private readonly ApertureDatabase _db = database;
     private readonly ThumbnailGenerator _thumbnails = thumbnails;
     private readonly MetadataReader _metadata = metadata;
@@ -42,6 +48,15 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
 
         // The online-only files among those it will read: each is downloaded to be read (the slow part on a cloud drive).
         var onlineOnly = files.Count(f => f.IsOnlineOnly && !(IsUnchanged(f, out var r) && ThumbsFresh(r.Id, f)));
+
+        // How far it is, from the start: the count, and how many it will download (review R1-1).
+        IndexProgress Indexing(int processed, bool saved, string? current) => new()
+        {
+            RootAlias = root.Alias, Phase = IndexPhase.Indexing, Processed = processed, Total = files.Count,
+            OnlineOnly = onlineOnly, CurrentFile = current, Saved = saved,
+        };
+        progress?.Report(Indexing(0, saved: false, current: null));
+        var sinceReport = System.Diagnostics.Stopwatch.StartNew();
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         int added = 0, updated = 0, skipped = 0, thumbsGenerated = 0, failed = 0;
@@ -110,15 +125,13 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     upsertItem.Transaction = metaTx;
                     upsertThumb.Transaction = thumbTx;
 
-                    progress?.Report(new IndexProgress
-                    {
-                        RootAlias = root.Alias,
-                        Phase = IndexPhase.Indexing,
-                        Processed = processed,
-                        Total = files.Count,
-                        OnlineOnly = onlineOnly,
-                        CurrentFile = file.RelPath,
-                    });
+                    progress?.Report(Indexing(processed, saved: true, file.RelPath)); // the window reads the batch now
+                    sinceReport.Restart();
+                }
+                else if (sinceReport.Elapsed >= ProgressInterval)
+                {
+                    progress?.Report(Indexing(processed, saved: false, file.RelPath)); // a batch can take a while
+                    sinceReport.Restart();
                 }
             }
 

@@ -650,27 +650,50 @@ public class CatalogBarViewModelTests
         var firstRead = new ManualResetEventSlim();
         var reading = new ManualResetEventSlim();
         var reads = 0;
+        var holding = false;
         await using var f = new Fixture(_ =>
         {
+            if (!Volatile.Read(ref holding))
+                return null;
             if (Interlocked.Increment(ref reads) == 1)
             {
                 reading.Set();
-                firstRead.Wait(TimeSpan.FromSeconds(10)); // the first refresh's read is slow
+                firstRead.Wait(TimeSpan.FromSeconds(10)); // the older refresh's read is slow…
                 return 5;
             }
-            return 9;
+            return null;                                  // …and the newer one can't read the library at all
         });
-        var work = f.AddLibrary("Work"); // refresh 1: its read is held
+        var work = f.AddLibrary("Work");
+        await f.Bar.PendingCounts;
+        f.Service.Registry.SetItemCount(work.Id, 42);
+        Volatile.Write(ref holding, true);
+        f.Bar.Refresh();                 // the older refresh: its read is held
         Assert.True(reading.Wait(TimeSpan.FromSeconds(10)));
         var older = f.Bar.PendingCounts;
 
-        f.Bar.Refresh();                 // refresh 2: reads 9 once the first read lets go of the library
+        f.Bar.Refresh();                 // the newer: reads nothing once the older lets go of the library
         firstRead.Set();
         await older;
         await f.Bar.PendingCounts;
 
-        Assert.Equal(9, f.Bar.Libraries.Single(l => l.Id == work.Id).ItemCount); // the old 5 lands nowhere
-        Assert.Equal(9, f.Service.Registry.List().Single(c => c.Id == work.Id).ItemCount);
+        // The older refresh's 5 lands nowhere: not on the list, not in the list file (review R1-B5: a newer read always
+        // overwrote it before, so the test could never see it land).
+        Assert.Equal(42, f.Bar.Libraries.Single(l => l.Id == work.Id).ItemCount);
+        Assert.Equal(42, f.Service.Registry.List().Single(c => c.Id == work.Id).ItemCount);
+    }
+
+    [Fact]
+    public async Task AMoveToItsOwnPlace_WritesNoOrder()
+    {
+        // Review R1-B8: a drop on its own place would make the alphabetical list an order of the user's own.
+        await using var f = new Fixture(_ => null);
+        var zoo = f.AddLibrary("zoo");
+        Assert.Equal("[Default], zoo", Listed(f.Bar));
+
+        f.Bar.MoveLibrary(zoo.Id, 1);
+
+        Assert.Null(f.Service.Registry.Order);
+        Assert.Null(new CatalogRegistry(f.Outer.Combine("catalogs.json")).Order);
     }
 
     [Fact]

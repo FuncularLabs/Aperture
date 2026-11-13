@@ -376,4 +376,236 @@ public class IndexingResponsivenessTests
             Assert.Equal(2, day1.Count);
         });
     }
+
+    // --- Review round 1 -----------------------------------------------------------------------------------------------
+
+    // A library of `photos`, its startup read held (the hook's first call) until `releaseStartup`, the next contents read
+    // held until `releaseNext` (when given); the view model built over it.
+    private static void WithHeldStartup(
+        int photos, Action<LibraryService, MainViewModel, ManualResetEventSlim, string> body,
+        ManualResetEventSlim releaseStartup, ManualResetEventSlim? heldNext = null, ManualResetEventSlim? releaseNext = null)
+    {
+        Sta.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var data = new TempDir();
+            using var folder = new TempDir();
+            foreach (var file in Photos(photos))
+                TestImages.Write(Path.Combine(folder.Path, file), 32, 24);
+            var library = new LibraryService(data.Path);
+            library.IndexRoot(library.AddRoot(folder.Path, "Photos"));
+            var heldStartup = new ManualResetEventSlim();
+            var reads = 0;
+            library.ReadingContents = () =>
+            {
+                switch (Interlocked.Increment(ref reads))
+                {
+                    case 1:
+                        heldStartup.Set();
+                        releaseStartup.Wait(TimeSpan.FromSeconds(10));
+                        break;
+                    case 2 when releaseNext is not null:
+                        heldNext?.Set();
+                        releaseNext.Wait(TimeSpan.FromSeconds(10));
+                        break;
+                }
+            };
+            var vm = new MainViewModel(library, new ThumbnailService(library)) { StartupReconcileDelay = TimeSpan.FromHours(1) };
+            try
+            {
+                Assert.True(heldStartup.Wait(Wait));
+                body(library, vm, heldStartup, folder.Path);
+            }
+            finally
+            {
+                releaseStartup.Set();
+                releaseNext?.Set();
+                vm.PrepareForClose();
+                library.ShutdownAsync().GetAwaiter().GetResult();
+            }
+        });
+    }
+
+    [Fact]
+    public void ARefreshRead_LandingAfterTheOlderStartupRead_IsDoneAgain()
+    {
+        // Review R1-B1: the startup read (older) lands while a refresh's read (newer) is under way; the refresh's rows,
+        // overtaken, must be read again rather than dropped.
+        var releaseStartup = new ManualResetEventSlim();
+        var heldRefresh = new ManualResetEventSlim();
+        var releaseRefresh = new ManualResetEventSlim();
+        WithHeldStartup(3, (library, vm, _, folder) =>
+        {
+            TestImages.Write(Path.Combine(folder, "later.jpg"), 32, 24);
+            library.IndexRoot(library.GetRoots().Single()); // 4 now; the startup read has 3
+
+            vm.RequestRefresh(rows: true, tree: true, countRoot: null);
+            Assert.True(heldRefresh.Wait(Wait));
+            releaseStartup.Set();
+            Assert.True(Sta.PumpUntil(() => vm.LoadedItemCount == 3, Wait)); // the older rows land first
+            releaseRefresh.Set();
+
+            Assert.True(Sta.PumpUntil(() => vm.RefreshIdle.IsCompleted && !vm.IsLoadingView && vm.TotalItemCount == 4, Wait),
+                $"the refresh's rows were dropped: {vm.TotalItemCount} shown");
+        }, releaseStartup, heldRefresh, releaseRefresh);
+    }
+
+    [Fact]
+    public void TheStartupTree_IsBuilt_WhenARefreshOvertookStartup()
+    {
+        // Review R1-A3: a refresh (a folder streaming in) landing before the startup read did left the tree unbuilt.
+        var releaseStartup = new ManualResetEventSlim();
+        WithHeldStartup(3, (_, vm, _, _) =>
+        {
+            vm.RequestRefresh(rows: true, tree: false, countRoot: null); // lands first, and builds the grid
+            Assert.True(Sta.PumpUntil(() => vm.RefreshIdle.IsCompleted && vm.TotalItemCount == 3, Wait));
+            releaseStartup.Set();
+
+            Assert.True(Sta.PumpUntil(() => vm.FolderTree.Count == 1 && !vm.IsLoadingView, Wait), "the tree was never built");
+        }, releaseStartup);
+    }
+
+    [Fact]
+    public void Refreshes_ShowNoLoadingCard()
+    {
+        // Review R1-A4: every refresh while a folder streamed in flashed "Loading…" over the grid.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            var shown = 0;
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.IsLoadingView) && f.Vm.IsLoadingView)
+                    shown++;
+            };
+
+            for (var i = 0; i < 3; i++)
+            {
+                f.Vm.RequestRefresh(rows: true, tree: false, countRoot: null);
+                Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+                Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300)); // its grid build, debounced, runs
+            }
+
+            Assert.Equal(0, shown);
+        });
+    }
+
+    [Fact]
+    public void TheResults_AreAppliedOnTheUiThread()
+    {
+        // Review R1-B2: the reads run off the UI thread; what they bring is applied on it (the tree's collection is bound).
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(1, "Trip")]);
+            var applied = new List<int>();
+            f.Vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName is nameof(MainViewModel.TotalItemCount))
+                    lock (applied) applied.Add(Environment.CurrentManagedThreadId);
+            };
+            f.Vm.FolderTree.CollectionChanged += (_, _) => { lock (applied) applied.Add(Environment.CurrentManagedThreadId); };
+            f.Vm.Roots.Single().PropertyChanged += (_, _) => { lock (applied) applied.Add(Environment.CurrentManagedThreadId); };
+            TestImages.Write(Path.Combine(f.Photos.Path, "later.jpg"), 32, 24);
+            f.Library.IndexRoot(f.Library.GetRoots().Single());
+
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: f.Vm.Roots.Single().Id);
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted && f.Vm.TotalItemCount == 3, Wait));
+
+            lock (applied)
+            {
+                Assert.NotEmpty(applied);
+                Assert.All(applied, thread => Assert.Equal(f.UiThread, thread));
+            }
+        });
+    }
+
+    [Fact]
+    public void TheFolderIndex_IsBuiltOffTheUiThread_AndOnceForRowsReadOnIt()
+    {
+        // Review R1-B3: the index built on the UI thread, or built again for every folder, would bring back the freeze.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture([.. Photos(1), .. Photos(1, @"A\B\C"), .. Photos(1, @"A\D"), .. Photos(1, "E")]);
+            f.Vm.RequestRefresh(rows: true, tree: true, countRoot: null);
+            Assert.True(Sta.PumpUntil(() => f.Vm.RefreshIdle.IsCompleted, Wait));
+            Core.Library.FolderIndex.BuildCalls = 0; // on this, the UI thread
+
+            var root = f.Vm.FolderTree.Single();
+            ExpandAsTheUserDoes(root);
+            var a = root.Children.Single(c => c.Name == "A");
+            a.IsExpanded = true;
+            a.Children.Single(c => c.Name == "B").IsExpanded = true;
+            Assert.Equal(0, Core.Library.FolderIndex.BuildCalls); // the refresh built it, in the background
+
+            root.Children.Single(c => c.Name == "E").IsShown = false; // read on the UI thread, as a hide always is
+            Assert.True(Sta.PumpUntil(() => f.Vm.TotalItemCount == 3, Wait));
+            var aNow = f.Vm.FolderTree.Single().Children.Single(c => c.Name == "A");
+            aNow.IsExpanded = false;
+            aNow.IsExpanded = true;
+            Assert.Equal(1, Core.Library.FolderIndex.BuildCalls); // once for those rows, however many folders open
+        });
+    }
+
+    [Fact]
+    public void TheWindowSaysIndexing_UntilARunsRefreshLands()
+    {
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(Photos(3));
+            TestImages.Write(Path.Combine(f.Photos.Path, "later.jpg"), 32, 24);
+            var release = f.HoldNextRead(); // the run's end's refresh
+
+            f.Vm.ResumeRootIndexCommand.Execute(f.Vm.Roots.Single());
+            Assert.True(Sta.PumpUntil(() => f.Held.IsSet, Wait));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(100));
+
+            Assert.True(f.Vm.IsIndexing); // the run has ended, but the grid hasn't caught up with it yet
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsIndexing, Wait));
+            Assert.Equal(4, f.Vm.TotalItemCount);
+        });
+    }
+
+    [Fact]
+    public void TheIndexingLines_FollowTheRun()
+    {
+        // Review R1-B4: what the bar and the card say, through the view model: counting, then how far, then nothing.
+        Sta.Run(() =>
+        {
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+            try
+            {
+                using var f = new Fixture();
+                var folder = Path.Combine(f.Photos.Path, "new");
+                foreach (var file in Photos(30))
+                    TestImages.Write(Path.Combine(folder, file), 32, 24);
+                var cloud = Path.Combine(folder, "p004.jpg");
+                File.SetAttributes(cloud, File.GetAttributes(cloud) | FileAttributes.Offline);
+                var headlines = new List<string>();
+                var notes = new List<string>();
+                f.Vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainViewModel.IndexingText))
+                        headlines.Add(f.Vm.IndexingText);
+                    if (e.PropertyName == nameof(MainViewModel.IndexingNote))
+                        notes.Add(f.Vm.IndexingNote);
+                };
+
+                f.Vm.AddFolder(folder, includeSubfolders: true);
+                Assert.True(Sta.PumpUntil(f.Settled, Wait));
+
+                Assert.Contains(headlines, h => h.StartsWith("Counting files in new…"));
+                Assert.Contains("Indexing new: 0 of 30 files", headlines);
+                Assert.True(headlines.FindIndex(h => h.StartsWith("Counting")) < headlines.IndexOf("Indexing new: 0 of 30 files"));
+                Assert.Contains("This might take a while. You can keep browsing. 1 of the files is online-only, so it's "
+                                + "downloaded as it's indexed.", notes);
+                Assert.Equal(("", ""), (f.Vm.IndexingText, f.Vm.IndexingNote));
+            }
+            finally
+            {
+                System.Globalization.CultureInfo.CurrentCulture = culture;
+            }
+        });
+    }
 }

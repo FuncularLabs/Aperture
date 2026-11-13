@@ -379,9 +379,13 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnTreePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // A top-level folder pressed may be dragged into another place (it's selected, as any press does); not from its
+        // rename box or a checkbox or the expander, where a press with a little movement is theirs (review R1-A7).
         _reorderPressed = (e.OriginalSource as FrameworkElement)?.DataContext as FolderNodeVm is { IsRoot: true } root
+                          && !IsWithin<System.Windows.Controls.Primitives.TextBoxBase>(e.OriginalSource as DependencyObject)
+                          && !IsWithin<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject)
             ? root
-            : null; // a top-level folder pressed may be dragged into another place (it's selected, as any press does)
+            : null;
         _reorderStart = e.GetPosition(this);
         var action = LibraryPaneFocus.OnTreePreviewClick(e.OriginalSource as DependencyObject);
         if (action == LibraryPaneFocus.TreeClickAction.Leave)
@@ -1158,6 +1162,18 @@ public partial class MainWindow : Window
         _reorderStart = e.GetPosition(this);
     }
 
+    // Whether an element is, or is inside, a control of type T, up to the folder tree.
+    private bool IsWithin<T>(DependencyObject? element) where T : DependencyObject
+    {
+        for (var node = element; node is not null && !ReferenceEquals(node, FolderTreeView); node =
+                 node is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
+        {
+            if (node is T)
+                return true;
+        }
+        return false;
+    }
+
     private void OnLibraryListPreviewMove(object sender, MouseEventArgs e)
     {
         if (TakeReorderDrag(e) is LibraryListItem library)
@@ -1216,7 +1232,8 @@ public partial class MainWindow : Window
             return;
         e.Handled = true;
         HideInsertion();
-        var id = (string)e.Data.GetData(LibraryReorderFormat);
+        if (e.Data.GetData(LibraryReorderFormat) is not string id)
+            return; // from another copy of Aperture, or nothing
         var slot = DropIndex.At(e.GetPosition(LibraryList).Y, LibraryRows());
         var moved = Core.Formatting.ListOrder.MoveToSlot([.. catalog.Libraries.Select(l => l.Id)], id, slot);
         // After the drop returns: a message the move might show must not hold the drag open.
@@ -1238,7 +1255,8 @@ public partial class MainWindow : Window
             return;
         e.Handled = true;
         HideInsertion();
-        var rootId = (long)e.Data.GetData(RootReorderFormat);
+        if (e.Data.GetData(RootReorderFormat) is not long rootId)
+            return;
         var slot = DropIndex.At(e.GetPosition(FolderTreeView).Y, RootRows());
         var moved = Core.Formatting.ListOrder.MoveToSlot([.. vm.FolderTree.Select(n => n.RootId)], rootId, slot);
         Dispatcher.BeginInvoke(() => vm.MoveRoot(rootId, moved.IndexOf(rootId)));

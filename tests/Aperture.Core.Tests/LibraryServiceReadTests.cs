@@ -101,6 +101,26 @@ public class LibraryServiceReadTests
     }
 
     [Fact]
+    public async Task AReadAskedForWhileTheLibraryIsShuttingDown_IsRefused()
+    {
+        // Review R1-B10: while a shutdown waits for an index to stop, the database is still open: a new read must not start.
+        var (data, photos, library, root) = Library();
+        using var _ = data;
+        using var __ = photos;
+        var held = new BlockingProgress();
+        var indexing = library.IndexRootAsync(root, held);
+        Assert.True(held.Entered.Wait(5000));
+        var shutdown = library.ShutdownAsync(); // waiting on the held index: not torn down yet
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(library.GetContentsAsync);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => library.CountForRootAsync(root.Id));
+
+        held.Release();
+        await shutdown;
+        await Record.ExceptionAsync(() => indexing);
+    }
+
+    [Fact]
     public async Task AReadAskedForOnceTheLibraryIsClosing_IsRefused()
     {
         var (data, photos, library, root) = Library();

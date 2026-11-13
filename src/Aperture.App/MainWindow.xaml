@@ -1398,7 +1398,8 @@
             <!-- The bottom of quick view, over the video playback (its DataContext, set in code): a video's controls and
                  status, and the keys for what's shown. -->
             <StackPanel x:Name="QuickLookChrome" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,18">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8"
+                <!-- A background, so a click in a gap between the controls is the row's, not a press beside the video. -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8" Background="Transparent"
                             Visibility="{Binding SpaceToggles, Converter={StaticResource BoolToVis}}">
                     <Button Command="{Binding ToggleCommand}" Focusable="False" Width="38" Height="30" Cursor="Hand"
                             FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="White" Background="#33FFFFFF"

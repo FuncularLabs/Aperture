@@ -7,8 +7,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ### Added
 - **Videos play in quick view.** Open quick view on a video (or move to one) and it plays. `Space`
-  or a click on the video plays and pauses it; at its end, it plays again from the start. Its
-  controls show play/pause, mute and a volume slider. The very first video plays muted; after
+  or a click on the video plays and pauses it. At its end it stops; `Space` or a click plays it
+  again from the start. Its controls show play/pause, mute and a volume slider. The very first video plays muted; after
   that, each video starts with the sound you last left (muted or not, and the volume), in any
   library and after a restart. `Enter` or a double-click still opens it in its default app, and
   pauses it in quick view. A video Windows can't play here keeps its still frame and says so.

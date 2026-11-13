@@ -75,6 +75,9 @@ public sealed class ItemStore(ApertureDatabase database)
     /// <see cref="GetIncludedUnion"/> over any provider: the open library's, or a read-only one over another library's
     /// files (<see cref="LibraryCount"/>), so both count by the same query.
     /// </summary>
+    internal static int IncludedCount(Funcular.Data.Orm.Sqlite.SqliteOrmDataProvider provider) =>
+        provider.Query<LibraryRowEntity>().Where(x => x.RootIncluded).Count(); // the union's size, counted by SQL
+
     internal static List<LibraryRow> IncludedUnion(Funcular.Data.Orm.Sqlite.SqliteOrmDataProvider provider) =>
         provider.Query<LibraryRowEntity>().Where(x => x.RootIncluded).ToList()
             .OrderByDescending(SortKey)

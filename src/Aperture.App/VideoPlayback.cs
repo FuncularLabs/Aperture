@@ -8,8 +8,8 @@ namespace Aperture.App;
 /// Quick view's video playback (0.9.1 batch, items 1–2), as a model over <see cref="IVideoPlayer"/>: no WPF types, so
 /// it's tested without a window. Shown a video, it makes a player for it and plays it with the sound the user last left
 /// (muted the first time ever); <see cref="Toggle"/> plays and pauses it (from the start once it has ended); leaving it
-/// stops it and lets go of its file. Events from a player it has left change nothing. Every change to the sound is
-/// saved at once.
+/// stops it and lets go of its file. Events from a player it has left change nothing. A mute is saved at once; a
+/// volume set while a video plays is saved as the video is left (the slider sets many as it's dragged).
 /// </summary>
 public sealed class VideoPlayback : ObservableObject
 {
@@ -23,6 +23,7 @@ public sealed class VideoPlayback : ObservableObject
     private bool _atEnd;
     private bool _isMuted;
     private double _volume;
+    private bool _soundUnsaved; // a volume set while a video plays: saved once, as it's left (a slider drag sets many)
 
     /// <param name="prefs">Where the sound is kept between videos and launches.</param>
     /// <param name="playerFactory">Makes the player for each video shown; one that throws means "can't play here".</param>
@@ -136,6 +137,8 @@ public sealed class VideoPlayback : ObservableObject
     /// <summary>Stops the video shown, if any, and lets go of its file (another item, quick view closed, a switch).</summary>
     public void Leave()
     {
+        if (_soundUnsaved)
+            Save();
         if (_player is { } player)
         {
             _player = null;
@@ -200,11 +203,17 @@ public sealed class VideoPlayback : ObservableObject
             player.Volume = volume;
         if (raised && _isMuted)
             SetMuted(false); // saves both
-        else
+        else if (_player is null)
             Save();
+        else
+            _soundUnsaved = true; // saved as the video is left, not once for every step of the slider (review R1)
     }
 
-    private void Save() => _prefs.Save(new PlaybackPrefs(_isMuted, _volume));
+    private void Save()
+    {
+        _prefs.Save(new PlaybackPrefs(_isMuted, _volume));
+        _soundUnsaved = false;
+    }
 
     private void OnOpened(object? sender, EventArgs e)
     {

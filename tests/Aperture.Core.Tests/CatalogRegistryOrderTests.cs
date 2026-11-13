@@ -81,6 +81,25 @@ public class CatalogRegistryOrderTests
     }
 
     [Fact]
+    public void AnotherWindowsNewerOrder_ReplacesTheOneThisWindowHad()
+    {
+        // Review R1-B9: both other-window tests began from a window with no order of its own.
+        using var dir = new TempDir();
+        var mine = new CatalogRegistry(RegistryPath(dir));
+        var a = mine.Add("A", dir.Combine("a"));
+        var b = mine.Add("B", dir.Combine("b"));
+        mine.SetOrder([a.Id, b.Id]);
+
+        var theirs = new CatalogRegistry(RegistryPath(dir));
+        theirs.SetOrder([b.Id, a.Id]);
+        Assert.True(mine.Rename(a.Id, "Alpha")); // re-reads the file before it saves
+
+        Assert.Equal([b.Id, a.Id], new CatalogRegistry(RegistryPath(dir)).Order);
+        mine.Reload();
+        Assert.Equal([b.Id, a.Id], mine.Order);
+    }
+
+    [Fact]
     public void SetOrder_WhenTheListCannotBeSaved_ReturnsFalse_AndKeepsTheLastOrder()
     {
         using var dir = new TempDir();

@@ -278,6 +278,50 @@ public class IndexerTests
         Assert.Equal(1, OnlineOnlyReported(scope, root));        // unchanged, but its thumbnails are gone: read again
     }
 
+    [Fact]
+    public void AFolderUnderABatch_SaysHowFarItIs_FromTheStart()
+    {
+        // Review R1-1: a folder of fewer than 200 files (and the first 200 of any) went from "counting" straight to
+        // done, and said how many were online-only only once they were downloaded.
+        using var scope = new ApertureScope();
+        for (var i = 0; i < 150; i++)
+            File.WriteAllText(scope.Library.Combine($"f{i}.jpg"), "x");
+        MakeOnlineOnly(scope.Library.Combine("f3.jpg"));
+        var root = scope.AddLibraryRoot();
+
+        var reports = new List<IndexProgress>();
+        scope.Indexer.IndexRoot(root, new SynchronousSink(reports));
+
+        var first = reports.First(r => r.Phase == IndexPhase.Indexing); // straight after the count, before any file
+        Assert.Equal((0, 150, 1, false), (first.Processed, first.Total, first.OnlineOnly, first.Saved));
+        Assert.True(reports.IndexOf(first) < reports.FindIndex(r => r.Phase == IndexPhase.Pruning));
+        Assert.DoesNotContain(reports, r => r.Phase == IndexPhase.Indexing && r.Saved); // no batch saved under 200
+    }
+
+    [Fact]
+    public void BetweenBatches_ItReportsAsTheIntervalAllows_AndSaysWhenABatchIsSaved()
+    {
+        using var scope = new ApertureScope();
+        for (var i = 0; i < 230; i++)
+            File.WriteAllText(scope.Library.Combine($"f{i}.jpg"), "x");
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.ProgressInterval = TimeSpan.Zero; // a report for every file
+
+        var reports = new List<IndexProgress>();
+        scope.Indexer.IndexRoot(root, new SynchronousSink(reports));
+
+        var indexing = reports.Where(r => r.Phase == IndexPhase.Indexing).ToList();
+        Assert.Equal(Enumerable.Range(0, 231), indexing.Select(r => r.Processed)); // 0, then each file
+        Assert.Equal([200], indexing.Where(r => r.Saved).Select(r => r.Processed)); // the one batch saved in the loop
+    }
+
+    [Fact]
+    public void TheIntervalBetweenReports_IsAQuarterOfASecond_ByDefault()
+    {
+        using var scope = new ApertureScope();
+        Assert.Equal(TimeSpan.FromMilliseconds(250), scope.Indexer.ProgressInterval);
+    }
+
     private static void MakeOnlineOnly(string path) => File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Offline);
 
     // What a run's indexing reports (and its last one) say about online-only files; every report after the scan agrees.
