@@ -73,7 +73,8 @@ public class OnlineOnlyChoicesTests
     }
 
     [Theory]
-    [InlineData("\"7\"")]          // a number isn't an answer
+    [InlineData("\"7\"")]          // a number isn't an answer…
+    [InlineData("\"1\"")]          // …not even one that names an answer's place
     [InlineData("\"Sometimes\"")]
     [InlineData("\"\"")]
     public void WhatIsntAnAnswer_IsAsIfNone(string value)

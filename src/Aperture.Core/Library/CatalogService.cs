@@ -269,6 +269,43 @@ public sealed class CatalogService : IAsyncDisposable
     /// <c>null</c> — its items haven't been read yet, so it has no count to show — keeps the one it had. Best effort: if
     /// the list can't be saved, the previous count stays.
     /// </summary>
+    /// <summary>
+    /// Every other library's folders, for Move to… (0.9.2 M2), each read from its own database read-only and unpooled,
+    /// as <see cref="LibraryCount"/> reads its count: nothing is created where a library isn't, nothing is written,
+    /// and no handle is kept. A library that can't be read is left out. Slow on a share that has gone away: call it off
+    /// the UI thread.
+    /// </summary>
+    public IReadOnlyList<OtherLibrary> OtherLibraryFolders()
+    {
+        var activeId = _registry.Active?.Id;
+        var others = new List<OtherLibrary>();
+        foreach (var entry in _registry.List())
+        {
+            if (entry.Id == activeId)
+                continue;
+            var path = Path.Combine(entry.Dir, ApertureDatabase.MetadataFileName);
+            try
+            {
+                if (!File.Exists(path))
+                    continue;
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(LibraryCount.ConnectionStringFor(path));
+                connection.Open();
+                using var read = connection.CreateCommand();
+                read.CommandText = "SELECT path, recursive FROM roots;";
+                using var rows = read.ExecuteReader();
+                var folders = new List<LibraryFolder>();
+                while (rows.Read())
+                    folders.Add(new LibraryFolder(rows.GetString(0), rows.GetInt64(1) != 0));
+                others.Add(new OtherLibrary(entry.Name, folders));
+            }
+            catch (Exception)
+            {
+                // Best effort: a file that isn't a library, a version without these columns, a drive gone mid-read.
+            }
+        }
+        return others;
+    }
+
     public void RecordItemCount(int? count)
     {
         if (count is { } known && ActiveCatalog is { } active)

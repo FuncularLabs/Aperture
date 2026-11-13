@@ -32,7 +32,12 @@ on your machine — it never uploads anything or phones home.
 - **Union across folders.** Add folders from anywhere on disk and browse them as one
   date-sorted view; aliases, a show/hide checkbox on every folder and subfolder, and drag the
   top-level folders into the order you like. Indexing runs in the background with a progress
-  bar along the bottom of the window, so you can keep browsing.
+  bar along the bottom of the window, so you can keep browsing. Before it would download
+  online-only cloud files, it asks whether to skip them, index them after the rest, or now
+  (kept per folder if you like; change it from the folder's right-click menu).
+- **Move to…** from a file's right-click menu moves it (or all of a selection) to another folder,
+  with its tags and notes; it asks first when the folder is outside this library's folders.
+  Cut and Copy put the whole selection on the clipboard, for Explorer.
 - **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
   each other's folders, tags, or search results. They're listed under **LIBRARIES** in the
   folder pane: click one to switch to it, drag one to reorder the list. Each library has its
@@ -52,9 +57,10 @@ on your machine — it never uploads anything or phones home.
   everywhere — all AND-ed, with `tag:` clauses OR-ed together.
 - **Quick view** (`Space` / `Enter` / double-click) — a full-screen quick-look with `←`/`→`
   paging and zoom (`Ctrl`+wheel at the pointer, `Ctrl`+`±`, `Ctrl`+`0` to fit; drag to look
-  around a zoomed photo); right-click for the full item menu. Videos play in it: `Space` or a
-  click plays and pauses, with mute and volume (the first video plays muted; after that, each
-  starts with the sound you last left).
+  around a zoomed photo); right-click for the full item menu. Videos play in it: a video opens
+  paused, and `Space`, a click or the play button plays and pauses it; a seek bar and the time
+  show where it is. Mute and volume too (the first video plays muted; after that, each starts
+  with the sound you last left).
 - **Inspector pane** (dockable right or bottom) — large preview with zoom/pan, the item's
   tags & notes, and full EXIF/metadata.
 - **Video thumbnails** via the Windows shell; open anything in its default app.

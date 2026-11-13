@@ -155,6 +155,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyImageCommand = new RelayCommand<TileVm>(CopyImage);
         CopyFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: false));
         CutFileCommand = new RelayCommand<TileVm>(t => PutFileOnClipboard(t, cut: true));
+        MoveToCommand = new RelayCommand<TileVm>(t => _ = MoveToAsync(t), _ => !IsMoving);
         CopyShownFileCommand = new RelayCommand<TileVm>(t => PutFilesOnClipboard(OnDisk(t), cut: false));
         CutShownFileCommand = new RelayCommand<TileVm>(t => PutFilesOnClipboard(OnDisk(t), cut: true));
         OpenContainingFolderCommand = new RelayCommand<TileVm>(OpenContainingFolder);
@@ -1122,6 +1123,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyFileCommand { get; }
     public ICommand CutFileCommand { get; }
 
+    /// <summary>The grid's Move to… (0.9.2 M1): the same files as Cut; unavailable while a move runs.</summary>
+    public ICommand MoveToCommand { get; }
+
     /// <summary>Quick view's and the preview's Copy and Cut: the item shown alone, whatever else is selected (0.9.2 X1).</summary>
     public ICommand CopyShownFileCommand { get; }
 
@@ -1534,6 +1538,171 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SetClipboard(data);
         }
         catch { }
+    }
+
+    // --- Move to… (0.9.2 M1–M6) ----------------------------------------------
+
+    private bool _isMoving;
+    private string _moveText = "";
+
+    /// <summary>A move is running: Move to… is unavailable and the status bar says so.</summary>
+    public bool IsMoving
+    {
+        get => _isMoving;
+        private set
+        {
+            if (SetProperty(ref _isMoving, value))
+                CommandManager.InvalidateRequerySuggested();
+        }
+    }
+
+    /// <summary>"Moving 3 files to “Trips”…" while a move runs; empty otherwise.</summary>
+    public string MoveText
+    {
+        get => _moveText;
+        private set => SetProperty(ref _moveText, value);
+    }
+
+    /// <summary>Asks where to move to, starting in the folder given (null: none); null when cancelled. Settable for tests.</summary>
+    internal Func<string?, string?> PickMoveDestination { get; set; } = PickFolderWithDialog;
+
+    /// <summary>Asks whether to go on with a move out of what this library indexes. Settable for tests.</summary>
+    internal Func<string, bool> ConfirmMove { get; set; } = ConfirmWithDialog;
+
+    /// <summary>Says what a move left where it was. Settable for tests.</summary>
+    internal Action<string> ShowMoveSummary { get; set; } = SummaryWithDialog;
+
+    /// <summary>
+    /// Every other library's folders (App: <see cref="CatalogService.OtherLibraryFolders"/>; none for a pinned library).
+    /// Called off the UI thread, and only when the folder chosen isn't this library's.
+    /// </summary>
+    public Func<IReadOnlyList<OtherLibrary>> OtherLibraries { get; set; } = () => [];
+
+    private static string? PickFolderWithDialog(string? start)
+    {
+        var dialog = new OpenFolderDialog { Title = "Move to" };
+        if (start is not null && Directory.Exists(start))
+            dialog.InitialDirectory = start;
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
+
+    private static bool ConfirmWithDialog(string question) =>
+        System.Windows.MessageBox.Show(System.Windows.Application.Current.MainWindow!, question, "Move to",
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes;
+
+    private static void SummaryWithDialog(string summary) =>
+        System.Windows.MessageBox.Show(System.Windows.Application.Current.MainWindow!, summary, "Move to",
+            System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+
+    private string? FolderShown() =>
+        _location.RootId is { } rootId && Roots.FirstOrDefault(r => r.Id == rootId) is { } root
+            ? (_location.RelDir.Length == 0 ? root.Path : Path.Combine(root.Path, _location.RelDir))
+            : null;
+
+    private static string Files(int count) => count == 1 ? "1 file" : $"{count:n0} files";
+
+    private static string NameOf(string folder) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder;
+
+    /// <summary>The question for a folder this library doesn't index (M2); null for one it does.</summary>
+    internal static string? MoveQuestion(MoveDestination at, int count) => at.Kind switch
+    {
+        MoveDestinationKind.OtherLibrary =>
+            $"“{NameOf(at.FolderPath)}” is a folder of your library “{at.LibraryName}”.\n\n" +
+            $"Move {Files(count)} there? They'll leave this library, and the tags and notes you gave them here won't " +
+            $"show in “{at.LibraryName}”.",
+        MoveDestinationKind.NotIndexedHere =>
+            $"“{NameOf(at.FolderPath)}” isn't indexed: it's inside “{at.UnderRoot?.Alias}”, which doesn't include its " +
+            $"subfolders.\n\nMove {Files(count)} there? They'll leave the view.",
+        MoveDestinationKind.NoLibrary =>
+            $"“{NameOf(at.FolderPath)}” isn't in any of your libraries.\n\n" +
+            $"Move {Files(count)} there? They won't show in Aperture any more (their tags and notes are kept, should " +
+            "you add that folder later).",
+        _ => null,
+    };
+
+    private static string Reason(MoveOutcome outcome) => outcome switch
+    {
+        MoveOutcome.NameTaken => "a file of that name is already there",
+        MoveOutcome.AlreadyThere => "already in that folder",
+        MoveOutcome.SourceGone => "no longer where it was",
+        MoveOutcome.DestinationGone => "the folder isn't there any more",
+        MoveOutcome.InUse => "in use by another program",
+        MoveOutcome.AccessDenied => "Windows wouldn't allow it",
+        MoveOutcome.LibraryBusy => "the library was busy indexing; try again in a moment",
+        MoveOutcome.Stopped => "Aperture stopped before it came to them",
+        _ => "couldn't be moved",
+    };
+
+    /// <summary>What a move did, when it left any where they were (M3); null when it moved them all.</summary>
+    internal static string? MoveSummary(IReadOnlyList<FileMove> moves, string folder)
+    {
+        var notMoved = moves.Where(m => m.Outcome != MoveOutcome.Moved).ToList();
+        if (notMoved.Count == 0)
+            return null;
+        var lines = notMoved.GroupBy(m => Reason(m.Outcome)).Select(g => $"• {g.Count():n0} — {g.Key}");
+        return $"Moved {moves.Count - notMoved.Count:n0} of {Files(moves.Count)} to “{NameOf(folder)}”.\n\n" +
+               "Not moved:\n" + string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// Move to… (M1–M6): the files the action is for, a folder, a question when this library doesn't index it, then
+    /// the move off the UI thread (tracked by the library), the tags shown again, what wasn't moved, and a re-index of
+    /// each affected folder that isn't watched or paused.
+    /// </summary>
+    private async Task MoveToAsync(TileVm? tile)
+    {
+        if (_closing || IsMoving)
+            return;
+        var targets = ActionTargets(tile);
+        if (targets.Count == 0)
+            return;
+        var picked = PickMoveDestination(FolderShown());
+        if (string.IsNullOrWhiteSpace(picked) || _closing)
+            return;
+
+        IsMoving = true;
+        try
+        {
+            var roots = Roots.Select(r => r.Model).ToList();
+            var at = MoveDestination.Classify(picked, roots, null);
+            if (at.Kind != MoveDestinationKind.ThisLibrary)
+            {
+                var others = await Task.Run(() => OtherLibraries()); // a share gone away can take a while (gate 9)
+                if (_closing)
+                    return;
+                at = MoveDestination.Classify(picked, roots, others);
+                if (!ConfirmMove(MoveQuestion(at, targets.Count)!))
+                    return;
+            }
+
+            MoveText = $"Moving {Files(targets.Count)} to “{NameOf(at.FolderPath)}”…";
+            var moves = await _library.MoveFilesAsync([.. targets.Select(t => t.FullPath)], at.FolderPath);
+            if (_closing)
+                return;
+
+            RefreshAllAnnotationsInPlace(); // their tags now live under their new paths
+            var affected = targets.Select(t => t.Item.RootId).Append(at.RootId ?? -1).Where(id => id >= 0).Distinct();
+            foreach (var rootId in affected)
+            {
+                bool paused;
+                lock (_indexLock)
+                    paused = _pausedRoots.Contains(rootId);
+                if (!paused && !_library.IsWatching(rootId) && Roots.FirstOrDefault(r => r.Id == rootId) is { } rootVm)
+                    _ = IndexRootAsync(rootVm.Model, watchAfter: false); // a watched folder follows by its watcher
+            }
+            if (MoveSummary(moves, at.FolderPath) is { } summary)
+                ShowMoveSummary(summary);
+        }
+        catch (ObjectDisposedException) when (_closing)
+        {
+            // The library closed (a switch, exit) as the move was asked for: nothing was started.
+        }
+        finally
+        {
+            MoveText = "";
+            IsMoving = false;
+        }
     }
 
     // --- Keyboard navigation (headers + visible tiles) ----------------------
@@ -2819,7 +2988,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private static OnlineOnlyAnswer? AskOnlineOnlyWithDialog(OnlineOnlyQuestion question)
     {
-        var dialog = new OnlineOnlyDialog(question.Root.Alias, question.Count) { Owner = System.Windows.Application.Current.MainWindow };
+        var dialog = new OnlineOnlyDialog(question.Root.Alias, question.Count) { Owner = System.Windows.Application.Current?.MainWindow };
         dialog.ShowDialog();
         return dialog.Answer;
     }

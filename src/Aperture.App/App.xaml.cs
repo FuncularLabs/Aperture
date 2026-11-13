@@ -131,7 +131,11 @@ public partial class App : Application
     }
 
     private MainViewModel BuildViewModel(LibraryService library) =>
-        new(library, new ThumbnailService(library), _catalogBar);
+        new(library, new ThumbnailService(library), _catalogBar)
+        {
+            // Move to… names another library that indexes the folder chosen (0.9.2 M2); none when one is pinned.
+            OtherLibraries = () => _catalog?.OtherLibraryFolders() ?? [],
+        };
 
     // Gives up the window as soon as this copy starts closing (or has failed to start), before the settings save and
     // the library's teardown: a launch in the meantime then opens, instead of asking a window that is going away.

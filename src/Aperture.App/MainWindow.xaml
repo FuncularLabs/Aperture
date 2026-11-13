@@ -574,8 +574,14 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
-                           VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Ink}" FontSize="12"
+                               VerticalAlignment="Center" />
+                    <!-- 0.9.2 M1: a move in progress. -->
+                    <TextBlock x:Name="MoveStatus" Text="{Binding MoveText}" Foreground="{StaticResource Accent}" FontSize="12"
+                               VerticalAlignment="Center" Margin="14,0,0,0"
+                               Visibility="{Binding IsMoving, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
                 <TextBlock Grid.Column="1" Text="{Binding IndexingNote}" Foreground="{StaticResource Muted}" FontSize="12"
                            VerticalAlignment="Center" Margin="14,0,10,0" TextTrimming="CharacterEllipsis"
                            ToolTip="{Binding IndexingNote}"
@@ -1064,6 +1070,12 @@
                                   Command="{Binding Data.CutFileCommand, Source={StaticResource Vm}}"
                                   CommandParameter="{Binding}">
                             <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
+                        </MenuItem>
+                        <!-- 0.9.2 M1: the same files as Cut, moved into a folder chosen next. -->
+                        <MenuItem Header="Move to…"
+                                  Command="{Binding Data.MoveToCommand, Source={StaticResource Vm}}"
+                                  CommandParameter="{Binding}">
+                            <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8DE;" /></MenuItem.Icon>
                         </MenuItem>
                     </ContextMenu>
                 </ListBox.ContextMenu>

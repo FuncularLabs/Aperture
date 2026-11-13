@@ -458,10 +458,10 @@ public class MainWindowTemplateTests
             var items = menu.Items.OfType<MenuItem>().ToList();
             Assert.Equal(
                 ["Preview", "Open", "Open with", "Open containing folder", "Tags & notes…", "Copy image", "Copy thumbnail",
-                 "Copy file name", "Copy full path", "Copy", "Cut"],
+                 "Copy file name", "Copy full path", "Copy", "Cut", "Move to…"],
                 items.Select(i => (string)i.Header));
             var withTile = items.Select(i => BindingOperations.GetBinding(i, MenuItem.CommandParameterProperty)).OfType<Binding>().ToList();
-            Assert.Equal(8, withTile.Count);
+            Assert.Equal(9, withTile.Count); // Move to… (0.9.2) acts on the tile too
             Assert.All(withTile, b => Assert.True(b.Path is null || b.Path.Path.Length == 0)); // {Binding}: the tile it opened on
             Assert.Equal("TileSize", BindingOperations.GetBinding(grid, TileLayout.SizeProperty)!.Path.Path); // set once, here
             window.Close();

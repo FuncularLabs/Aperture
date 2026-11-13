@@ -453,7 +453,57 @@ public sealed class LibraryService : IDisposable
         }
     }
 
+    // --- Move to… (0.9.2 M3–M6) ----------------------------------------------
+
+    /// <summary>
+    /// Moves the files into <paramref name="destinationFolder"/>, one at a time, with their tags (<see cref="FileMoves"/>),
+    /// on a pool thread, tracked as an index run is: a switch or exit waits for it, and its token (or the shutdown) stops
+    /// it between files; those not come to are <see cref="MoveOutcome.Stopped"/>. One outcome per file, in order.
+    /// </summary>
+    public Task<IReadOnlyList<FileMove>> MoveFilesAsync(
+        IReadOnlyList<string> sources, string destinationFolder, CancellationToken ct = default)
+    {
+        lock (_indexLock)
+        {
+            ObjectDisposedException.ThrowIf(_shuttingDown, this);
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, ct);
+            var moves = new FileMoves(_db);
+            var task = Task.Run<IReadOnlyList<FileMove>>(() =>
+            {
+                try
+                {
+                    var done = new List<FileMove>(sources.Count);
+                    foreach (var source in sources)
+                    {
+                        if (linked.IsCancellationRequested)
+                        {
+                            done.Add(new FileMove(source, Path.Combine(destinationFolder, Path.GetFileName(source)), MoveOutcome.Stopped));
+                            continue;
+                        }
+                        MovingFile?.Invoke(source);
+                        done.Add(moves.Move(source, destinationFolder));
+                    }
+                    return done;
+                }
+                finally { linked.Dispose(); }
+            });
+            _indexTasks.RemoveAll(t => t.IsCompleted);
+            _indexTasks.Add(task);
+            return task;
+        }
+    }
+
+    /// <summary>Test seam: runs on the move's thread as it comes to each file, before it's moved.</summary>
+    internal Action<string>? MovingFile { get; set; }
+
     // --- Watching ------------------------------------------------------------
+
+    /// <summary>Whether the folder's watcher is on: changes in it re-index it by themselves.</summary>
+    public bool IsWatching(long rootId)
+    {
+        lock (_watchersLock)
+            return _watchers.ContainsKey(rootId);
+    }
 
     public void Watch(Root root)
     {

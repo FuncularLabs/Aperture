@@ -615,6 +615,8 @@ public class IndexingResponsivenessTests
                         notes.Add(f.Vm.IndexingNote);
                 };
 
+                // 0.9.2 C1: the run asks first what to do with the online-only file; "now" is 0.9.1's way.
+                f.Vm.ShowOnlineOnlyDialog = _ => new Aperture.App.OnlineOnlyAnswer(Core.Indexing.OnlineOnlyChoice.Now, Remember: false);
                 f.Vm.AddFolder(folder, includeSubfolders: true);
                 Assert.True(Sta.PumpUntil(f.Settled, Wait));
 

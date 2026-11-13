@@ -37,4 +37,38 @@ public class ContextMenuTests
             window.Close();
         });
     }
+
+    [Fact]
+    public void TheTileMenu_HasMoveTo_AfterCut()
+    {
+        Sta.Run(() =>
+        {
+            var window = new MainWindow();
+            var menu = ((ListBox)window.FindName("ItemsList")).ContextMenu!;
+            var items = menu.Items.OfType<MenuItem>().ToList();
+
+            var cut = items.FindIndex(i => i.Header as string == "Cut");
+            var move = items.FindIndex(i => i.Header as string == "Move to…");
+            Assert.Equal(cut + 1, move);
+            Assert.Equal("Data.MoveToCommand", PathOf(items[move], MenuItem.CommandProperty));
+            Assert.Equal("Data.CutFileCommand", PathOf(items[cut], MenuItem.CommandProperty)); // the selection's
+            window.Close();
+        });
+    }
+
+    [Fact]
+    public void QuickViewsMenu_CopiesAndCutsTheItemShown_AndHasNoMoveTo()
+    {
+        Sta.Run(() =>
+        {
+            var window = new MainWindow();
+            var menu = (ContextMenu)window.FindResource("PreviewContextMenu");
+            var items = menu.Items.OfType<MenuItem>().ToList();
+
+            Assert.Equal("Data.CopyShownFileCommand", PathOf(items.Single(i => i.Header as string == "Copy"), MenuItem.CommandProperty));
+            Assert.Equal("Data.CutShownFileCommand", PathOf(items.Single(i => i.Header as string == "Cut"), MenuItem.CommandProperty));
+            Assert.DoesNotContain(items, i => i.Header as string == "Move to…");
+            window.Close();
+        });
+    }
 }

@@ -29,6 +29,47 @@ public class CatalogServiceTests
         return db;
     }
 
+    // --- Other libraries' folders, for Move to… (0.9.2 M2) ------------------------------------
+
+    [Fact]
+    public async Task OtherLibraryFolders_ReadsEachOtherLibrarysFolders_NotThisOnes()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        service.Current.AddRoot(outer.Combine("mine"), "Mine");
+        var workDir = outer.Combine("work");
+        using (var work = new LibraryService(workDir))
+        {
+            work.AddRoot(outer.Combine("w1"), "W1");
+            work.AddRoot(outer.Combine("w2"), "W2", recursive: false);
+        }
+        service.Registry.Add("Work", workDir);
+
+        var others = service.OtherLibraryFolders();
+
+        var other = Assert.Single(others);
+        Assert.Equal("Work", other.Name);
+        Assert.Equal([(outer.Combine("w1"), true), (outer.Combine("w2"), false)],
+            other.Folders.Select(f => (f.Path, f.Recursive)).Order());
+        Assert.True(File.Exists(Path.Combine(workDir, ApertureDatabase.MetadataFileName)));
+    }
+
+    [Fact]
+    public async Task OtherLibraryFolders_SkipsOneThatCantBeRead_AndCreatesNone()
+    {
+        using var outer = new TempDir();
+        await using var service = CatalogService.Open(RegistryPath(outer), outer.Combine("default"));
+        WriteNotADatabase(outer.Combine("broken"));
+        service.Registry.Add("Broken", outer.Combine("broken"));
+        var goneDir = outer.Combine("gone");
+        using (new LibraryService(goneDir)) { }
+        service.Registry.Add("Gone", goneDir);
+        Directory.Delete(goneDir, recursive: true); // an unplugged drive
+
+        Assert.Empty(service.OtherLibraryFolders());
+        Assert.False(Directory.Exists(goneDir)); // nothing made where it was
+    }
+
     // --- Opening at launch ------------------------------------------------------------------
 
     [Fact]
