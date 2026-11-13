@@ -11,6 +11,23 @@ public class ZoomPanTests
 {
     private const int Precision = 9;
 
+    [Fact]
+    public void HasPicture_OnceItsShapeAndTheViewAreKnown()
+    {
+        // Quick view's video area follows it: with no picture, a click anywhere is on the video (0.9.1 batch, item 1).
+        var zoom = new ZoomPan();
+        Assert.False(zoom.HasPicture);
+        zoom.SetView(1000, 500);
+        Assert.False(zoom.HasPicture); // a view, nothing in it
+        zoom.SetImage(800, 600);
+        Assert.True(zoom.HasPicture);
+        zoom.Clear();
+        Assert.False(zoom.HasPicture);
+        zoom.SetImage(800, 600);
+        zoom.SetView(0, 0);
+        Assert.False(zoom.HasPicture); // a picture, no room to show it
+    }
+
     private static ZoomPan Fitted(double photoWidth = 400, double photoHeight = 300)
     {
         var zoom = new ZoomPan();

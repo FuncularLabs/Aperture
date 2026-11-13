@@ -5,6 +5,39 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ## [Unreleased]
 
+### Added
+- **Videos play in quick view.** Open quick view on a video (or move to one) and it plays. `Space`
+  or a click on the video plays and pauses it; at its end, it plays again from the start. Its
+  controls show play/pause, mute and a volume slider. The very first video plays muted; after
+  that, each video starts with the sound you last left (muted or not, and the volume), in any
+  library and after a restart. `Enter` or a double-click still opens it in its default app, and
+  pauses it in quick view. A video Windows can't play here keeps its still frame and says so.
+  On a photo, `Space` still closes quick view.
+- **Drag to reorder.** Drag a library in the **LIBRARIES** list, or a top-level folder under
+  **FOLDERS**, to put it where you want it. The order is kept (the libraries' with the library
+  list, each library's folders with that library). Until you move one, both lists stay
+  alphabetical; anything added later goes at the end.
+- **Indexing progress along the bottom.** While Aperture indexes, a bar runs along the bottom of
+  the window. It counts the files first ("Counting files in Photos… 12,345 so far"), then shows
+  how far it is ("Indexing Photos: 1,234 of 12,345 files"), with a note that it might take a
+  while and you can keep browsing. If some of the files it will read are online-only (cloud
+  placeholders, such as OneDrive's or Dropbox's), the note says how many: each one is
+  downloaded as it's indexed, which is slower.
+
+### Changed
+- **The window stays responsive while folders are indexed.** Refreshing the grid as thumbnails
+  arrive, a folder's climbing count, and catching up when a run ends now all read the library
+  in the background; a large library, or a folder with many subfolders, no longer freezes the
+  window on a slower PC. The folder tree is worked out in one pass over the library, rather
+  than once for every folder shown.
+
+### Fixed
+- **Every library shows its count.** A library you aren't in showed no count until it had been
+  open and left; each one's count is now read from its own files when the list is shown.
+- A background read could meet a change you were making (removing a folder, saving tags) and
+  end Aperture; background reads now never see a change before it's saved. A folder removed
+  or hidden while the library was still loading no longer comes back until the next change.
+
 ## [0.9.0] - 2026-11-11
 
 ### Added

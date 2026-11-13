@@ -119,6 +119,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _library = library;
         Thumbnails = thumbnails;
         Catalog = catalog;
+        DecodeQuickLookVideo = DecodeThumbnail;
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
         _zoom = Math.Clamp(_library.Settings.Current.DefaultZoom, 0, ZoomSizes.Length - 1);
         _currentVersion = UpdateVersion.Parse(
@@ -1816,6 +1817,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _quickLookCaption, value);
     }
 
+    /// <summary>
+    /// Changes (with a notification) on every visit quick view makes to an item, and when it closes — the window plays
+    /// or stops a video by it, never by <see cref="QuickLookImage"/>, which changes twice a visit (0.9.1 plan, V7).
+    /// </summary>
+    public int QuickLookVisit => _quickLookVisit;
+
+    /// <summary>The item quick view shows is a video (false once it closes).</summary>
+    public bool QuickLookIsVideo { get; private set; }
+
+    /// <summary>The file quick view shows; <c>null</c> once it closes.</summary>
+    public string? QuickLookPath { get; private set; }
+
+    // Says a visit began or ended, once its item is set (or cleared).
+    private void AnnounceQuickLookVisit(TileVm? tile)
+    {
+        QuickLookIsVideo = tile?.IsVideo == true;
+        QuickLookPath = tile?.FullPath;
+        OnPropertyChanged(nameof(QuickLookIsVideo));
+        OnPropertyChanged(nameof(QuickLookPath));
+        OnPropertyChanged(nameof(QuickLookVisit));
+    }
+
     private void OpenQuickLook()
     {
         if (_mediaTiles.Count == 0)
@@ -1835,6 +1858,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _quickLookIndex = -1;
         _quickLookTile = null;
         _quickLookVisit++; // a load still on its way is for a visit that's over
+        AnnounceQuickLookVisit(null);
     }
 
     private void MoveQuickLook(int delta)
@@ -1858,6 +1882,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SelectedItem = tile;
         QuickLookCaption = $"{tile.FileName}   ·   {index + 1} / {_mediaTiles.Count:n0}";
         QuickLookImage = null;
+        AnnounceQuickLookVisit(tile); // a video plays (or the one left stops) now, not once something has decoded
         LoadQuickLook(visit, tile);
     }
 
@@ -1869,13 +1894,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private async void LoadQuickLook(int visit, TileVm tile)
     {
         var image = await Task.Run(() => tile.IsVideo
-            ? DecodeThumbnail(tile.ItemId, tile.FullPath, tile.Item.MTimeUtc.Ticks)
+            ? DecodeQuickLookVideo(tile.ItemId, tile.FullPath, tile.Item.MTimeUtc.Ticks)
             : DecodeQuickLook(tile.FullPath, QuickLookDecodeEdge));
 
         // Ignore if the user moved on while we decoded.
         if (_quickLookVisit == visit)
             QuickLookImage = image;
     }
+
+    /// <summary>
+    /// Decodes a video's still frame for quick view (its large thumbnail), from its item id, path and time (settable for
+    /// tests only: CI's shell makes no video thumbnails).
+    /// </summary>
+    internal Func<long, string, long, System.Windows.Media.Imaging.BitmapSource?> DecodeQuickLookVideo { get; set; }
 
     /// <summary>Decodes a photo for quick view at up to the given longest edge (settable for tests only).</summary>
     internal Func<string, int, System.Windows.Media.Imaging.BitmapSource?> DecodeQuickLook { get; set; } =

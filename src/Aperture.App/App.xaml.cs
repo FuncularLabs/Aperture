@@ -7,6 +7,7 @@ using Aperture.App.ViewModels;
 using Aperture.Core.Library;
 using Aperture.Core.Startup;
 using Aperture.Core.Storage;
+using Aperture.Core.Settings;
 
 namespace Aperture.App;
 
@@ -113,6 +114,9 @@ public partial class App : Application
 
         _viewModel = BuildViewModel(library);
         _window = new MainWindow { DataContext = _viewModel };
+        // Quick view's sound for videos, app-wide: beside the library list, or in the one library a pinned folder is.
+        _window.PlaybackPrefs = new PlaybackPrefsStore(PlaybackPrefsStore.PathFor(
+            string.IsNullOrWhiteSpace(overrideDir) ? null : overrideDir, AperturePaths.LibrariesDir));
         _window.ClosingStarted += (_, _) => ReleaseWindow(); // nothing in Aperture cancels a close
         _window.Show();
 

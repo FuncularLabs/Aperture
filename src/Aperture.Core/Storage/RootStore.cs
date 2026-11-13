@@ -37,8 +37,9 @@ public sealed class RootStore(ApertureDatabase database)
         return root;
     }
 
+    // Through the reader provider: the watcher reads this on its timer's thread (see ApertureDatabase.ReadProvider).
     public List<Root> GetAll() =>
-        _db.Provider.GetList<RootRow>()
+        _db.ReadProvider.GetList<RootRow>()
             .OrderBy(r => r.Alias, StringComparer.OrdinalIgnoreCase) // COLLATE NOCASE, in memory (roots are few)
             .Select(ToModel)
             .ToList();

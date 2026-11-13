@@ -48,6 +48,9 @@ public sealed class ZoomPan
 
     private bool CanZoom => FitWidth > 0 && FitHeight > 0;
 
+    /// <summary>A picture is shown: its shape is set and the view has a size (quick view's video area follows it).</summary>
+    public bool HasPicture => CanZoom;
+
     /// <summary>The view's size. The photo is fitted to it again, keeping the zoom and the point at the view's centre.</summary>
     public void SetView(double width, double height) => Refit(() =>
     {

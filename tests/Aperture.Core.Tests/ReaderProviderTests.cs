@@ -62,6 +62,28 @@ public class ReaderProviderTests
     }
 
     [Fact]
+    public void TheFolderList_ReadOffTheUiThread_SeesOnlyWhatIsCommitted()
+    {
+        // The watcher reads the folder list on its timer's thread when a folder's files change.
+        using var f = new Fixture();
+        var shared = f.Library.Database.Provider;
+
+        shared.BeginTransaction(); // the UI thread removing the folder, not yet committed
+        try
+        {
+            shared.Delete<RootRow>(f.Root.Id);
+
+            var roots = Task.Run(f.Library.GetRoots).GetAwaiter().GetResult();
+
+            Assert.Equal([f.Root.Id], roots.Select(r => r.Id));
+        }
+        finally
+        {
+            shared.RollbackTransaction();
+        }
+    }
+
+    [Fact]
     public void ATagSave_WhileABackgroundReadRuns_Succeeds_AndSoDoesTheRead()
     {
         using var f = new Fixture();

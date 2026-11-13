@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Aperture.App.ViewModels;
+using Aperture.Core.Settings;
 
 namespace Aperture.App;
 
@@ -18,6 +19,8 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         DataContextChanged += OnDataContextChanged;
+        VideoPlayerFactory = () => new MediaElementPlayer(QuickLookVideoHost);
+        _ = Playback; // its controls bind to it from the start
         // The date grouping depends on how many tiles fit across (DateBuckets.ChooseMode): report the width when the grid is
         // resized, its first layout included. GroupingWidth reads the grid's scroll viewer, whose width changes only with
         // the grid's (and is laid out by then), never its viewport: the scrollbar coming or going leaves it as it was.
@@ -31,6 +34,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        _playback?.Leave(); // a video stops with the window, and lets go of its file
         ClosingStarted?.Invoke(this, EventArgs.Empty);
         base.OnClosing(e); // raises Closing: OnClosing(sender, e) below saves the placement and the pane width
     }
@@ -49,6 +53,7 @@ public partial class MainWindow : Window
             old.PropertyChanged -= OnViewModelPropertyChanged;
         }
         OnQuickLookImageChanged(null); // another library: quick view starts closed, with nothing zoomed
+        Playback.Leave();              // and no video playing
         if (!IsLoaded || e.NewValue is not MainViewModel vm)
             return; // the first view model is wired up in OnLoaded
 
@@ -112,6 +117,8 @@ public partial class MainWindow : Window
             ConfigurePreviewLayout(ViewModel.PreviewMode);
         if (e.PropertyName == nameof(MainViewModel.QuickLookImage) && ViewModel is not null)
             OnQuickLookImageChanged(ViewModel.QuickLookImage);
+        if (e.PropertyName == nameof(MainViewModel.QuickLookVisit))
+            OnQuickLookVisit();
     }
 
     private double _previewWidth = 380;
@@ -680,15 +687,108 @@ public partial class MainWindow : Window
     private void OnQuickLookImageClick(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        if (e.ClickCount == 2)
-        {
-            if (ViewModel is { } vm)
-                OpenViewed(vm);
-            return;
-        }
-        QuickLookPress(PointerIn(QuickLookImageArea));
+        QuickLookClick(PointerIn(QuickLookImageArea), e.ClickCount);
         if (_quickPanning)
             QuickLookImageArea.CaptureMouse(); // the drag goes on wherever the pointer goes
+    }
+
+    /// <summary>
+    /// A click in quick view's image area at <paramref name="at"/> (the mouse's click count: 2 for a double-click). On a
+    /// playable video: a click on it plays or pauses, a double-click opens it in its default app (paused here), a click
+    /// beside it closes quick view. Otherwise: a double-click opens the item; a press is a photo's (see
+    /// <see cref="QuickLookPress"/>).
+    /// </summary>
+    internal void QuickLookClick(Point at, int clickCount)
+    {
+        if (ViewModel is not { } vm)
+            return;
+        if (Playback.SpaceToggles)
+        {
+            if (!VideoPlayback.IsOnVideo(_quickZoom.HasPicture, _quickZoom.Contains(at.X, at.Y)))
+                vm.CloseQuickLookCommand.Execute(null);
+            else if (clickCount >= 2)
+            {
+                Playback.Pause();
+                OpenViewed(vm);
+            }
+            else
+                Playback.Toggle();
+            return;
+        }
+        if (clickCount == 2)
+        {
+            OpenViewed(vm);
+            return;
+        }
+        QuickLookPress(at);
+    }
+
+    // --- Quick view: videos (0.9.1 batch, items 1–2). The view model's visit says what's shown; the playback model plays
+    // it with a player per video, made by VideoPlayerFactory (a MediaElement in the video host, or a test's fake). ---
+
+    private VideoPlayback? _playback;
+
+    /// <summary>Makes the player for each video quick view shows (settable for tests: CI has no media player).</summary>
+    internal Func<IVideoPlayer> VideoPlayerFactory { get; set; }
+
+    /// <summary>
+    /// Quick view's video playback. Until <see cref="PlaybackPrefs"/> is set (App sets it), the sound is kept in memory
+    /// only, so a window made in a test never touches the user's own file.
+    /// </summary>
+    public VideoPlayback Playback
+    {
+        get => _playback ??= Attach(new VideoPlayback(PlaybackPrefsStore.InMemory(), () => VideoPlayerFactory()));
+        private set
+        {
+            if (_playback is { } old)
+            {
+                old.Leave();
+                old.PropertyChanged -= OnPlaybackChanged;
+            }
+            _playback = Attach(value);
+            OnQuickLookVisit(); // whatever quick view shows now, with the new playback
+        }
+    }
+
+    /// <summary>Where the sound is kept between videos and launches (App: beside the library list).</summary>
+    public PlaybackPrefsStore PlaybackPrefs
+    {
+        set => Playback = new VideoPlayback(value, () => VideoPlayerFactory());
+    }
+
+    private VideoPlayback Attach(VideoPlayback playback)
+    {
+        playback.PropertyChanged += OnPlaybackChanged;
+        QuickLookChrome.DataContext = playback;
+        return playback;
+    }
+
+    // Each visit: a video plays (a new one, even the same video again); anything else stops whatever played.
+    private void OnQuickLookVisit()
+    {
+        if (ViewModel is { QuickLookOpen: true, QuickLookIsVideo: true, QuickLookPath: { } path })
+            Playback.Show(path);
+        else
+            Playback.Leave();
+    }
+
+    // Once a video has opened its own frame shows instead of its still, and is what a click on the video is.
+    private void OnPlaybackChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(VideoPlayback.IsReady) or nameof(VideoPlayback.NaturalSize)))
+            return;
+        var ready = Playback.IsReady;
+        QuickLookImg.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        QuickLookVideoHost.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        if (ready && Playback.NaturalSize is { } size)
+        {
+            _quickZoom.SetImage(size.Width, size.Height);
+            ApplyQuickLookZoom();
+        }
+        else if (!ready)
+        {
+            OnQuickLookImageChanged(ViewModel?.QuickLookImage); // the still's shape again, or none
+        }
     }
 
     private void OnQuickLookImageMove(object sender, MouseEventArgs e) => QuickLookMove(PointerIn(QuickLookImageArea));
@@ -740,17 +840,24 @@ public partial class MainWindow : Window
             };
             if (zoom is not null)
             {
-                zoom();
-                ApplyQuickLookZoom();
+                if (!Playback.IsVideoShown) // a video doesn't zoom; the key is still quick view's, not the grid's
+                {
+                    zoom();
+                    ApplyQuickLookZoom();
+                }
                 return true;
             }
         }
         switch (key) // with or without Ctrl, as before zoom
         {
+            case Key.Space when Playback.SpaceToggles:
+                Playback.Toggle(); // a video plays and pauses (0.9.1 batch, item 1)
+                return true;
             case Key.Escape or Key.Space:
                 vm.CloseQuickLookCommand.Execute(null);
                 return true;
             case Key.Enter:
+                Playback.Pause(); // it goes on in its default app, not here too
                 OpenViewed(vm); // launch the viewed item, like a tile
                 return true;
             case Key.Left:
@@ -775,6 +882,8 @@ public partial class MainWindow : Window
     {
         if ((modifiers & ModifierKeys.Control) == 0)
             return false;
+        if (Playback.IsVideoShown)
+            return true; // a video doesn't zoom
         _quickPointer = at;
         _quickZoom.ZoomByWheel(delta, at.X, at.Y);
         ApplyQuickLookZoom();

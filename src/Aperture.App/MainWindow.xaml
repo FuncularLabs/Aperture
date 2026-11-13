@@ -1365,6 +1365,7 @@
                     MouseLeftButtonDown="OnQuickLookImageClick" MouseMove="OnQuickLookImageMove"
                     MouseLeftButtonUp="OnQuickLookImageUp" LostMouseCapture="OnQuickLookImageLostCapture"
                     SizeChanged="OnQuickLookAreaSizeChanged">
+                <Grid>
                 <!-- Not rounded to whole pixels: it's laid out exactly where ZoomPan fits it, so a zoom lands on the point. -->
                 <Image x:Name="QuickLookImg" Source="{Binding QuickLookImage}" Stretch="Uniform"
                        HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
@@ -1376,6 +1377,10 @@
                         </TransformGroup>
                     </Image.RenderTransform>
                 </Image>
+                <!-- A video's player (MediaElementPlayer, made in code for each video), shown once it has opened; until
+                     then the video's still shows (0.9.1 batch, items 1–2). -->
+                <Border x:Name="QuickLookVideoHost" Visibility="Collapsed" IsHitTestVisible="False" />
+                </Grid>
             </Border>
 
             <TextBlock Text="{Binding QuickLookCaption}" Foreground="#F0FFFFFF" FontSize="13"
@@ -1390,9 +1395,64 @@
             <Button Content="✕" Command="{Binding CloseQuickLookCommand}" HorizontalAlignment="Right"
                     VerticalAlignment="Top" Width="40" Height="40" Margin="16" FontSize="18"
                     Foreground="White" Background="#33FFFFFF" BorderThickness="0" Cursor="Hand" />
-            <TextBlock Text="Space or Esc to close  ·  ← → to move  ·  Ctrl+scroll or Ctrl +/− to zoom, Ctrl+0 to fit"
-                       Foreground="#99FFFFFF" FontSize="12"
-                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,24" IsHitTestVisible="False" />
+            <!-- The bottom of quick view, over the video playback (its DataContext, set in code): a video's controls and
+                 status, and the keys for what's shown. -->
+            <StackPanel x:Name="QuickLookChrome" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,18">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8"
+                            Visibility="{Binding SpaceToggles, Converter={StaticResource BoolToVis}}">
+                    <Button Command="{Binding ToggleCommand}" Focusable="False" Width="38" Height="30" Cursor="Hand"
+                            FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="White" Background="#33FFFFFF"
+                            BorderThickness="0" ToolTip="Play or pause (Space)">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Content" Value="&#xE769;" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPlaying}" Value="False">
+                                        <Setter Property="Content" Value="&#xE768;" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Command="{Binding ToggleMuteCommand}" Focusable="False" Width="38" Height="30" Margin="8,0,0,0"
+                            Cursor="Hand" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="White"
+                            Background="#33FFFFFF" BorderThickness="0" ToolTip="Mute or unmute">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Content" Value="&#xE767;" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsMuted}" Value="True">
+                                        <Setter Property="Content" Value="&#xE74F;" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Slider Minimum="0" Maximum="1" Value="{Binding Volume, Mode=TwoWay}" Width="120" Margin="8,0,0,0"
+                            VerticalAlignment="Center" Focusable="False" IsMoveToPointEnabled="True" ToolTip="Volume" />
+                </StackPanel>
+                <TextBlock Text="{Binding StatusLine}" Foreground="#E6FFFFFF" FontSize="12" HorizontalAlignment="Center"
+                           Margin="0,0,0,6" IsHitTestVisible="False">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StatusLine}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text="Space or Esc to close  ·  ← → to move  ·  Ctrl+scroll or Ctrl +/− to zoom, Ctrl+0 to fit"
+                           Foreground="#99FFFFFF" FontSize="12" HorizontalAlignment="Center" IsHitTestVisible="False"
+                           Visibility="{Binding IsVideoShown, Converter={StaticResource InverseBoolToVis}}" />
+                <TextBlock Text="Space or click to play or pause  ·  Esc to close  ·  ← → to move  ·  Enter to open"
+                           Foreground="#99FFFFFF" FontSize="12" HorizontalAlignment="Center" IsHitTestVisible="False"
+                           Visibility="{Binding SpaceToggles, Converter={StaticResource BoolToVis}}" />
+                <TextBlock Text="Space or Esc to close  ·  ← → to move  ·  Enter to open"
+                           Foreground="#99FFFFFF" FontSize="12" HorizontalAlignment="Center" IsHitTestVisible="False"
+                           Visibility="{Binding HasFailed, Converter={StaticResource BoolToVis}}" />
+            </StackPanel>
         </Grid>
 
         <!-- First-run welcome -->

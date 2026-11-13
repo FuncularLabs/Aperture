@@ -30,11 +30,13 @@ on your machine — it never uploads anything or phones home.
 ## Highlights
 
 - **Union across folders.** Add folders from anywhere on disk and browse them as one
-  date-sorted view; aliases, and a show/hide checkbox on every folder and subfolder.
+  date-sorted view; aliases, a show/hide checkbox on every folder and subfolder, and drag the
+  top-level folders into the order you like. Indexing runs in the background with a progress
+  bar along the bottom of the window, so you can keep browsing.
 - **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
   each other's folders, tags, or search results. They're listed under **LIBRARIES** in the
-  folder pane: click one to switch to it. Each library has its own index, thumbnail cache,
-  and settings.
+  folder pane: click one to switch to it, drag one to reorder the list. Each library has its
+  own index, thumbnail cache, and settings, and shows how many items it holds.
 - **One window.** Starting Aperture while it's already open brings the open window to the
   front (restored if it was minimized) instead of opening a second one.
 - **Instant, virtualized grid** with five zoom levels (`Ctrl`+wheel / `Ctrl`+`±`) and
@@ -50,7 +52,9 @@ on your machine — it never uploads anything or phones home.
   everywhere — all AND-ed, with `tag:` clauses OR-ed together.
 - **Quick view** (`Space` / `Enter` / double-click) — a full-screen quick-look with `←`/`→`
   paging and zoom (`Ctrl`+wheel at the pointer, `Ctrl`+`±`, `Ctrl`+`0` to fit; drag to look
-  around a zoomed photo); right-click for the full item menu.
+  around a zoomed photo); right-click for the full item menu. Videos play in it: `Space` or a
+  click plays and pauses, with mute and volume (the first video plays muted; after that, each
+  starts with the sound you last left).
 - **Inspector pane** (dockable right or bottom) — large preview with zoom/pan, the item's
   tags & notes, and full EXIF/metadata.
 - **Video thumbnails** via the Windows shell; open anything in its default app.
@@ -100,7 +104,8 @@ library is open):
   videos to put in it, and keeps the new library's own files in
   `%LOCALAPPDATA%\Aperture Libraries\<name>` (or `<name> (2)`, and so on, if that folder is
   taken). **Open library…** adds a library that already exists, wherever it is.
-- The list of your libraries is `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`.
+- The list of your libraries is `%LOCALAPPDATA%\Aperture Libraries\catalogs.json`, and quick
+  view's sound for videos (muted or not, and the volume) is `playback.json` beside it.
 
 **Delete library files** (right-click a library you aren't in) deletes only Aperture's own files
 for it — the index, thumbnail cache, and settings, which hold that library's tags and notes.
