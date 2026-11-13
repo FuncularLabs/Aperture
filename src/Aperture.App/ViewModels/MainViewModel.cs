@@ -1510,12 +1510,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// part of it (the keys pass the grid's current tile, one of the selection), that tile alone otherwise (a
     /// right-click outside the selection). Files no longer on disk are left out (0.9.2 X1).
     /// </summary>
-    private List<TileVm> ActionTargets(TileVm? tile)
+    private List<TileVm> ActionTargets(TileVm? tile, bool onDisk = true)
     {
         if (tile is null)
             return [];
         IEnumerable<TileVm> targets = _selectedTiles.Contains(tile) ? _selectedTiles : [tile];
-        return [.. targets.Where(t => File.Exists(t.FullPath)).DistinctBy(t => t.FullPath, StringComparer.OrdinalIgnoreCase)];
+        if (onDisk)
+            targets = targets.Where(t => File.Exists(t.FullPath)); // the clipboard's: a check per file, as a drag's
+        return [.. targets.DistinctBy(t => t.FullPath, StringComparer.OrdinalIgnoreCase)];
     }
 
     private static List<TileVm> OnDisk(TileVm? tile) => tile is not null && File.Exists(tile.FullPath) ? [tile] : [];
@@ -1588,7 +1590,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private static bool ConfirmWithDialog(string question) =>
         System.Windows.MessageBox.Show(System.Windows.Application.Current.MainWindow!, question, "Move to",
-            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes;
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes; // Enter doesn't move them away
 
     private static void SummaryWithDialog(string summary) =>
         System.Windows.MessageBox.Show(System.Windows.Application.Current.MainWindow!, summary, "Move to",
@@ -1601,6 +1604,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private static string Files(int count) => count == 1 ? "1 file" : $"{count:n0} files";
 
+    private static string TheyOrIt(int count) => count == 1 ? "It" : "They";
+
     private static string NameOf(string folder) =>
         Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder;
 
@@ -1609,15 +1614,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         MoveDestinationKind.OtherLibrary =>
             $"“{NameOf(at.FolderPath)}” is a folder of your library “{at.LibraryName}”.\n\n" +
-            $"Move {Files(count)} there? They'll leave this library, and the tags and notes you gave them here won't " +
-            $"show in “{at.LibraryName}”.",
+            $"Move {Files(count)} there? {TheyOrIt(count)} will leave this library, and the tags and notes you gave " +
+            $"{(count == 1 ? "it" : "them")} here won't show in “{at.LibraryName}”.",
         MoveDestinationKind.NotIndexedHere =>
             $"“{NameOf(at.FolderPath)}” isn't indexed: it's inside “{at.UnderRoot?.Alias}”, which doesn't include its " +
-            $"subfolders.\n\nMove {Files(count)} there? They'll leave the view.",
+            $"subfolders.\n\nMove {Files(count)} there? {TheyOrIt(count)} will leave the view.",
         MoveDestinationKind.NoLibrary =>
             $"“{NameOf(at.FolderPath)}” isn't in any of your libraries.\n\n" +
-            $"Move {Files(count)} there? They won't show in Aperture any more (their tags and notes are kept, should " +
-            "you add that folder later).",
+            $"Move {Files(count)} there? {TheyOrIt(count)} won't show in Aperture any more ({(count == 1 ? "its" : "their")} " +
+            "tags and notes are kept, should you add that folder later).",
         _ => null,
     };
 
@@ -1625,24 +1630,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         MoveOutcome.NameTaken => "a file of that name is already there",
         MoveOutcome.AlreadyThere => "already in that folder",
-        MoveOutcome.SourceGone => "no longer where it was",
+        MoveOutcome.SourceGone => "no longer on disk",
         MoveOutcome.DestinationGone => "the folder isn't there any more",
         MoveOutcome.InUse => "in use by another program",
-        MoveOutcome.AccessDenied => "Windows wouldn't allow it",
+        MoveOutcome.AccessDenied => "Windows didn't allow the move",
         MoveOutcome.LibraryBusy => "the library was busy indexing; try again in a moment",
-        MoveOutcome.Stopped => "Aperture stopped before it came to them",
+        MoveOutcome.Stopped => "not reached: Aperture stopped the move",
         _ => "couldn't be moved",
     };
 
-    /// <summary>What a move did, when it left any where they were (M3); null when it moved them all.</summary>
+    /// <summary>
+    /// What a move did, when it left any where they were, or moved any without their tags (M3, M4); null when it moved
+    /// them all with their tags.
+    /// </summary>
     internal static string? MoveSummary(IReadOnlyList<FileMove> moves, string folder)
     {
-        var notMoved = moves.Where(m => m.Outcome != MoveOutcome.Moved).ToList();
-        if (notMoved.Count == 0)
+        var notMoved = moves.Where(m => m.Outcome is not (MoveOutcome.Moved or MoveOutcome.MovedTagsBehind)).ToList();
+        var tagsBehind = moves.Count(m => m.Outcome == MoveOutcome.MovedTagsBehind);
+        if (notMoved.Count == 0 && tagsBehind == 0)
             return null;
-        var lines = notMoved.GroupBy(m => Reason(m.Outcome)).Select(g => $"• {g.Count():n0} — {g.Key}");
-        return $"Moved {moves.Count - notMoved.Count:n0} of {Files(moves.Count)} to “{NameOf(folder)}”.\n\n" +
-               "Not moved:\n" + string.Join("\n", lines);
+        var text = $"Moved {moves.Count - notMoved.Count:n0} of {Files(moves.Count)} to “{NameOf(folder)}”.";
+        if (tagsBehind > 0)
+            text += $"\n\n{Files(tagsBehind)} moved without {(tagsBehind == 1 ? "its" : "their")} tags and notes: the "
+                    + "library couldn't be written, so they stay under the old path.";
+        if (notMoved.Count > 0)
+            text += "\n\nNot moved:\n" + string.Join("\n",
+                notMoved.GroupBy(m => Reason(m.Outcome)).Select(g => $"• {g.Count():n0} — {g.Key}"));
+        return text;
     }
 
     /// <summary>
@@ -1654,7 +1668,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_closing || IsMoving)
             return;
-        var targets = ActionTargets(tile);
+        // Not checked on disk here (a large selection on a slow drive would hold the window: round 1, F6); the move
+        // says which were no longer there.
+        var targets = ActionTargets(tile, onDisk: false);
         if (targets.Count == 0)
             return;
         var picked = PickMoveDestination(FolderShown());
@@ -1677,12 +1693,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
 
             MoveText = $"Moving {Files(targets.Count)} to “{NameOf(at.FolderPath)}”…";
-            var moves = await _library.MoveFilesAsync([.. targets.Select(t => t.FullPath)], at.FolderPath);
+            var moves = await _library.MoveFilesAsync(
+                [.. targets.Select(t => new MoveRequest(t.FullPath, t.Item.RootId, t.Item.RelPath))], at.FolderPath, at.RootId);
             if (_closing)
                 return;
 
             RefreshAllAnnotationsInPlace(); // their tags now live under their new paths
-            var affected = targets.Select(t => t.Item.RootId).Append(at.RootId ?? -1).Where(id => id >= 0).Distinct();
+            var affected = targets.Select(t => t.Item.RootId).Append(at.RootId ?? -1).Where(id => id >= 0).Distinct().ToList();
+            foreach (var rootId in affected)
+                RequestRefresh(rows: true, tree: true, countRoot: rootId); // rows moved with the files show at once
             foreach (var rootId in affected)
             {
                 bool paused;
@@ -3061,7 +3080,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         else
             OnlineOnlyAnswers.Forget(rootVm.Id);
         ShowOnlineOnlyChoice(rootVm.Id);
-        if (before == OnlineOnlyChoice.Skip && choice is OnlineOnlyChoice.Background or OnlineOnlyChoice.Now)
+        bool paused;
+        lock (_indexLock)
+            paused = _pausedRoots.Contains(rootVm.Id); // a paused folder stays paused: its Resume reads them (round 1, lens 2, 9)
+        if (!paused && before == OnlineOnlyChoice.Skip && choice is OnlineOnlyChoice.Background or OnlineOnlyChoice.Now)
             _ = IndexRootAsync(rootVm.Model, watchAfter: true);
     }
 

@@ -121,7 +121,11 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(MainViewModel.PreviewMode) && ViewModel is not null)
             ConfigurePreviewLayout(ViewModel.PreviewMode);
         if (e.PropertyName == nameof(MainViewModel.QuickLookImage) && ViewModel is not null)
+        {
             OnQuickLookImageChanged(ViewModel.QuickLookImage);
+            if (Playback.IsVideoShown)
+                ShowStillOrFrame(); // a still arriving for a video not yet played replaces its first frame
+        }
         if (e.PropertyName == nameof(MainViewModel.QuickLookVisit))
             OnQuickLookVisit();
     }
@@ -797,12 +801,17 @@ public partial class MainWindow : Window
         Playback.EndScrub();
 
     // Once a video has been played (or moved along) its own frame shows instead of its still, and is what a click on the
-    // video is; until then the still is (0.9.2 V9: it opens paused, and its first frame is often black).
+    // video is; until then the still is (0.9.2 V9: it opens paused, and its first frame is often black). A video with no
+    // still (one the shell couldn't make) shows its own frame once it has opened (round 1, lens 2, finding 16).
     private void OnPlaybackChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is not (nameof(VideoPlayback.ShowsFrame) or nameof(VideoPlayback.NaturalSize)))
-            return;
-        var ready = Playback.ShowsFrame;
+        if (e.PropertyName is nameof(VideoPlayback.ShowsFrame) or nameof(VideoPlayback.NaturalSize) or nameof(VideoPlayback.IsReady))
+            ShowStillOrFrame();
+    }
+
+    private void ShowStillOrFrame()
+    {
+        var ready = Playback.ShowsFrame || (Playback.IsReady && ViewModel?.QuickLookImage is null);
         QuickLookImg.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
         QuickLookVideoHost.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
         if (ready && Playback.NaturalSize is { } size)

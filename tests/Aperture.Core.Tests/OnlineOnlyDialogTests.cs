@@ -14,10 +14,12 @@ namespace Aperture.Core.Tests;
 /// </summary>
 public class OnlineOnlyDialogTests
 {
-    // Shows the dialog modally, does what's asked once it's up, and hands back the dialog once it has closed.
+    // Shows the dialog modally, does what's asked once it's up, and hands back the dialog once it has closed. A dialog the
+    // act left open is closed after 10 s and fails the test, rather than holding the run (round 1, lens 2, finding 4).
     private static OnlineOnlyDialog Show(string folder, int count, Action<OnlineOnlyDialog> act)
     {
         OnlineOnlyDialog? shown = null;
+        var leftOpen = false;
         Sta.Run(() =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
@@ -28,9 +30,16 @@ public class OnlineOnlyDialogTests
                 WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000, ShowActivated = false,
             };
             dialog.ContentRendered += (_, _) => dialog.Dispatcher.BeginInvoke(() => act(dialog), DispatcherPriority.Background);
+            var fallback = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) =>
+            {
+                leftOpen = true;
+                dialog.Close();
+            }, dialog.Dispatcher);
             dialog.ShowDialog();
+            fallback.Stop();
             shown = dialog;
         });
+        Assert.False(leftOpen, "the dialog was still open 10 s on");
         return shown!;
     }
 
@@ -119,5 +128,6 @@ public class OnlineOnlyDialogTests
 
         Assert.Equal(headline, text);
         Assert.Contains("downloads each one", body);
+        Assert.Contains("Skipped, they stay out of Aperture until you choose otherwise", body); // what Enter and Esc do
     }
 }

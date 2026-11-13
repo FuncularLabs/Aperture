@@ -18,7 +18,7 @@
         <TextBlock x:Name="HeadlineText" Foreground="{StaticResource Ink}" FontWeight="Bold" FontSize="15"
                    TextWrapping="Wrap" />
         <TextBlock x:Name="BodyText" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,6,0,14" TextWrapping="Wrap"
-                   Text="They're stored in the cloud, not on this PC: indexing them downloads each one. In the background, your other files are indexed first, then these, one at a time." />
+                   Text="They're stored in the cloud, not on this PC: indexing them downloads each one. Skipped, they stay out of Aperture until you choose otherwise from the folder's right-click menu. In the background, your other files are indexed first, then these, one at a time." />
 
         <CheckBox x:Name="RememberCheck" IsChecked="False" Foreground="{StaticResource Ink}" FontSize="13">
             <TextBlock Text="Remember for this folder" />

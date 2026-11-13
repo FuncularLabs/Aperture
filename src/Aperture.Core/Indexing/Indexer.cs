@@ -24,6 +24,12 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// <summary>Test seam: hears each file's relative path as the run is about to read it (decode or download it).</summary>
     internal Action<string>? Reading { get; set; }
 
+    /// <summary>
+    /// A question answered after longer than this counts the files again before reading them: the folder may have
+    /// changed meanwhile, unwatched (round 1, lens 2, finding 10). Settable for tests.
+    /// </summary>
+    internal TimeSpan RescanAfter { get; set; } = TimeSpan.FromSeconds(2);
+
     private readonly ApertureDatabase _db = database;
     private readonly ThumbnailGenerator _thumbnails = thumbnails;
     private readonly MetadataReader _metadata = metadata;
@@ -38,9 +44,12 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         Func<OnlineOnlyQuestion, CancellationToken, OnlineOnlyChoice>? askOnlineOnly = null)
     {
         var scan = Prepare(root, progress, ct, includeVideos);
-        var choice = scan.OnlineOnly > 0 && askOnlineOnly is not null
-            ? askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct)
-            : OnlineOnlyChoice.Now;
+        if (scan.OnlineOnly == 0 || askOnlineOnly is null)
+            return Execute(scan, OnlineOnlyChoice.Now, progress, ct);
+        var asked = System.Diagnostics.Stopwatch.StartNew();
+        var choice = askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct);
+        if (asked.Elapsed >= RescanAfter)
+            scan = Prepare(root, progress, ct, includeVideos);
         return Execute(scan, choice, progress, ct);
     }
 
@@ -57,8 +66,11 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         if (scan.OnlineOnly == 0)
             return Execute(scan, OnlineOnlyChoice.Now, progress, ct);
         // WaitAsync: the token gives the question up even if the asker never hears it (a switch, exit: gate 3, C7).
+        var asked = System.Diagnostics.Stopwatch.StartNew();
         var choice = await askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct).WaitAsync(ct).ConfigureAwait(false);
-        return await Task.Run(() => Execute(scan, choice, progress, ct), CancellationToken.None).ConfigureAwait(false);
+        var waited = asked.Elapsed >= RescanAfter;
+        return await Task.Run(() => Execute(waited ? Prepare(root, progress, ct, includeVideos) : scan, choice, progress, ct),
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     // What a run knows once it has counted: the files, the rows and thumbnails it has, so which it will read.

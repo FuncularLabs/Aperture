@@ -1,5 +1,6 @@
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Aperture.App;
 
@@ -13,6 +14,8 @@ public sealed class MediaElementPlayer : IVideoPlayer
 {
     private readonly Decorator _host;
     private readonly MediaElement _element;
+    private int _asked;   // each play, pause, seek and close: a deferred pause runs only if nothing came after it
+    private bool _seeked; // moved since the last play or pause
 
     public MediaElementPlayer(Decorator host)
     {
@@ -56,21 +59,52 @@ public sealed class MediaElementPlayer : IVideoPlayer
     public TimeSpan Position
     {
         get => _element.Position;
-        set => _element.Position = value;
+        set
+        {
+            _asked++;
+            _seeked = true;
+            _element.Position = value;
+        }
     }
 
     public TimeSpan? Duration => _element.NaturalDuration.HasTimeSpan ? _element.NaturalDuration.TimeSpan : null;
 
     public void Open(Uri source) => _element.Source = source;
 
-    public void Play() => _element.Play();
+    public void Play()
+    {
+        _asked++;
+        _seeked = false;
+        _element.Play();
+    }
 
-    public void Pause() => _element.Pause();
+    /// <summary>
+    /// Pauses. Straight after a seek the pause waits for the seek to go through (posted, at Background priority): a
+    /// MediaElement that has reached its end and is paused straight after a seek goes back to 0:00, while one paused
+    /// once the seek has gone through stays there (0.9.2 review round 1, F1; RealPlayerTests). A play, another seek or
+    /// a close meanwhile cancels it.
+    /// </summary>
+    public void Pause()
+    {
+        var asked = ++_asked;
+        if (!_seeked)
+        {
+            _element.Pause();
+            return;
+        }
+        _seeked = false;
+        _element.Dispatcher.BeginInvoke(() =>
+        {
+            if (asked == _asked)
+                _element.Pause();
+        }, DispatcherPriority.Background);
+    }
 
     public void Rewind() => _element.Position = TimeSpan.Zero;
 
     public void Close()
     {
+        _asked++;
         _element.Stop();
         _element.Close();      // lets go of the file
         _element.Source = null;

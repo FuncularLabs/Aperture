@@ -199,6 +199,45 @@ public class QuickViewVideoTests
     }
 
     [Fact]
+    public void DraggingTheSeekBar_HoldsItUnderThePointer_ThenItFollowsThePlayerAgain()
+    {
+        // Round 1 (lens 2, finding 6): the window wires the thumb's drag to the scrub.
+        WithQuickView(["v0.mp4"], v =>
+        {
+            v.Player.RaiseOpened(seconds: 83);
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None);
+            Settle();
+            v.Seek.Value = 20;
+
+            v.Seek.RaiseEvent(new DragStartedEventArgs(0, 0));
+            v.Player.PlayTo(50);
+            Settle(); // the clock ticks meanwhile
+            Assert.Equal(20, v.Seek.Value);
+
+            v.Seek.RaiseEvent(new DragCompletedEventArgs(0, 0, canceled: false));
+            Assert.True(Sta.PumpUntil(() => v.Seek.Value == 50, Wait));
+        });
+    }
+
+    [Fact]
+    public void AVideoWithoutAStill_ShowsItsOwnFrame_OnceOpened()
+    {
+        // Round 1 (lens 2, finding 16): with no still to show (one the shell couldn't make), the video's first frame
+        // shows once it has opened, as in 0.9.1, rather than nothing until it's played.
+        WithQuickView(["v0.mp4"], v =>
+        {
+            Assert.Null(v.Vm.QuickLookImage);
+            Assert.NotEqual(Visibility.Visible, v.VideoHost.Visibility);
+
+            v.Player.RaiseOpened(1280, 720);
+            Settle();
+
+            Assert.Equal(Visibility.Visible, v.VideoHost.Visibility);
+            Assert.Equal("pause", v.Player.LastPlayOrPause); // still paused
+        });
+    }
+
+    [Fact]
     public void ArrowKeys_StillMove_WithTheSeekBarShown()
     {
         WithQuickView(["v0.mp4", "p1.jpg"], v =>
@@ -317,16 +356,16 @@ public class QuickViewVideoTests
     }
 
     [Fact]
-    public void TheVideosOwnFrame_IsTheVideo_OnceItHasPlayed()
+    public void TheVideosOwnFrame_IsTheVideo_OnceItShows()
     {
-        // Review R1-B6: with no still, the whole area is the video until its own (16:9) frame shows; then that is.
+        // Review R1-B6: with no still, the whole area is the video until its own (16:9) frame shows; then that is. With
+        // no still, its frame shows once it has opened (round 1, lens 2, finding 16).
         WithQuickView(["v0.mp4"], v =>
         {
-            v.Player.RaiseOpened(1920, 1080);
-            Settle();
             v.Window.QuickLookClick(new Point(v.Area.ActualWidth / 2, 3), clickCount: 1); // no frame yet: plays
             Assert.Equal("play", v.Player.LastPlayOrPause);
             Assert.True(v.Vm.QuickLookOpen);
+            v.Player.RaiseOpened(1920, 1080);
             Settle();
 
             v.Window.QuickLookClick(v.Middle, clickCount: 1);

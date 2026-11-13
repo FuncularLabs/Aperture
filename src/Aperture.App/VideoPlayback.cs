@@ -9,7 +9,7 @@ namespace Aperture.App;
 /// Quick view's video playback (0.9.1 batch, items 1–2; 0.9.2 V9–V10), as a model over <see cref="IVideoPlayer"/>: no
 /// WPF types, so it's tested without a window. Shown a video, it makes a player for it and opens it paused, with the
 /// sound the user last left (muted the first time ever): only <see cref="Toggle"/> (the play button, Space, a click)
-/// plays it, and pauses it again (from the start once it has ended). <see cref="Seek"/> moves it (the seek bar);
+/// plays it (from the start once it has ended), and pauses it again. <see cref="Seek"/> moves it (the seek bar);
 /// <see cref="Tick"/> follows it as it plays (the window's timer), except while the bar is dragged. Leaving it stops it
 /// and lets go of its file. Events from a player it has left change nothing. A mute is saved at once; a volume set
 /// while a video plays is saved as the video is left (the slider sets many as it's dragged).
@@ -50,7 +50,7 @@ public sealed class VideoPlayback : ObservableObject
         private set => Set(ref _isVideoShown, value);
     }
 
-    /// <summary>The video has opened: its own frame shows (until then, its still).</summary>
+    /// <summary>The video has opened (its length is known; its own frame shows once <see cref="ShowsFrame"/>).</summary>
     public bool IsReady
     {
         get => _isReady;
@@ -136,6 +136,8 @@ public sealed class VideoPlayback : ObservableObject
             return;
         var at = Math.Clamp(seconds, 0, length.TotalSeconds);
         player.Position = TimeSpan.FromSeconds(at);
+        if (!_isPlaying)
+            player.Pause(); // after the seek: a Manual MediaElement left "playing" at its end would go on from here (V12)
         _position = at;
         _atEnd = at >= length.TotalSeconds;
         _started = true;
@@ -322,8 +324,7 @@ public sealed class VideoPlayback : ObservableObject
         if (!ReferenceEquals(sender, _player) || _player is not { } player)
             return;
         _atEnd = true;
-        IsPlaying = false;
-        player.Pause(); // a Manual MediaElement stays "playing" at its end: a seek back would set it going (V12)
+        IsPlaying = false; // the player itself isn't paused: paused at its end, a seek back lands at 0:00 (round 1, F1)
         if (!_scrubbing)
             _position = _duration?.TotalSeconds ?? Math.Max(0, player.Position.TotalSeconds); // the bar at the end
         RaiseTimeline();

@@ -124,7 +124,7 @@ public class VideoPlaybackTests
 
         playback.PositionSeconds = 30; // as the seek bar sets it
 
-        Assert.Equal("seek:30", _players[0].Calls[^1]);
+        Assert.Equal(["seek:30", "pause"], _players[0].Calls.TakeLast(2)); // paused, it stays paused there
         Assert.Equal(TimeSpan.FromSeconds(30), _players[0].Position);
         Assert.Equal(30, playback.PositionSeconds);
         Assert.Equal("0:30 / 1:23", playback.TimeText);
@@ -178,24 +178,39 @@ public class VideoPlaybackTests
         playback.Toggle();
 
         Assert.DoesNotContain("rewind", _players[0].Calls);
-        Assert.Equal(["seek:10", "play"], _players[0].Calls.TakeLast(2));
+        Assert.Equal(["seek:10", "pause", "play"], _players[0].Calls.TakeLast(3));
     }
 
     [Fact]
-    public void Ended_PausesThePlayer()
+    public void AfterTheEnd_ASeek_PausesThePlayerThere()
     {
-        // 0.9.2 V12: a Manual MediaElement stays "playing" after its end; a seek back would set it going again.
+        // 0.9.2 V12: a Manual MediaElement stays "playing" after its end, so a seek back would set it going; paused as
+        // it ends, a seek back lands at 0:00 (review round 1, F1). So: a seek while not playing pauses it after the seek.
         var playback = Playback();
         playback.Show(@"C:\v\a.mp4");
         _players[0].RaiseOpened(seconds: 83);
         playback.Toggle();
 
         _players[0].RaiseEnded();
+        Assert.Equal("play", _players[0].LastPlayOrPause); // not paused as it ends
         playback.Seek(20);
 
-        Assert.Equal("pause", _players[0].LastPlayOrPause);
         Assert.False(playback.IsPlaying);
-        Assert.Equal(["pause", "seek:20"], _players[0].Calls.TakeLast(2));
+        Assert.Equal(["seek:20", "pause"], _players[0].Calls.TakeLast(2));
+    }
+
+    [Fact]
+    public void ASeekWhilePlaying_DoesNotPause()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+
+        playback.Seek(20);
+
+        Assert.True(playback.IsPlaying);
+        Assert.Equal(["play", "seek:20"], _players[0].Calls.TakeLast(2));
     }
 
     [Fact]
@@ -250,6 +265,37 @@ public class VideoPlaybackTests
         playback.EndScrub();
         playback.Tick();
         Assert.Equal(41, playback.PositionSeconds); // and follows the player again
+    }
+
+    [Fact]
+    public void AnEndWhileTheBarIsDragged_LeavesItUnderThePointer()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+        playback.BeginScrub();
+        playback.PositionSeconds = 40;
+
+        _players[0].RaiseEnded();
+
+        Assert.Equal(40, playback.PositionSeconds);
+        Assert.False(playback.IsPlaying);
+    }
+
+    [Fact]
+    public void Tick_IsClampedToTheLength()
+    {
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+
+        _players[0].PlayTo(90); // a player that reports a little past its length
+        playback.Tick();
+
+        Assert.Equal(83, playback.PositionSeconds);
+        Assert.Equal("1:23 / 1:23", playback.TimeText);
     }
 
     [Fact]

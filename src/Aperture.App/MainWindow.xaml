@@ -136,12 +136,12 @@
                       Command="{Binding Data.CopyFullPathCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}" />
             <Separator />
-            <MenuItem Header="Copy" InputGestureText="Ctrl+C"
+            <MenuItem Header="Copy"
                       Command="{Binding Data.CopyShownFileCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
                 <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C8;" /></MenuItem.Icon>
             </MenuItem>
-            <MenuItem Header="Cut" InputGestureText="Ctrl+X"
+            <MenuItem Header="Cut"
                       Command="{Binding Data.CutShownFileCommand, Source={StaticResource Vm}}"
                       CommandParameter="{Binding Data.PreviewTile, Source={StaticResource Vm}}">
                 <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8C6;" /></MenuItem.Icon>
@@ -1401,8 +1401,9 @@
                         </TransformGroup>
                     </Image.RenderTransform>
                 </Image>
-                <!-- A video's player (MediaElementPlayer, made in code for each video), shown once it has opened; until
-                     then the video's still shows (0.9.1 batch, items 1–2). -->
+                <!-- A video's player (MediaElementPlayer, made in code for each video), shown once it has been played or
+                     moved along (or once it has opened, for a video with no still); until then the video's still shows
+                     (0.9.1 batch, items 1–2; 0.9.2 V9). -->
                 <Border x:Name="QuickLookVideoHost" Visibility="Collapsed" IsHitTestVisible="False" />
                 </Grid>
             </Border>

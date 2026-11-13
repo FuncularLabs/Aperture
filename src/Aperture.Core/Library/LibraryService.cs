@@ -461,27 +461,42 @@ public sealed class LibraryService : IDisposable
     /// it between files; those not come to are <see cref="MoveOutcome.Stopped"/>. One outcome per file, in order.
     /// </summary>
     public Task<IReadOnlyList<FileMove>> MoveFilesAsync(
-        IReadOnlyList<string> sources, string destinationFolder, CancellationToken ct = default)
+        IReadOnlyList<string> sources, string destinationFolder, CancellationToken ct = default) =>
+        MoveFilesAsync([.. sources.Select(s => new MoveRequest(s))], destinationFolder, null, ct);
+
+    /// <summary>
+    /// <see cref="MoveFilesAsync(IReadOnlyList{string}, string, CancellationToken)"/>, with each file's row (its folder
+    /// of this library and its path in it) and the destination's folder of this library, when it is one: each moved
+    /// file's row moves with it (<see cref="ItemMove"/>), so the next run finds it unchanged.
+    /// </summary>
+    public Task<IReadOnlyList<FileMove>> MoveFilesAsync(
+        IReadOnlyList<MoveRequest> files, string destinationFolder, long? destinationRootId, CancellationToken ct = default)
     {
         lock (_indexLock)
         {
             ObjectDisposedException.ThrowIf(_shuttingDown, this);
             var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, ct);
             var moves = new FileMoves(_db);
+            ConfigureMoves?.Invoke(moves);
             var task = Task.Run<IReadOnlyList<FileMove>>(() =>
             {
                 try
                 {
-                    var done = new List<FileMove>(sources.Count);
-                    foreach (var source in sources)
+                    var toRoot = destinationRootId is { } id ? _roots.GetAll().FirstOrDefault(r => r.Id == id) : null;
+                    var toRel = toRoot is null ? "" : ScanRelDir(toRoot.Path, destinationFolder);
+                    var done = new List<FileMove>(files.Count);
+                    foreach (var file in files)
                     {
                         if (linked.IsCancellationRequested)
                         {
-                            done.Add(new FileMove(source, Path.Combine(destinationFolder, Path.GetFileName(source)), MoveOutcome.Stopped));
+                            done.Add(new FileMove(file.Path, Path.Combine(destinationFolder, Path.GetFileName(file.Path)), MoveOutcome.Stopped));
                             continue;
                         }
-                        MovingFile?.Invoke(source);
-                        done.Add(moves.Move(source, destinationFolder));
+                        MovingFile?.Invoke(file.Path);
+                        var item = toRoot is not null && file is { RootId: { } fromRoot, RelPath: { } fromRel }
+                            ? new ItemMove(fromRoot, fromRel, toRoot.Id, Path.Combine(toRel, Path.GetFileName(fromRel)))
+                            : null;
+                        done.Add(moves.Move(file.Path, destinationFolder, linked.Token, item)); // a copy stops on it, undone
                     }
                     return done;
                 }
@@ -493,8 +508,37 @@ public sealed class LibraryService : IDisposable
         }
     }
 
+    // A folder's path inside a root, as a scan of the root writes it: each folder's name in the case it has on disk
+    // (rows are keyed by it, exactly), whatever case the folder was picked in.
+    internal static string ScanRelDir(string rootPath, string folder)
+    {
+        var rel = Path.GetRelativePath(rootPath, folder);
+        if (rel == ".")
+            return "";
+        var current = rootPath;
+        var parts = new List<string>();
+        foreach (var segment in rel.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string name;
+            try
+            {
+                name = Path.GetFileName(Directory.EnumerateDirectories(current, segment).FirstOrDefault() ?? segment);
+            }
+            catch (Exception)
+            {
+                name = segment;
+            }
+            parts.Add(name);
+            current = Path.Combine(current, name);
+        }
+        return Path.Combine([.. parts]);
+    }
+
     /// <summary>Test seam: runs on the move's thread as it comes to each file, before it's moved.</summary>
     internal Action<string>? MovingFile { get; set; }
+
+    /// <summary>Test seam: sets up each move's <see cref="FileMoves"/> (to take the copy path on one drive).</summary>
+    internal Action<FileMoves>? ConfigureMoves { get; set; }
 
     // --- Watching ------------------------------------------------------------
 

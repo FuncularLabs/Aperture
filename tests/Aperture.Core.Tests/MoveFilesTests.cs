@@ -230,6 +230,110 @@ public class MoveFilesTests
     }
 
     [Fact]
+    public void AFileGoneFromDisk_IsSaid_NotDroppedQuietly()
+    {
+        // Round 1, F6: the files aren't checked on disk on the UI thread; the move says which were no longer there.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Select("a.jpg", "b.jpg");
+            File.Delete(f.Photos.Combine("Photos", "b.jpg"));
+
+            f.MoveTo(f.Trips, "a.jpg");
+
+            var summary = Assert.Single(f.Summaries);
+            Assert.Contains("Moved 1 of 2 files", summary);
+            Assert.Contains("1 — no longer on disk", summary);
+        });
+    }
+
+    [Fact]
+    public void TheQuestion_SaysOneFileOrSeveral()
+    {
+        var root = new Models.Root { Id = 2, Path = @"D:\Phone", Alias = "Phone", Recursive = false };
+        var notIndexed = new MoveDestination(MoveDestinationKind.NotIndexedHere, @"D:\Phone\Camera") { UnderRoot = root };
+        var other = new MoveDestination(MoveDestinationKind.OtherLibrary, @"F:\Work") { LibraryName = "Work" };
+        var none = new MoveDestination(MoveDestinationKind.NoLibrary, @"H:\Elsewhere");
+
+        Assert.EndsWith("Move 1 file there? It will leave the view.", MainViewModel.MoveQuestion(notIndexed, 1));
+        Assert.EndsWith("Move 2 files there? They will leave the view.", MainViewModel.MoveQuestion(notIndexed, 2));
+        Assert.Contains("Move 1 file there? It will leave this library, and the tags and notes you gave it here",
+            MainViewModel.MoveQuestion(other, 1));
+        Assert.Contains("Move 3 files there? They won't show in Aperture any more (their tags", MainViewModel.MoveQuestion(none, 3));
+        Assert.Null(MainViewModel.MoveQuestion(new MoveDestination(MoveDestinationKind.ThisLibrary, @"C:\Photos"), 1));
+    }
+
+    [Fact]
+    public void TheSummary_SaysWhenTagsStayedBehind()
+    {
+        var folder = @"C:\Photos\Trips";
+        FileMove M(string name, MoveOutcome outcome) => new(@"C:\Photos\" + name, folder + @"\" + name, outcome);
+
+        Assert.Null(MainViewModel.MoveSummary([M("a.jpg", MoveOutcome.Moved)], folder));
+        var summary = MainViewModel.MoveSummary(
+            [M("a.jpg", MoveOutcome.MovedTagsBehind), M("b.jpg", MoveOutcome.Moved), M("c.jpg", MoveOutcome.InUse)], folder)!;
+
+        Assert.StartsWith("Moved 2 of 3 files to “Trips”.", summary);
+        Assert.Contains("1 file moved without its tags and notes", summary);
+        Assert.Contains("• 1 — in use by another program", summary);
+        Assert.Equal("Moved 1 of 1 file to “Trips”.\n\n1 file moved without its tags and notes: the library couldn't be "
+                     + "written, so they stay under the old path.",
+            MainViewModel.MoveSummary([M("a.jpg", MoveOutcome.MovedTagsBehind)], folder));
+    }
+
+    [Fact]
+    public void AMovedOnlineOnlyFile_StaysInTheView_UnderSkip()
+    {
+        // Round 1 (lens 2, finding 2): its row moves with it, so the next run has nothing to read or ask about.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(library =>
+            {
+                var cloud = Path.Combine(library.GetRoots()[0].Path, "cloud.jpg");
+                TestImages.Write(cloud, 32, 24);
+                File.SetAttributes(cloud, File.GetAttributes(cloud) | FileAttributes.Offline);
+                library.IndexRoot(library.GetRoots()[0]); // indexed, thumbnails and all
+                new OnlineOnlyChoices(library.Settings).Answer(library.GetRoots()[0].Id, OnlineOnlyChoice.Skip, keep: true);
+            });
+            var asked = 0;
+            f.Vm.ShowOnlineOnlyDialog = _ => { asked++; return null; };
+
+            f.MoveTo(f.Trips, "cloud.jpg");
+
+            Assert.True(Sta.PumpUntil(() => f.Tiles.Any(t => t.FullPath == Path.Combine(f.Trips, "cloud.jpg"))
+                && !f.Vm.IsIndexing, Wait));
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(500));
+            Assert.Contains(f.Tiles, t => t.FullPath == Path.Combine(f.Trips, "cloud.jpg")); // and it stays
+            Assert.Equal(0, asked);
+        });
+    }
+
+    [Fact]
+    public void AFileShownTwice_ByNestedFolders_IsCutOnce_AndMovedOnce()
+    {
+        // Round 1 (lens 2, finding 5): the same file under two of the library's folders is two tiles.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(library => library.IndexRoot(
+                library.AddRoot(Path.Combine(library.GetRoots()[0].Path, "Trips"), "Trips")));
+            var clipboard = new List<System.Windows.IDataObject>();
+            f.Vm.SetClipboard = clipboard.Add;
+            var both = f.Tiles.Where(t => t.FileName == "t.jpg").ToList();
+            Assert.Equal(2, both.Count);
+            f.Vm.SetSelectedItems(both);
+
+            f.Vm.CutFileCommand.Execute(both[0]);
+            Assert.Single(((System.Windows.DataObject)Assert.Single(clipboard)).GetFileDropList());
+
+            f.Chosen = f.Outside.Path;
+            f.Vm.MoveToCommand.Execute(both[0]);
+            Assert.True(Sta.PumpUntil(() => !f.Vm.IsMoving, Wait));
+            Assert.Empty(f.Summaries); // one move, done: not a second "no longer on disk"
+            Assert.True(File.Exists(f.Outside.Combine("t.jpg")));
+        });
+    }
+
+    [Fact]
     public void AfterAMove_AnUnwatchedFolder_IsReindexed_AndTheGridFollows()
     {
         Sta.Run(() =>

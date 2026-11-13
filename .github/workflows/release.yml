@@ -55,6 +55,8 @@ jobs:
         run: dotnet restore Aperture.slnx
 
       - name: Test
+        # A test that hangs fails the release in half an hour, not the runner's six.
+        timeout-minutes: 30
         run: dotnet test tests/Aperture.Core.Tests/Aperture.Core.Tests.csproj -c Release --verbosity minimal
 
       - name: Publish framework-dependent single-file

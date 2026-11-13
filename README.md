@@ -57,7 +57,7 @@ on your machine — it never uploads anything or phones home.
   everywhere — all AND-ed, with `tag:` clauses OR-ed together.
 - **Quick view** (`Space` / `Enter` / double-click) — a full-screen quick-look with `←`/`→`
   paging and zoom (`Ctrl`+wheel at the pointer, `Ctrl`+`±`, `Ctrl`+`0` to fit; drag to look
-  around a zoomed photo); right-click for the full item menu. Videos play in it: a video opens
+  around a zoomed photo); right-click for the item's menu. Videos play in it: a video opens
   paused, and `Space`, a click or the play button plays and pauses it; a seek bar and the time
   show where it is. Mute and volume too (the first video plays muted; after that, each starts
   with the sound you last left).

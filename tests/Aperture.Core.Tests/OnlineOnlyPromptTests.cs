@@ -356,6 +356,60 @@ public class OnlineOnlyPromptTests
     }
 
     [Fact]
+    public void TheFolderMenu_OnAPausedFolder_LeavesItPaused()
+    {
+        // Round 1 (lens 2, finding 9): choosing from the menu re-indexed a paused folder, un-pausing it.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Reply = q =>
+            {
+                f.Vm.PauseRootIndexCommand.Execute(f.Root(q.Root.Alias)); // paused at its question
+                return new OnlineOnlyAnswer(OnlineOnlyChoice.Skip, Remember: false);
+            };
+            f.Add("A");
+            Assert.True(f.Root("A").IsPaused);
+
+            f.Root("A").SetOnlineOnlyCommand.Execute("Now");
+
+            Assert.True(f.Root("A").IsPaused);
+            Assert.False(f.Vm.IsIndexing);
+            Assert.Equal(OnlineOnlyChoice.Now, f.Root("A").OnlineOnly); // kept: Resume reads them
+        });
+    }
+
+    [Fact]
+    public void AnOlderRunOfAPausedFolder_GivesUpItsQuestion_TooAfterTheGate()
+    {
+        // Round 1 (lens 2, finding 8): two runs of one folder; Pause cancels only the newer run's token, so the older
+        // run's question is given up by the check after the gate.
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+            f.Reply = q =>
+            {
+                if (q.Root.Alias == "A" && f.Asked.Count == 1)
+                {
+                    Pump(400);                                         // B's first run is waiting at the gate
+                    f.Vm.ResumeRootIndexCommand.Execute(f.Root("B")); // a second run of B
+                    Pump(400);
+                    f.Vm.PauseRootIndexCommand.Execute(f.Root("B"));
+                    Pump(200);
+                }
+                return new OnlineOnlyAnswer(OnlineOnlyChoice.Now, Remember: false);
+            };
+
+            f.Vm.AddFolders([f.Folder("A")]);
+            f.Vm.AddFolders([f.Folder("B")]);
+            f.Idle();
+
+            Assert.Equal(["A"], f.Asked.Select(q => q.Root.Alias));
+            Assert.True(f.Root("B").IsPaused);
+            Assert.Empty(f.Indexed("B"));
+        });
+    }
+
+    [Fact]
     public void ALibraryClosing_GivesUpTheQuestionsWaiting()
     {
         Sta.Run(() =>

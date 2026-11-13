@@ -109,6 +109,40 @@ public class IndexerOnlineOnlyTests
     }
 
     [Fact]
+    public void ALongWaitForTheAnswer_CountsAgain_SoAFileGoneMeanwhileGetsNoRow()
+    {
+        // Round 1 (lens 2, finding 10): the question can wait a long time; what was counted before it may be gone.
+        var (scope, root, reads) = Library("there.jpg");
+        using var _ = scope;
+        scope.Indexer.RescanAfter = TimeSpan.Zero;
+
+        scope.Indexer.IndexRoot(root, null, default, true, (_, _) =>
+        {
+            File.Delete(scope.Library.Combine("there.jpg"));
+            return OnlineOnlyChoice.Now;
+        });
+
+        Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg"], Names(scope, root));
+        Assert.DoesNotContain("there.jpg", reads);
+    }
+
+    [Fact]
+    public async Task ALongWaitForTheAnswer_CountsAgain_InTheAsyncRunToo()
+    {
+        var (scope, root, _) = Library("there.jpg");
+        using var __ = scope;
+        scope.Indexer.RescanAfter = TimeSpan.Zero;
+
+        await scope.Indexer.IndexRootAsync(root, null, default, true, (_, _) =>
+        {
+            File.Delete(scope.Library.Combine("there.jpg"));
+            return Task.FromResult(OnlineOnlyChoice.Now);
+        });
+
+        Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg"], Names(scope, root));
+    }
+
+    [Fact]
     public void ARunThatReadsNone_DoesNotAsk()
     {
         using var scope = new ApertureScope();

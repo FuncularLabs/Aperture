@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Aperture.App;
+using Aperture.Core.Settings;
 using Aperture.Core.Tests.Support;
 
 namespace Aperture.Core.Tests;
@@ -120,26 +121,55 @@ public class RealPlayerTests
     }
 
     [MediaFact]
-    public void AfterTheEnd_ASeek_StaysPaused()
+    public void AfterTheEnd_ASeekHoldsThere_AndPlaysOnFromThere()
     {
-        // 0.9.2 V12, as VideoPlayback drives it: at the end it's paused, and a seek back leaves it paused.
+        // 0.9.2 V10 + V12 through VideoPlayback, as quick view drives it (review round 1, F1: pausing the player as it
+        // ended made a seek back land at 0:00). After the end: a seek holds where it was put, paused, and play goes on
+        // from there — neither back at the start nor playing by itself.
         WithPlayer((player, host, clip, pump) =>
         {
-            var opened = false;
-            var ended = false;
-            player.Opened += (_, _) => opened = true;
-            player.Ended += (_, _) => { ended = true; player.Pause(); };
-            player.Open(new Uri(clip));
-            player.Play();
-            Assert.True(pump(() => opened));
-            player.Position = player.Duration!.Value - TimeSpan.FromMilliseconds(300);
-            Assert.True(pump(() => ended), "no end");
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+            playback.Toggle();
+            playback.Seek(playback.DurationSeconds - 0.3);
+            Assert.True(pump(() => !playback.IsPlaying), "no end");
 
-            player.Position = TimeSpan.FromSeconds(1);
+            playback.Seek(1);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            playback.Tick();
+
+            Assert.False(playback.IsPlaying);
+            Assert.InRange(player.Position.TotalSeconds, 0.9, 1.1);
+            Assert.InRange(playback.PositionSeconds, 0.9, 1.1); // the bar stays where it was put
+
+            playback.Toggle();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            Assert.True(player.Position > TimeSpan.FromSeconds(1.3), $"it didn't play on from the seek: {player.Position}");
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
+    public void PlayStraightAfterASeek_PlaysOn()
+    {
+        // The pause a seek defers (MediaElementPlayer.Pause) is cancelled by a play straight after it.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+            playback.Toggle();
+            playback.Seek(playback.DurationSeconds - 0.3);
+            Assert.True(pump(() => !playback.IsPlaying), "no end");
+
+            playback.Seek(1);
+            playback.Toggle(); // at once, before the seek has gone through
             Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
 
-            Assert.True(player.Position - TimeSpan.FromSeconds(1) < TimeSpan.FromMilliseconds(100),
-                $"it played on after a seek at its end: {player.Position}");
+            Assert.True(playback.IsPlaying);
+            Assert.True(player.Position > TimeSpan.FromSeconds(1.3), $"a deferred pause stopped it: {player.Position}");
+            playback.Leave();
         });
     }
 

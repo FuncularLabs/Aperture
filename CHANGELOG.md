@@ -9,11 +9,12 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - **A seek bar and the time for videos.** In quick view, a video's controls now have a bar you
   can click or drag to move along it, playing or paused, and its time ("0:12 / 1:23").
 - **Move to…** Right-click a photo or video (or several selected) and choose **Move to…** to
-  move the files to another folder. A folder this library indexes takes them straight away.
-  If it's another library's folder, isn't indexed, or isn't in any of your libraries,
-  Aperture asks first, and says why. A file is never put over another of the same name; one
-  that can't be moved (in use, say) stays where it is, and you're told how many weren't moved
-  and why. Tags and notes go with the files.
+  move the files to another folder. A folder this library indexes takes them straight away,
+  thumbnails and all (an online-only file isn't downloaded again). If it's another library's
+  folder, isn't indexed, or isn't in any of your libraries, Aperture asks first, and says why.
+  A file is never put over another of the same name; one that can't be moved (in use, say)
+  stays where it is, and you're told how many weren't moved and why. Tags and notes go with
+  the files.
 - **A question before downloading cloud files.** When indexing would download online-only files
   (OneDrive's or Dropbox's placeholders), Aperture first asks what to do with them: skip them,
   index them in the background (after every other file), or index them now. Tick
@@ -23,14 +24,14 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ### Changed
 - **Videos wait for you.** Quick view opens a video paused: the play button, `Space` or a click
-  plays it. Its still frame shows until you play it or move along it.
+  plays it. Its still frame shows until you play it or move along it (a video without a still
+  shows its first frame).
 
 ### Fixed
 - **Cut and Copy take the whole selection.** With several files selected, Cut and Copy (and
   `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view
   they still act on the item shown.
 - Renaming the folder you're in no longer leaves nothing selected in the folder list.
-- A video that has reached its end stays paused when you move back along it.
 
 ## [0.9.1] - 2026-11-13
 
