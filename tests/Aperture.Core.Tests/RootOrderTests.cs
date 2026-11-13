@@ -239,6 +239,25 @@ public class RootOrderTests
     }
 
     [Fact]
+    public void FoldersOfTheSameName_KeepTheOrderARestartGivesThem()
+    {
+        // Release review N-1: a tie by name goes by when the folder was added, in the session as after a restart (the
+        // session's sort was stable over whatever order the list was in).
+        Sta.Run(() =>
+        {
+            using var f = new Fixture();
+
+            f.Vm.Roots.Single(r => r.Id == f.Ids["Beta"]).Alias = "Zed";
+            f.Vm.Roots.Single(r => r.Id == f.Ids["alpha"]).Alias = "Zed";
+
+            long[] expected = [f.Ids["Gamma"], f.Ids["Beta"], f.Ids["alpha"]]; // Beta was added before alpha
+            Assert.Equal(expected, f.Vm.Roots.Select(r => r.Id));
+            f.Reopen();
+            Assert.Equal(expected, f.Vm.Roots.Select(r => r.Id));
+        });
+    }
+
+    [Fact]
     public void TheSelectedFolder_StaysSelected()
     {
         Sta.Run(() =>

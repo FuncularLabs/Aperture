@@ -2136,9 +2136,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    // The user's order, then any folder added since, by name (the order folders always had).
+    // The user's order, then any folder added since, by name (the order folders always had); folders of the same name in
+    // the order they were added, whatever order they come in (release review N-1).
     private List<T> InRootOrder<T>(IEnumerable<T> roots, Func<T, long> id, Func<T, string> name) =>
-        ListOrder.Apply(roots, _library.Settings.Current.RootOrder, id, name, StringComparer.OrdinalIgnoreCase);
+        ListOrder.Apply(roots.OrderBy(id), _library.Settings.Current.RootOrder, id, name, StringComparer.OrdinalIgnoreCase);
 
     // A folder added or renamed takes the place a restart would give it (LoadRoots), at once: by name until the user has
     // moved one, then after the ones in their order (release review REL-2). The same RootVms, moved.

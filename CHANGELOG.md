@@ -39,8 +39,9 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   time the tree is refreshed.
 - **Every library shows its count.** A library you aren't in showed no count until it had been
   open and left; each one's count is now read from its own files when the list is shown.
-- A folder you add, or rename, takes its place in the folder list at once; it went at the end
-  until Aperture was started again.
+- A folder you add now takes its place in the folder list at once (it went at the end), and one
+  you rename moves to its place by name (it stayed where it was); before, only a restart put
+  them in order.
 - A background read could meet a change you were making (removing a folder, saving tags) and
   end Aperture; background reads now never see a change before it's saved. A folder removed
   or hidden while the library was still loading no longer comes back until the next change.
