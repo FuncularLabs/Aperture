@@ -56,7 +56,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var scan = Prepare(root, progress, ct, includeVideos);
         if (scan.OnlineOnly == 0)
             return Execute(scan, OnlineOnlyChoice.Now, progress, ct);
-        var choice = await askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct).ConfigureAwait(false);
+        // WaitAsync: the token gives the question up even if the asker never hears it (a switch, exit: gate 3, C7).
+        var choice = await askOnlineOnly(new OnlineOnlyQuestion(root, scan.OnlineOnly), ct).WaitAsync(ct).ConfigureAwait(false);
         return await Task.Run(() => Execute(scan, choice, progress, ct), CancellationToken.None).ConfigureAwait(false);
     }
 

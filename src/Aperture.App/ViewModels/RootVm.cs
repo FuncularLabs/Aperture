@@ -1,4 +1,5 @@
 using Aperture.App.Mvvm;
+using Aperture.Core.Indexing;
 using Aperture.Core.Models;
 
 namespace Aperture.App.ViewModels;
@@ -9,6 +10,8 @@ public sealed class RootVm : ObservableObject
     private readonly Action<RootVm, bool> _onIncludedChanged;
     private readonly Action<RootVm, string> _onAliasChanged;
     private readonly Action<RootVm, bool> _onRecursiveChanged;
+    private readonly Action<RootVm, OnlineOnlyChoice?>? _onOnlineOnlyChosen;
+    private OnlineOnlyChoice? _onlineOnly;
     private bool _included;
     private bool _recursive;
     private int _count;
@@ -19,7 +22,7 @@ public sealed class RootVm : ObservableObject
 
     public RootVm(
         Root root, Action<RootVm, bool> onIncludedChanged, Action<RootVm, string> onAliasChanged,
-        Action<RootVm, bool> onRecursiveChanged)
+        Action<RootVm, bool> onRecursiveChanged, Action<RootVm, OnlineOnlyChoice?>? onOnlineOnlyChosen = null)
     {
         Model = root;
         _included = root.Included;
@@ -27,7 +30,43 @@ public sealed class RootVm : ObservableObject
         _onIncludedChanged = onIncludedChanged;
         _onAliasChanged = onAliasChanged;
         _onRecursiveChanged = onRecursiveChanged;
+        _onOnlineOnlyChosen = onOnlineOnlyChosen;
         BeginRenameCommand = new RelayCommand(() => IsEditing = true);
+        SetOnlineOnlyCommand = new RelayCommand<string>(ChooseOnlineOnly);
+    }
+
+    /// <summary>
+    /// The folder's menu, Online-only files (0.9.2 C6): "Ask", "Skip", "Background" or "Now". Anything else does nothing.
+    /// </summary>
+    public RelayCommand<string> SetOnlineOnlyCommand { get; }
+
+    /// <summary>The answer to the online-only question in force for this folder (kept, else this session's); <c>null</c>: ask.</summary>
+    public OnlineOnlyChoice? OnlineOnly
+    {
+        get => _onlineOnly;
+        set
+        {
+            if (!SetProperty(ref _onlineOnly, value))
+                return;
+            OnPropertyChanged(nameof(OnlineOnlyAsks));
+            OnPropertyChanged(nameof(OnlineOnlySkips));
+            OnPropertyChanged(nameof(OnlineOnlyInBackground));
+            OnPropertyChanged(nameof(OnlineOnlyNow));
+        }
+    }
+
+    // The menu's checks: the one in force.
+    public bool OnlineOnlyAsks => _onlineOnly is null;
+    public bool OnlineOnlySkips => _onlineOnly == OnlineOnlyChoice.Skip;
+    public bool OnlineOnlyInBackground => _onlineOnly == OnlineOnlyChoice.Background;
+    public bool OnlineOnlyNow => _onlineOnly == OnlineOnlyChoice.Now;
+
+    private void ChooseOnlineOnly(string choice)
+    {
+        if (choice == "Ask")
+            _onOnlineOnlyChosen?.Invoke(this, null);
+        else if (Enum.TryParse<OnlineOnlyChoice>(choice, out var chosen) && Enum.IsDefined(chosen) && !int.TryParse(choice, out _))
+            _onOnlineOnlyChosen?.Invoke(this, chosen);
     }
 
     public Root Model { get; }

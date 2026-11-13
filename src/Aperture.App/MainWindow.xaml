@@ -948,6 +948,18 @@
                                             <MenuItem Header="Include subfolders" IsCheckable="True"
                                                       IsChecked="{Binding Root.IsRecursive, Mode=TwoWay}"
                                                       ToolTip="Index this folder's subfolders too. Turning it off removes their items and leaves cloud files alone." />
+                                            <!-- 0.9.2 C6: what indexing does with the folder's online-only (cloud) files. -->
+                                            <MenuItem Header="Online-only files">
+                                                <MenuItem Header="Ask each time" IsChecked="{Binding Root.OnlineOnlyAsks, Mode=OneWay}"
+                                                          Command="{Binding Root.SetOnlineOnlyCommand}" CommandParameter="Ask" />
+                                                <MenuItem Header="Skip" IsChecked="{Binding Root.OnlineOnlySkips, Mode=OneWay}"
+                                                          Command="{Binding Root.SetOnlineOnlyCommand}" CommandParameter="Skip" />
+                                                <MenuItem Header="Index in the background"
+                                                          IsChecked="{Binding Root.OnlineOnlyInBackground, Mode=OneWay}"
+                                                          Command="{Binding Root.SetOnlineOnlyCommand}" CommandParameter="Background" />
+                                                <MenuItem Header="Index now" IsChecked="{Binding Root.OnlineOnlyNow, Mode=OneWay}"
+                                                          Command="{Binding Root.SetOnlineOnlyCommand}" CommandParameter="Now" />
+                                            </MenuItem>
                                             <Separator />
                                             <MenuItem Header="Rename" Command="{Binding Root.BeginRenameCommand}" />
                                             <MenuItem Header="Remove folder"

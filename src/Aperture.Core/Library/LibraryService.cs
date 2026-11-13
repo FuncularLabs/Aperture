@@ -417,7 +417,13 @@ public sealed class LibraryService : IDisposable
     /// before the database is disposed — no index write can race a teardown. The external
     /// <paramref name="ct"/> still drives per-root pause/cancel; the two tokens are linked.
     /// </summary>
-    public Task<IndexResult> IndexRootAsync(Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default)
+    /// <param name="askOnlineOnly">
+    /// The online-only question (0.9.2 C1): awaited between the count and the reads, holding no thread; the run's token
+    /// (pause, stop, a switch, exit) gives it up whether or not the asker hears it. <c>null</c>: read them now.
+    /// </param>
+    public Task<IndexResult> IndexRootAsync(
+        Root root, IProgress<IndexProgress>? progress = null, CancellationToken ct = default,
+        Func<OnlineOnlyQuestion, CancellationToken, Task<OnlineOnlyChoice>>? askOnlineOnly = null)
     {
         lock (_indexLock)
         {
@@ -429,9 +435,16 @@ public sealed class LibraryService : IDisposable
             // The token is observed inside IndexRoot (per-file + per-batch); it is deliberately NOT passed
             // to Task.Run, so the delegate always runs its finally and disposes the linked source — a
             // pre-cancelled Task.Run would skip the body and leak it.
-            var task = Task.Run(() =>
+            var includeVideos = Settings.Current.IncludeVideos;
+            var task = Task.Run(async () =>
             {
-                try { return _indexer.IndexRoot(root, progress, linked.Token, Settings.Current.IncludeVideos); }
+                try
+                {
+                    return askOnlineOnly is null
+                        ? _indexer.IndexRoot(root, progress, linked.Token, includeVideos)
+                        : await _indexer.IndexRootAsync(root, progress, linked.Token, includeVideos, askOnlineOnly)
+                            .ConfigureAwait(false);
+                }
                 finally { linked.Dispose(); }
             });
             _indexTasks.RemoveAll(t => t.IsCompleted); // prune settled tasks so the list can't grow unbounded

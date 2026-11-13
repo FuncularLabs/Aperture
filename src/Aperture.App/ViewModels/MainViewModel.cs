@@ -2157,9 +2157,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var roots = InRootOrder(_library.GetRoots(), r => r.Id, r => r.Alias);
         foreach (var root in roots)
         {
-            var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged)
+            var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged, OnOnlineOnlyChosen)
             {
                 Count = _library.CountForRoot(root.Id),
+                OnlineOnly = OnlineOnlyAnswers.Known(root.Id),
             };
             Roots.Add(vm);
         }
@@ -2247,7 +2248,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void AddRootPath(string path, string alias, bool recursive)
     {
         var root = _library.AddRoot(path, alias, recursive);
-        var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged);
+        var vm = new RootVm(root, OnRootIncludedChanged, OnRootAliasChanged, OnRootRecursiveChanged, OnOnlineOnlyChosen)
+        {
+            OnlineOnly = OnlineOnlyAnswers.Known(root.Id),
+        };
         Roots.Add(vm);
         SortRoots();
         BuildTree();
@@ -2261,6 +2265,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         var wasCurrent = _location.RootId == rootVm.Id;
         _library.RemoveRoot(rootVm.Id);
+        OnlineOnlyAnswers.Forget(rootVm.Id); // C8: its kept answer goes with it
         Roots.Remove(rootVm);
         if (wasCurrent)
             _location = (null, "");
@@ -2801,6 +2806,96 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Indexing -----------------------------------------------------------
 
+    // --- The online-only question (0.9.2 C1, C5–C8) ---
+
+    private OnlineOnlyChoices? _onlineOnlyChoices;
+
+    // The answers, for as long as this view model (so this library) is open; kept ones in its settings.
+    private OnlineOnlyChoices OnlineOnlyAnswers => _onlineOnlyChoices ??= new OnlineOnlyChoices(_library.Settings);
+    private readonly SemaphoreSlim _askGate = new(1, 1); // one question at a time (a modal dialog still runs posted work)
+
+    /// <summary>Shows the question (UI thread); <c>null</c> when it's closed without an answer. Settable for tests only.</summary>
+    internal Func<OnlineOnlyQuestion, OnlineOnlyAnswer?> ShowOnlineOnlyDialog { get; set; } = AskOnlineOnlyWithDialog;
+
+    private static OnlineOnlyAnswer? AskOnlineOnlyWithDialog(OnlineOnlyQuestion question)
+    {
+        var dialog = new OnlineOnlyDialog(question.Root.Alias, question.Count) { Owner = System.Windows.Application.Current.MainWindow };
+        dialog.ShowDialog();
+        return dialog.Answer;
+    }
+
+    /// <summary>
+    /// A run's question, asked on the run's thread: answered on the UI thread, where the answers live. The run awaits
+    /// it (LibraryService gives it up on the run's token whether or not this hears it).
+    /// </summary>
+    private Task<OnlineOnlyChoice> AskOnlineOnlyAsync(OnlineOnlyQuestion question, CancellationToken ct)
+    {
+        var answer = new TaskCompletionSource<OnlineOnlyChoice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ui.Post(async _ =>
+        {
+            try { answer.TrySetResult(await AnswerOnlineOnlyAsync(question, ct)); }
+            catch (OperationCanceledException) { answer.TrySetCanceled(); }
+            catch (Exception ex) { answer.TrySetException(ex); }
+        }, null);
+        return answer.Task;
+    }
+
+    // UI thread. The answer in force, else the dialog, one at a time; a question whose folder was removed or paused, or
+    // whose library is closing, is given up (C7).
+    private async Task<OnlineOnlyChoice> AnswerOnlineOnlyAsync(OnlineOnlyQuestion question, CancellationToken ct)
+    {
+        var rootId = question.Root.Id;
+        if (!_closing && OnlineOnlyAnswers.Known(rootId) is { } known)
+            return known;
+        await _askGate.WaitAsync(ct);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            bool paused;
+            lock (_indexLock)
+                paused = _pausedRoots.Contains(rootId);
+            if (_closing || paused || Roots.All(r => r.Id != rootId))
+                throw new OperationCanceledException();
+            if (OnlineOnlyAnswers.Known(rootId) is { } answered)
+                return answered; // asked for another run of it while this one waited
+            var reply = ShowOnlineOnlyDialog(question);
+            var choice = reply?.Choice ?? OnlineOnlyChoice.Skip; // closed: Skip, for now only
+            if (_closing)
+                throw new OperationCanceledException();
+            OnlineOnlyAnswers.Answer(rootId, choice, keep: reply?.Remember == true);
+            ShowOnlineOnlyChoice(rootId);
+            return choice;
+        }
+        finally
+        {
+            _askGate.Release();
+        }
+    }
+
+    private void ShowOnlineOnlyChoice(long rootId)
+    {
+        if (Roots.FirstOrDefault(r => r.Id == rootId) is { } rootVm)
+            rootVm.OnlineOnly = OnlineOnlyAnswers.Known(rootId);
+    }
+
+    /// <summary>
+    /// The folder's menu (C6): a choice is kept, as Remember keeps one; Ask each time forgets the kept and the session
+    /// answer. A choice that now reads what the last answer skipped re-indexes the folder.
+    /// </summary>
+    private void OnOnlineOnlyChosen(RootVm rootVm, OnlineOnlyChoice? choice)
+    {
+        if (_closing)
+            return;
+        var before = OnlineOnlyAnswers.Known(rootVm.Id);
+        if (choice is { } chosen)
+            OnlineOnlyAnswers.Answer(rootVm.Id, chosen, keep: true);
+        else
+            OnlineOnlyAnswers.Forget(rootVm.Id);
+        ShowOnlineOnlyChoice(rootVm.Id);
+        if (before == OnlineOnlyChoice.Skip && choice is OnlineOnlyChoice.Background or OnlineOnlyChoice.Now)
+            _ = IndexRootAsync(rootVm.Model, watchAfter: true);
+    }
+
     private async Task IndexRootAsync(Root root, bool watchAfter, bool forceStream = false)
     {
         if (_closing)
@@ -2836,7 +2931,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var canceled = false;
         try
         {
-            result = await _library.IndexRootAsync(root, progress, cts.Token).ConfigureAwait(true);
+            result = await _library.IndexRootAsync(root, progress, cts.Token, AskOnlineOnlyAsync).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
