@@ -5,6 +5,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-13
+
 ### Added
 - **Videos play in quick view.** Open quick view on a video (or move to one) and it plays. `Space`
   or a click on the video plays and pauses it. At its end it stops; `Space` or a click plays
