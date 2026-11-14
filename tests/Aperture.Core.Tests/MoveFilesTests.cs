@@ -159,8 +159,9 @@ public class MoveFilesTests
 
         Assert.Contains($"“{name}”", message);
         Assert.Equal(ends, message.Contains("ends in a dot or a space"));
-        // True of a device's name too (round 21: not "as another folder's"; pinned, round 22, R F-4).
-        Assert.Contains("doesn't read the name", message);
+        // True of a device's name too (round 21: not "as another folder's"; pinned, round 22, R F-4; whole, round 24,
+        // D F-4: without "as it's written" it says Windows doesn't read "NUL" at all).
+        Assert.Contains($"doesn't read the name “{name}” as it's written", message);
         Assert.DoesNotContain("another folder", message);
     }
 
@@ -395,6 +396,34 @@ public class MoveFilesTests
             Assert.True(Sta.PumpUntil(() => !f.Vm.IsMoving, Wait));
             Assert.Empty(f.Summaries); // one move, done: not a second "no longer on disk"
             Assert.True(File.Exists(f.Outside.Combine("t.jpg")));
+        });
+    }
+
+    [Fact]
+    public void AFileShownTwice_ThroughTwoSpellingsOfAnAccentedLetter_IsCutOnce()
+    {
+        // Round 24, D F-1: NTFS takes "Été" and "été" for one folder, and so does the selection (.NET's fold): a file shown
+        // by a folder, and by a folder inside it added as "été", is one file (round 22's ASCII-only fold, or an ordinal
+        // one, took two).
+        Sta.Run(() =>
+        {
+            using var f = new Fixture(library =>
+            {
+                var photos = library.GetRoots()[0];
+                TestImages.Write(Path.Combine(photos.Path, "Été", "e.jpg"), 32, 24);
+                library.IndexRoot(photos);
+                library.IndexRoot(library.AddRoot(Path.Combine(photos.Path, "été"), "été"));
+            });
+            var clipboard = new List<System.Windows.IDataObject>();
+            f.Vm.SetClipboard = clipboard.Add;
+            Assert.True(Sta.PumpUntil(() => f.Tiles.Count(t => t.FileName == "e.jpg") == 2, Wait));
+            var both = f.Tiles.Where(t => t.FileName == "e.jpg").ToList();
+            Assert.NotEqual(both[0].FullPath, both[1].FullPath); // two spellings
+            f.Vm.SetSelectedItems(both);
+
+            f.Vm.CutFileCommand.Execute(both[0]);
+
+            Assert.Single(((System.Windows.DataObject)Assert.Single(clipboard)).GetFileDropList());
         });
     }
 

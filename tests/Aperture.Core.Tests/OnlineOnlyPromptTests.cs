@@ -382,18 +382,21 @@ public class OnlineOnlyPromptTests
     public void AnOlderRunOfAPausedFolder_GivesUpItsQuestion_TooAfterTheGate()
     {
         // Round 1 (lens 2, finding 8): two runs of one folder; Pause cancels only the newer run's token, so the older
-        // run's question is given up by the check after the gate.
+        // run's question is given up by the check after the gate. Either folder's question may reach the asker first (the
+        // runs race: round 24, R F-4); the other's first run waits at the gate.
         Sta.Run(() =>
         {
             using var f = new Fixture();
+            string? waiting = null;
             f.Reply = q =>
             {
-                if (q.Root.Alias == "A" && f.Asked.Count == 1)
+                if (f.Asked.Count == 1)
                 {
-                    Pump(400);                                         // B's first run is waiting at the gate
-                    f.Vm.ResumeRootIndexCommand.Execute(f.Root("B")); // a second run of B
+                    waiting = q.Root.Alias == "A" ? "B" : "A";
+                    Pump(400);                                              // its first run is waiting at the gate
+                    f.Vm.ResumeRootIndexCommand.Execute(f.Root(waiting)); // a second run of it
                     Pump(400);
-                    f.Vm.PauseRootIndexCommand.Execute(f.Root("B"));
+                    f.Vm.PauseRootIndexCommand.Execute(f.Root(waiting));
                     Pump(200);
                 }
                 return new OnlineOnlyAnswer(OnlineOnlyChoice.Now, Remember: false);
@@ -403,9 +406,10 @@ public class OnlineOnlyPromptTests
             f.Vm.AddFolders([f.Folder("B")]);
             f.Idle();
 
-            Assert.Equal(["A"], f.Asked.Select(q => q.Root.Alias));
-            Assert.True(f.Root("B").IsPaused);
-            Assert.Empty(f.Indexed("B"));
+            Assert.NotNull(waiting);
+            Assert.Equal([waiting == "A" ? "B" : "A"], f.Asked.Select(q => q.Root.Alias));
+            Assert.True(f.Root(waiting).IsPaused);
+            Assert.Empty(f.Indexed(waiting));
         });
     }
 

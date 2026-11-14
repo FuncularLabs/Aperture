@@ -225,6 +225,19 @@ public class FileMovesTests : IDisposable
     }
 
     [Fact]
+    public void AFileMovedToItsFolderSpelledWithAnotherCaseOfAnAccentedLetter_IsAlreadyThere()
+    {
+        // Round 24, D F-1: "Été" and "été" are one folder on NTFS: the file is already there, not "a file of that name
+        // is already there" (round 22's ASCII-only fold).
+        var a = Photo("a.jpg", "Été");
+
+        var move = _moves.Move(a, _scope.Library.Combine("été"));
+
+        Assert.Equal(MoveOutcome.AlreadyThere, move.Outcome);
+        Assert.True(File.Exists(a));
+    }
+
+    [Fact]
     public void AFileGone_IsSaid()
     {
         Assert.Equal(MoveOutcome.SourceGone, _moves.Move(Path.Combine(_from, "gone.jpg"), _to).Outcome);

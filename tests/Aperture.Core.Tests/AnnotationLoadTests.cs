@@ -124,6 +124,20 @@ public class AnnotationLoadTests
 
         Assert.Equal("Österreich", only.Key);
         Assert.Equal(("Österreich", 3), (only.Value.Name, only.Value.UseCount));
+        Assert.Equal(LatestUse(scope), only.Value.LastUsedTicks); // round 24, D F-3 / R F-3: the latest use, not the other's
+    }
+
+    // The two rows' use times, read from the table itself.
+    private static long LatestUse(ApertureScope scope)
+    {
+        using var connection = scope.Database.OpenMetadata();
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT MIN(last_used_ticks), MAX(last_used_ticks), COUNT(*) FROM tag_stats;";
+        using var row = read.ExecuteReader();
+        Assert.True(row.Read());
+        Assert.Equal(2, row.GetInt64(2));
+        Assert.NotEqual(row.GetInt64(0), row.GetInt64(1)); // apart, or keeping the other's would pass
+        return row.GetInt64(1);
     }
 
     [Fact]
@@ -143,6 +157,7 @@ public class AnnotationLoadTests
 
         Assert.Equal("österreich", only.Key);
         Assert.Equal(("österreich", 2), (only.Value.Name, only.Value.UseCount));
+        Assert.Equal(LatestUse(scope), only.Value.LastUsedTicks);
         var tags = new AnnotationStore(scope.Database);
         tags.Save(scope.Library.Combine("a.jpg"), ["Österreich"], "");
         Assert.Single(tags.GetTagUsage());

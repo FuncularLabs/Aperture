@@ -45,6 +45,20 @@ public class MoveDestinationTests
             at.FolderPath); // built from the folder's own path, as a row's full path is
     }
 
+    [Theory]
+    [InlineData(@"C:\X\été", "")]
+    [InlineData(@"C:\X\été\sub", "sub")]
+    public void AFolderSpelledWithAnotherCaseOfAnAccentedLetter_IsThisLibrarys(string folder, string relDir)
+    {
+        // Round 24, D F-1: NTFS takes "Été" and "été" for one folder, and so does the app (.NET's fold): a library folder
+        // renamed so in Explorer, picked, is this library's, not "in no library" (round 22's ASCII-only fold took two).
+        Root[] roots = [R(1, @"C:\X\Été")];
+
+        var at = MoveDestination.Classify(folder, roots, null);
+
+        Assert.Equal((MoveDestinationKind.ThisLibrary, 1L, relDir), (at.Kind, at.RootId, at.RelDir));
+    }
+
     [Fact]
     public void ASubfolderOfAFolderWithoutSubfolders_IsntIndexed()
     {
