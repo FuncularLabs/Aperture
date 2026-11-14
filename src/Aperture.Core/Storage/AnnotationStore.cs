@@ -6,7 +6,7 @@ using Aperture.Core.Models;
 namespace Aperture.Core.Storage;
 
 /// <summary>
-/// Tags + notes per file, keyed by absolute path (case-insensitive) so they
+/// Tags + notes per file, keyed by absolute path (case-insensitive as SQLite's NOCASE is: ASCII letters only) so they
 /// survive re-indexing and removing/re-adding a root. Tags are stored as a JSON
 /// array. Deleting all tags and clearing the note removes the row.
 /// </summary>
