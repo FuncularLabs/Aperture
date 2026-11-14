@@ -15,10 +15,11 @@ namespace Aperture.Core.Annotations;
 /// location. Import is an <em>upsert</em>: tags are unioned into any existing
 /// annotation and a note fills in only when the local note is empty (a differing
 /// note is appended, never overwritten). Nothing is ever deleted by an import.
-/// An entry whose path differs from the one the file's tags are kept under only in a non-ASCII letter's case (its
-/// folder renamed so in Explorer since the export, say) isn't found by that lookup: it's saved as a row of its own,
-/// which, written last, is the one shown, the file's own tags kept but not shown (the 0.9.2 plan's M4; merging such
-/// rows is a task of its own).
+/// An entry whose path differs from the one the file's tags are kept under only in a non-ASCII letter's case (an
+/// export that spells the path the other way: from another PC, say) isn't found by that lookup: it's saved as a row of
+/// its own, which, written last, is the one shown, the file's own tags kept but not shown. Onto a file whose tags are
+/// two such rows already, it's merged into the one spelled as the entry is (if one is), which, written last, then shows
+/// (the 0.9.2 plan's M4; merging such rows is a task of its own).
 /// </summary>
 public sealed class AnnotationTransfer(AnnotationStore annotations, RootStore roots)
 {

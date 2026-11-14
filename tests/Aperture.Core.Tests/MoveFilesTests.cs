@@ -161,7 +161,8 @@ public class MoveFilesTests
         Assert.Equal(ends, message.Contains("ends in a dot or a space"));
         // True of a device's name too (round 21: not "as another folder's"; pinned, round 22, R F-4; whole, round 24,
         // D F-4: without "as it's written" it says Windows doesn't read "NUL" at all).
-        Assert.Contains($"doesn't read the name “{name}” as it's written", message);
+        Assert.StartsWith($"Nothing was moved. Windows doesn't read the name “{name}” as it's written", message);
+        Assert.EndsWith(", so Aperture can't move files into that folder.", message); // round 25, D N-1: the whole of it
         Assert.DoesNotContain("another folder", message);
     }
 
