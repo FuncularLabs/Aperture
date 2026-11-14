@@ -32,8 +32,9 @@ public sealed class AnnotationStore
     /// Every annotation keyed by path — cached by the UI (loaded again after edits), which compares paths with every
     /// letter's case folded. The column folds only ASCII letters', so two rows can be one path to the UI ("Été\a.jpg" and
     /// "été\a.jpg": a folder renamed so in Explorer, the file tagged again; or "σ.jpg" and "ς.jpg"): the one written last
-    /// is kept, under its own path, and the load never fails on them, which stopped the library opening (0.9.2 review
-    /// rounds 21–22; merging such rows is a task of its own).
+    /// is kept, under its own path, so what's written back through the key (a tag renamed or deleted, an export) reaches
+    /// that row and only it; the other stays as it is, not shown. The load never fails on them, which stopped the library
+    /// opening (0.9.2 review rounds 21–23; merging such rows is a task of its own).
     /// </summary>
     public Dictionary<string, Annotation> GetAll()
     {
@@ -76,7 +77,7 @@ public sealed class AnnotationStore
         if (newTag.Length == 0 || string.Equals(oldTag, newTag, StringComparison.Ordinal))
             return;
 
-        foreach (var (path, annotation) in EveryRow())
+        foreach (var (path, annotation) in GetAll())
         {
             if (!annotation.Tags.Any(t => Ci.Equals(t, oldTag)))
                 continue;
@@ -91,20 +92,13 @@ public sealed class AnnotationStore
     /// <summary>Removes a tag from every file.</summary>
     public void DeleteTag(string tag)
     {
-        foreach (var (path, annotation) in EveryRow())
+        foreach (var (path, annotation) in GetAll())
         {
             if (!annotation.Tags.Any(t => Ci.Equals(t, tag)))
                 continue;
             Save(path, annotation.Tags.Where(t => !Ci.Equals(t, tag)).ToList(), annotation.Note);
         }
     }
-
-    // Every row under its own path, those GetAll shows as one included: a tag renamed or deleted is so on every file
-    // (round 22: through GetAll, a row it didn't show kept the old tag, to show again later).
-    private IEnumerable<(string Path, Annotation Annotation)> EveryRow() =>
-        _db.Provider.GetList<AnnotationRow>()
-            .Select(r => (r.Path, new Annotation { Tags = ParseTags(r.Tags), Note = r.Note }))
-            .ToList();
 
     private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
 

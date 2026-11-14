@@ -80,40 +80,50 @@ public class AnnotationLoadTests
         Assert.Empty(tags.Get(final).Tags);
     }
 
-    [Fact]
-    public void DeletingATag_DeletesItFromARowTheWindowDoesntShow()
+    [Theory]
+    [InlineData("delete")]
+    [InlineData("rename")]
+    public void ATagRenamedOrDeleted_ActsOnTheRowShown_AndTheOtherStaysHidden(string how)
     {
-        // Round 22: deleted through what the window shows, a row it doesn't (the older of two it takes for one) kept the
-        // tag, to show again once the other went.
+        // Round 23, D F-1: renamed or deleted on every row (round 22), a row the window didn't show was written, so it
+        // became the one written last and showed instead ("c" went from the tag list). Through what the window shows, the
+        // shown row changes and the other stays as it was, not shown (M4: such rows are one, the one written last).
         using var scope = new ApertureScope();
         var tags = new AnnotationStore(scope.Database);
         var hidden = scope.Library.Combine("σ.jpg");
         tags.Save(hidden, ["a", "b"], "");
         Thread.Sleep(20);
-        tags.Save(scope.Library.Combine("ς.jpg"), ["c"], "");
+        var shown = scope.Library.Combine("ς.jpg");
+        tags.Save(shown, ["b", "c"], "");
 
-        tags.DeleteTag("b");
+        if (how == "delete")
+            tags.DeleteTag("b");
+        else
+            tags.RenameTag("b", "z");
 
-        Assert.Equal(["a"], tags.Get(hidden).Tags);
+        var only = Assert.Single(tags.GetAll());
+        Assert.Equal(shown, only.Key);
+        Assert.Equal(how == "delete" ? new[] { "c" } : ["z", "c"], only.Value.Tags);
+        Assert.Equal(["a", "b"], tags.Get(hidden).Tags);
     }
 
     [Fact]
-    public void RenamingATag_RenamesItOnEveryRow_ThoughTheWindowShowsOne()
+    public void TagStats_TheRowUsedLast_WinsWhenReadLast_OrFirst()
     {
-        // Round 22: a tag renamed is renamed on every file, a row the window doesn't show (the older of two it takes for
-        // one) too; before, only the one shown was, and the other kept the old name to show again later.
+        // Round 23, D F-4: the merge's other half, a row read after one used later: the uses still add up, under the
+        // latest spelling.
         using var scope = new ApertureScope();
-        var tags = new AnnotationStore(scope.Database);
-        var sigma = scope.Library.Combine("σ.jpg");
-        tags.Save(sigma, ["a"], "");
+        var stats = new TagStatsStore(scope.Database);
+        stats.RecordUse(["Österreich"]);
         Thread.Sleep(20);
-        var final = scope.Library.Combine("ς.jpg");
-        tags.Save(final, ["b"], "");
+        stats.RecordUse(["österreich"]);
+        Thread.Sleep(20);
+        stats.RecordUse(["Österreich"]); // the row made first is used last
 
-        tags.RenameTag("a", "z");
+        var only = Assert.Single(stats.GetAll());
 
-        Assert.Equal(["z"], tags.Get(sigma).Tags);
-        Assert.Equal(["b"], tags.Get(final).Tags);
+        Assert.Equal("Österreich", only.Key);
+        Assert.Equal(("Österreich", 3), (only.Value.Name, only.Value.UseCount));
     }
 
     [Fact]

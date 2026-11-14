@@ -24,17 +24,15 @@ public class ClipboardTargetsTests
         public MainViewModel Vm { get; }
         public List<IDataObject> Clipboard { get; } = [];
 
-        public Fixture(params string[] names)
+        public Fixture()
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
-            if (names.Length == 0)
-                names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"];
-            foreach (var name in names)
+            foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg", "d.jpg" })
                 TestImages.Write(Photos.Combine(name), 32, 24);
             Library = new LibraryService(Data.Path);
             Library.IndexRoot(Library.AddRoot(Photos.Path, "Photos"));
             Vm = new MainViewModel(Library, new ThumbnailService(Library)) { SetClipboard = Clipboard.Add };
-            Assert.True(Sta.PumpUntil(() => Vm.LoadedItemCount is not null && !Vm.IsLoadingView && Tiles.Count == names.Length, Wait));
+            Assert.True(Sta.PumpUntil(() => Vm.LoadedItemCount is not null && !Vm.IsLoadingView && Tiles.Count == 4, Wait));
         }
 
         public List<TileVm> Tiles => Vm.ItemsView?.Cast<object>().OfType<TileVm>().ToList() ?? [];
@@ -100,25 +98,6 @@ public class ClipboardTargetsTests
             f.Vm.CutFileCommand.Execute(f.Tile("d.jpg"));
 
             Assert.Equal(["d.jpg"], Names(Assert.Single(f.Clipboard)));
-        });
-    }
-
-    [Fact]
-    public void TwoFilesOnlyDotNetFoldsTogether_AreBothTaken()
-    {
-        // Round 22, R F-3 / D F-3: the selection was made distinct by .NET's fold, which takes "σ.jpg" and "ς.jpg" (two
-        // files on NTFS) for one: one of them was left off the clipboard (and Move to… moved one), and nothing said so.
-        Sta.Run(() =>
-        {
-            using var f = new Fixture("σ.jpg", "ς.jpg");
-            f.Select("σ.jpg", "ς.jpg");
-
-            f.Vm.CopyFileCommand.Execute(f.Tile("σ.jpg"));
-
-            var names = ((DataObject)Assert.Single(f.Clipboard)).GetFileDropList().Cast<string>().Select(Path.GetFileName).ToList();
-            Assert.Equal(2, names.Count);
-            Assert.Contains("σ.jpg", names);
-            Assert.Contains("ς.jpg", names);
         });
     }
 

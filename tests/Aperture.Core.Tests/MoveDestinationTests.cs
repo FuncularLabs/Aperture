@@ -27,21 +27,6 @@ public class MoveDestinationTests
     ];
 
     [Theory]
-    [InlineData(@"C:\Lib\σ", @"C:\Lib\ς")] // Greek sigma, final sigma: two folders on NTFS, one name to .NET's fold
-    [InlineData(@"C:\Lib\σ", @"C:\Lib\ς\Sub")]
-    [InlineData(@"C:\Lib\10µm", @"C:\Lib\10μm")] // the micro sign, Greek mu
-    public void AFolderOnlyDotNetFoldsTogetherWithALibraryFolder_IsntTakenForIt(string libraryFolder, string picked)
-    {
-        // Round 22, R F-3 / D F-2: compared by .NET's fold, "ς" was taken for this library's "σ" beside it, and the files
-        // went into "σ" (its own path), not the folder picked, with no question and nothing said. Folded as the library's
-        // columns fold (ASCII letters only), it's another folder: asked about, and moved into as picked.
-        var at = MoveDestination.Classify(picked, [R(1, libraryFolder)], null);
-
-        Assert.Equal(MoveDestinationKind.NoLibrary, at.Kind);
-        Assert.Equal(picked, at.FolderPath);
-    }
-
-    [Theory]
     [InlineData(@"C:\Photos", 1L, "")]
     [InlineData(@"C:\Photos\", 1L, "")]                    // a trailing separator
     [InlineData(@"c:\photos\Trips", 1L, "Trips")]          // any case

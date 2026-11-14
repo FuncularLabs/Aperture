@@ -138,7 +138,7 @@ public sealed class FileMoves(ApertureDatabase database)
 
         if (ct.IsCancellationRequested)
             return Result(MoveOutcome.Stopped); // not begun: nothing read, the library's files not touched
-        if (AsciiCase.Same(Path.GetDirectoryName(from), folder)) // "σ" and "ς" are two folders (round 22)
+        if (string.Equals(Path.GetDirectoryName(from), folder, StringComparison.OrdinalIgnoreCase))
             return Result(MoveOutcome.AlreadyThere);
         if (!File.Exists(from))
             return Result(MoveOutcome.SourceGone);

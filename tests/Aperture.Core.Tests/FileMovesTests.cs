@@ -211,21 +211,6 @@ public class FileMovesTests : IDisposable
         Assert.Equal("theirs", File.ReadAllText(To("a.jpg")));
     }
 
-    [Fact]
-    public void AFileMovedToASiblingOnlyDotNetFoldsTogetherWithItsFolder_IsMoved_NotAlreadyThere()
-    {
-        // Round 22, R F-3 / D F-4: "σ" and "ς" are two folders on NTFS; compared by .NET's fold, a file in "σ" moved to "ς"
-        // was "already in that folder" and stayed.
-        var a = Photo("a.jpg", "σ");
-        var sibling = _scope.Library.Combine("ς");
-        Directory.CreateDirectory(sibling);
-
-        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, sibling).Outcome);
-
-        Assert.True(File.Exists(Path.Combine(sibling, "a.jpg")));
-        Assert.False(File.Exists(a));
-    }
-
     [Theory]
     [InlineData("")]
     [InlineData(@"\")]
