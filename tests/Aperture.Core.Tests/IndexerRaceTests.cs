@@ -114,6 +114,31 @@ public class IndexerRaceTests
     }
 
     [Fact]
+    public void AnUnchangedVideoDeletedAsItsThumbnailsAreRemade_LosesItsRow()
+    {
+        // Round 7, F-5: the after-read check of a file read again was missing where only its thumbnails are remade: the
+        // row stayed a run, counted as failed, and as indexed.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("a.jpg"), 32, 24);
+        var v = scope.Library.Combine("v.mp4");
+        File.WriteAllText(v, "a video");
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        scope.Thumbnails.DeleteForItems([scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo).Id]); // to be made again
+        scope.Indexer.Reading = rel =>
+        {
+            if (rel == "v.mp4")
+                File.Delete(v);
+        };
+
+        var result = scope.Indexer.IndexRoot(root);
+        scope.Indexer.Reading = null;
+
+        Assert.Equal((1, 0), (result.Removed, result.Failed));
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
     public void AFileLockedAsItsRead_KeepsItsRow_AndTheRunGoesOn()
     {
         using var scope = new ApertureScope();
@@ -261,7 +286,15 @@ public class IndexerRaceTests
         public Drive(string link, string target)
         {
             _drive = new LetterDrive(target, "Photos");
-            Junction.Create(link, _drive.Link);
+            try
+            {
+                Junction.Create(link, _drive.Link);
+            }
+            catch
+            {
+                _drive.Dispose(); // the letter isn't left behind (round 7, R7-6)
+                throw;
+            }
             Link = link;
         }
 

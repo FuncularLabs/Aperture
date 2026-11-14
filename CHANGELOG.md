@@ -39,7 +39,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   it's back, instead of being emptied by the next index. If another drive takes the unplugged
   drive's letter meanwhile, the folder is emptied as if it had been deleted. A folder that was
   deleted or renamed, or that a folder link points to, is still emptied, as before, whenever
-  Aperture can look in a folder above it.
+  Aperture can look in the nearest folder above it that's still there.
 
 ## [0.9.1] - 2026-11-13
 

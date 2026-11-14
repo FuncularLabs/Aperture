@@ -41,11 +41,35 @@ public class IndexerAbsenceTests
         }
         TestImages.Write(W("locked", "x.jpg"), 8, 8);
         TestImages.Write(W("locked", "open", "there.jpg"), 8, 8);
-        Directory.CreateDirectory(W("locked", "noattrs"));
-        Acl.DenyReadAttributes(W("locked", "noattrs"));
-        Acl.DenyListing(W("locked"));
+        TestImages.Write(W("refused", "open", "there.jpg"), 8, 8);
+        Directory.CreateDirectory(W("share"));
+        Junction.Create(W("lists", "toshare"), W("share"));
+        Directory.Delete(W("share"));
+        Junction.Create(W("lists", "loop"), W("x", "y")); // round and round: loop → x\y, x → loop\z
+        Junction.Create(W("x"), W("lists", "loop", "z"));
+        File.WriteAllText(W("afile2"), "a file a link points at");
+        Junction.Create(W("lists", "tofile"), W("afile2")); // round 7, R7-2
+        File.WriteAllText(W("locked", "Trip"), "a file where a folder was, in a folder that can't be listed");
+        Directory.CreateDirectory(W("elsewhere", "Gone"));
+        Directory.CreateDirectory(W("chain"));
+        for (var n = 1; n <= 10; n++) // links to links, ten deep, to a folder deleted (round 7, R7-4)
+            Junction.Create(W("chain", $"j{n}"), n < 10 ? W("chain", $"j{n + 1}", "x") : W("elsewhere", "Gone"));
+        Directory.Delete(W("elsewhere", "Gone"));
+        // Windows answers a folder's attributes from its parent's listing when its own are refused, so a refused look
+        // (a share this user has lost rights to) and a dropped call can't be made here with ACLs: the look itself is
+        // made to fail as Windows fails it (round 7, F-1).
+        Indexer.Absence New() => new()
+        {
+            ReadAttributes = path =>
+                string.Equals(path, W("refused"), StringComparison.OrdinalIgnoreCase)
+                    ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
+                    : string.Equals(path, W("share"), StringComparison.OrdinalIgnoreCase) || path.StartsWith(W("lists", "flaky"), StringComparison.OrdinalIgnoreCase)
+                        ? throw new IOException("The specified network name is no longer available.", unchecked((int)0x80070040))
+                        : File.GetAttributes(path),
+        };
         try
         {
+            Acl.DenyListing(W("locked"));
             (string Path, Look Answer, string Case)[] cases =
             [
                 (W("lists", "there.jpg"), Look.There, "a file there"),
@@ -61,7 +85,17 @@ public class IndexerAbsenceTests
                 (W("locked", "gone.jpg"), Look.OutOfReach, "a file gone, in a folder this user may not list"),
                 (W("locked", "open", "there.jpg"), Look.There, "a file there, below a folder that can't be listed (L-2)"),
                 (W("locked", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists below one that doesn't (L-2)"),
-                (W("locked", "noattrs", "a.jpg"), Look.OutOfReach, "a folder whose look is refused (access denied)"),
+                (W("refused", "a.jpg"), Look.OutOfReach, "a folder whose look is refused (access denied)"),
+                (W("refused", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists below one whose look is refused (round 7)"),
+                (W("refused", "open", "there.jpg"), Look.There, "a file there, below a folder whose look is refused"),
+                (W("lists", "toshare", "a.jpg"), Look.OutOfReach, "a link to a share whose look fails (round 7, F-2)"),
+                (W("lists", "flaky", "2019", "a.jpg"), Look.OutOfReach, "a folder of a share that dropped the call"),
+                (W("lists", "loop", "a.jpg"), Look.OutOfReach, "a link round in a loop (round 7, F-3)"),
+                (W("lists", "tofile", "a.jpg"), Look.Gone, "a link to a file: a folder gone (round 7, R7-2)"),
+                (W("locked", "Trip", "a.jpg"), Look.Gone, "a file where its folder was, in a folder that can't be listed (R7-3)"),
+                (W("chain", "j1", "a.jpg"), Look.Gone, "ten links deep to a folder deleted (R7-4)"),
+                (W("chain", "j5", "sub", "b.jpg"), Look.Gone, "five links deep, below"),
+                (W("chain", "j10", "a.jpg"), Look.Gone, "the last of the ten"),
                 (W("lists", "bad|name", "a.jpg"), Look.OutOfReach, "a folder whose look failed (round 5, F-4)"),
                 (W("lists", "bad|1.jpg"), Look.OutOfReach, "a file whose look failed"),
                 (@"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos\a.jpg", Look.OutOfReach, "a volume that isn't there"),
@@ -69,12 +103,12 @@ public class IndexerAbsenceTests
             var wrong = new List<string>();
             foreach (var (path, answer, what) in cases)
             {
-                if (new Indexer.Absence().At(path) is var alone && alone != answer)
+                if (New().At(path) is var alone && alone != answer)
                     wrong.Add($"alone: {what}: {alone}, not {answer}");
             }
             foreach (var (order, name) in new[] { (cases, "in order"), (cases.Reverse().ToArray(), "in reverse") })
             {
-                var absence = new Indexer.Absence();
+                var absence = New();
                 foreach (var (path, answer, what) in order)
                 {
                     if (absence.At(path) is var told && told != answer)
@@ -87,12 +121,37 @@ public class IndexerAbsenceTests
         finally
         {
             Acl.RestoreListing(W("locked"));
-            Acl.RestoreReadAttributes(W("locked", "noattrs"));
         }
     }
 
     // --- What a prune looks at (round 4's design, round 6, N6-2): each folder once; nothing below one missing or whose
     // look failed; no file in a folder that can't be listed.
+
+    [Fact]
+    public void BehindALinkToADriveThatsGone_NoFolderIsLookedAtTwice()
+    {
+        // Round 7, R7-5: a link is what its target is; to a drive that's gone, everything behind it is missing, and is
+        // answered for every folder below the link without a look.
+        using var dir = new TempDir();
+        Directory.CreateDirectory(dir.Combine("card", "Photos"));
+        var letter = Subst.CreateOnAFreeLetter(dir.Combine("card"));
+        try
+        {
+            Junction.Create(dir.Combine("Camera"), letter + @"\Photos");
+        }
+        finally
+        {
+            Subst.Remove(letter);
+        }
+        var absence = new Indexer.Absence();
+        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("Camera", "2019", "a.jpg")));
+        var first = absence.Looks;
+
+        foreach (var path in new[] { dir.Combine("Camera", "2020", "b.jpg"), dir.Combine("Camera", "c.jpg"), dir.Combine("Camera", "2021", "May", "d.jpg") })
+            Assert.Equal(Look.OutOfReach, absence.At(path));
+
+        Assert.Equal(first, absence.Looks);
+    }
 
     [Fact]
     public void ADriveThatsGone_IsLookedForOnce_NotOncePerFolderOrFile()
@@ -145,37 +204,41 @@ public class IndexerAbsenceTests
     }
 
     [Fact]
-    public void InALinkThatWontList_NoFileIsLookedFor_ButEachFolderBelowIs()
+    public void BehindALinkToAFolderDeleted_NothingIsLookedAtAgain()
     {
-        // Round 5, N-1: no file in a folder that can't be listed is looked for. Round 6, L-2: a folder below it is looked
-        // at itself (it may list).
+        // Round 5, N-1: no file in a folder that can't be listed is looked for. Round 7, R7-5: a link is what its target
+        // is, so behind a link to a folder deleted, every folder below is missing too, unlooked. (A folder this user may
+        // not list is another matter: one below it is looked at itself, and may list — the table's "locked\open".)
         using var dir = new TempDir();
         Directory.CreateDirectory(dir.Combine("elsewhere", "Trip"));
         Junction.Create(dir.Combine("Trip"), dir.Combine("elsewhere", "Trip"));
         Directory.Delete(dir.Combine("elsewhere", "Trip"));
         var absence = new Indexer.Absence();
         Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "a.jpg"))); // its target was deleted (L-4)
+        // The link's attributes and listing, its resolution, its target's look, and the target's folder's look and listing.
+        Assert.Equal(6, absence.Looks);
 
         TestImages.Write(dir.Combine("elsewhere", "Trip", "b.jpg"), 8, 8);
         TestImages.Write(dir.Combine("elsewhere", "Trip", "day 1", "c.jpg"), 8, 8);
         var looks = absence.Looks;
 
-        Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "b.jpg"))); // not looked for
+        Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "b.jpg")));
+        Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "day 1", "c.jpg")));
         Assert.Equal(looks, absence.Looks);
-        Assert.Equal(Look.There, absence.At(dir.Combine("Trip", "day 1", "c.jpg"))); // looked at
+        Assert.Equal(Look.There, new Indexer.Absence().At(dir.Combine("Trip", "day 1", "c.jpg"))); // the next prune looks
     }
 
     [Fact]
-    public void BelowAFolderThatLists_EachFolderIsLookedAt()
+    public void AFolderThatLists_IsLookedAtAndListedOnce_AndEachFileLookedFor()
     {
+        // Round 7, F-4: the listing counts too.
         using var dir = new TempDir();
         TestImages.Write(dir.Combine("b.jpg"), 8, 8);
         var absence = new Indexer.Absence();
+
         Assert.Equal(Look.Gone, absence.At(dir.Combine("a.jpg")));
-
-        TestImages.Write(dir.Combine("trip", "c.jpg"), 8, 8);
-
-        Assert.Equal(Look.There, absence.At(dir.Combine("trip", "c.jpg")));
-        Assert.Equal(Look.Gone, absence.At(dir.Combine("trip", "d.jpg")));
+        Assert.Equal(3, absence.Looks); // the folder's attributes, its listing, the file's attributes
+        Assert.Equal(Look.There, absence.At(dir.Combine("b.jpg")));
+        Assert.Equal(4, absence.Looks);
     }
 }

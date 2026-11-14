@@ -25,7 +25,7 @@ public static class Subst
     public static void Create(string drive, string target) => Run($"{drive} \"{target}\"");
 
     /// <summary>
-    /// Gives <paramref name="target"/> a free letter, trying the next one down if another program (another test run on
+    /// Gives <paramref name="target"/> a free letter, trying another free one if another program (another test run on
     /// this PC, say) takes it first (round 5, N-4 / F-9). Returns the letter.
     /// </summary>
     public static string CreateOnAFreeLetter(string target)

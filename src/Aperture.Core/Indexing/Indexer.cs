@@ -212,17 +212,25 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                         // OR its source mtime no longer matches this file — the latter catches a
                         // realigned cache (metadata rebuilt, ids now map to different files) that
                         // would otherwise serve the wrong image for this item.
+                        var goneAsRead = false;
                         if (!ThumbsFresh(row.Id, file))
                         {
                             Reading?.Invoke(file.RelPath);
                             var set = GenerateThumbnails(file);
-                            if (set is null)
+                            if (set is null && Missing(file.FullPath))
+                                goneAsRead = true; // as below: left to the prune (round 7, F-5)
+                            else if (set is null)
                                 failed++;
                             else
                                 thumbsGenerated += StoreThumbs(upsertThumb, row.Id, file.MTimeTicks, set, nowTicks);
                         }
-                        skipped++;
-                        indexed.Add(file.RelPath);
+                        if (goneAsRead)
+                            seen.Remove(file.RelPath);
+                        else
+                        {
+                            skipped++;
+                            indexed.Add(file.RelPath);
+                        }
                     }
                     else
                     {
@@ -401,33 +409,38 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// <summary>
     /// Where a row's file is, for the prune (I2): there; gone, and that can be told; or out of reach, where that can't be
     /// told. A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder
-    /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1. A link (a junction or symbolic
-    /// link) that won't list is decided by its target: a link to a folder deleted on a drive that's there loses its rows
-    /// (round 6, L-4); one to an unplugged drive or a dropped share keeps them. So does a folder this user may not list
-    /// (its files only: a folder below it is looked at itself, and may list: round 6, L-2), and a look that fails for any
-    /// reason but "not found" (round 5, F-4). "There" is the path, not the volume: another drive given an unplugged
-    /// drive's letter is the drive that's there (round 5, L-4, an accepted residual). Each folder is looked at once per
-    /// prune; nothing below a folder that's missing, or whose look failed, is looked at; no file in a folder that can't be
-    /// listed is looked for. So a drive or share that's gone is looked for once per level above the first row's folder,
-    /// not once per folder or file of it (each look at a server that doesn't answer can take seconds).
+    /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1; a file in a folder's place
+    /// is seen, so the folder below it is gone whatever is above. A link (a junction or symbolic link) that won't list is
+    /// what its final target is: deleted on a drive that's there, its rows go (round 6, L-4); on an unplugged drive or a
+    /// dropped share, they stay; a link Windows can't follow to its end is decided by where it points first (a file:
+    /// gone; a loop: can't tell). A folder this user may not list keeps its files' rows (a folder below it is looked at
+    /// itself, and may list: round 6, L-2), and so does a look that fails or is refused (round 5, F-4; round 7). "There"
+    /// is the path, not the volume: another drive given an unplugged drive's letter is the drive that's there (round 5,
+    /// L-4, an accepted residual). Each folder is looked at at most once per prune: once a folder is found missing, or
+    /// its look fails, or it's a link to either, nothing below it is looked at again; no file is looked for in a folder
+    /// that can't be listed; a refused look isn't passed down (a folder below may be readable). So a drive or share
+    /// that's gone, reached directly or through a link, costs one look per level from the first row's folder up, then
+    /// none for any other folder or file of it (each look at a server that doesn't answer can take seconds).
     /// </summary>
     internal sealed class Absence
     {
         internal enum Look { There, Gone, OutOfReach }
 
-        // A folder: listed; there and not listed (this user may not, or a link whose target won't); missing; or a look
-        // that failed. With each, whether a file missing from it can be told gone.
-        private enum Reach { Listed, NotListed, Missing, Failed }
+        // A folder: listed; there and not listed (this user may not, or a link whose target won't); missing; a look that
+        // failed (a share or drive that doesn't answer); or a look refused (this user may not read it). With each, whether
+        // a file missing from it can be told gone.
+        private enum Reach { Listed, NotListed, Missing, Failed, Refused }
 
-        private enum Found { Yes, No, CantTell }
-
-        private const int MostLinksFollowed = 8;
+        private enum Found { Yes, No, CantTell, Refused }
 
         private readonly Dictionary<string, (Reach Reach, bool CanTell)> _known = new(StringComparer.OrdinalIgnoreCase);
-        private int _following;
+        private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase); // folders being decided
 
         /// <summary>Test seam: how often this prune has looked at the disk (a path's attributes, or a folder's listing).</summary>
         internal int Looks { get; private set; }
+
+        /// <summary>Test seam: how a path's attributes are read (a refused look, or a dropped call, can't be made with ACLs).</summary>
+        internal Func<string, FileAttributes> ReadAttributes { get; init; } = File.GetAttributes;
 
         public Look At(string path)
         {
@@ -439,7 +452,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 Found.Yes when attributes.HasFlag(FileAttributes.Directory) => Look.Gone, // a folder in its place: L-1
                 Found.Yes => Look.There,
                 Found.No => Look.Gone,
-                _ => Look.OutOfReach,
+                _ => Look.OutOfReach, // its look failed, or was refused
             };
         }
 
@@ -455,18 +468,28 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     continue;
                 if (that.Reach is Reach.Missing or Reach.Failed)
                     return _known[folder] = that; // below a folder missing, or whose look failed: the same, unlooked
-                break; // below one that's there: looked at itself (it may list below one that doesn't: L-2)
+                break; // below one that's there, or whose look was refused: looked at itself (it may list: L-2, round 7)
             }
-            var answer = LookFor(folder, out var attributes) switch
+            if (!_open.Add(folder))
+                return (Reach.Failed, false); // links round in a loop: can't tell, and not kept (round 7, R7-4)
+            try
             {
-                Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
-                Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, true), // a file in its place
-                Found.Yes when Lists(folder) => (Reach.Listed, true),
-                Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => (Reach.NotListed, ItsTargetIsGone(folder)),
-                Found.Yes => (Reach.NotListed, false),
-                _ => (Reach.Failed, Climb(folder)),
-            };
-            return _known[folder] = answer;
+                var answer = LookFor(folder, out var attributes) switch
+                {
+                    Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
+                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, true), // a file in its place
+                    Found.Yes when Lists(folder) => (Reach.Listed, true),
+                    Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => BehindALink(folder),
+                    Found.Yes => (Reach.NotListed, false),
+                    Found.Refused => (Reach.Refused, false),
+                    _ => (Reach.Failed, Climb(folder)),
+                };
+                return _known[folder] = answer;
+            }
+            finally
+            {
+                _open.Remove(folder);
+            }
         }
 
         // A failed look: the folders above are looked at too, as for a missing one, so a share that's gone answers for
@@ -477,54 +500,68 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             return false;
         }
 
-        // A link that won't list: gone, if its final target was deleted on a drive that's there (round 6, L-4); out of
-        // reach if that's on a drive or share that's gone, can't be listed, or can't be found out.
-        private bool ItsTargetIsGone(string link)
+        // A link that won't list is what its final target is: missing (deleted on a drive that's there: its files gone,
+        // round 6, L-4; on a drive or share that's gone: out of reach), or a look that failed; and that's answered for
+        // every folder below the link without a look (round 7, R7-5). One Windows can't follow to its end (to a file, or
+        // round in a loop) is decided by where it points first: a file there is a folder gone (round 7, R7-2).
+        private (Reach Reach, bool CanTell) BehindALink(string link)
         {
-            if (_following >= MostLinksFollowed)
-                return false;
             string? target;
             try
             {
+                Looks++;
                 target = Directory.ResolveLinkTarget(link, returnFinalTarget: true)?.FullName;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return PointsAtAFile(link) ? (Reach.Missing, true) : (Reach.NotListed, false);
+            }
+            if (target is null)
+                return (Reach.NotListed, false); // a reparse point that isn't a link (a cloud or deduplicated folder)
+            return Folder(Path.TrimEndingDirectorySeparator(target)) switch
+            {
+                (Reach.Missing, var canTell) => (Reach.Missing, canTell),
+                (Reach.Failed, _) => (Reach.Failed, false),
+                _ => (Reach.NotListed, false), // there and not listed, refused, or listed a moment later: can't tell
+            };
+        }
+
+        private bool PointsAtAFile(string link)
+        {
+            try
+            {
+                Looks++;
+                var first = Directory.ResolveLinkTarget(link, returnFinalTarget: false)?.FullName;
+                return first is not null && LookFor(first, out var attributes) == Found.Yes
+                    && !attributes.HasFlag(FileAttributes.Directory);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 return false;
             }
-            if (target is null)
-                return false;
-            target = Path.TrimEndingDirectorySeparator(target);
-            if (string.Equals(target, link, StringComparison.OrdinalIgnoreCase))
-                return false;
-            _following++;
-            try
-            {
-                return Folder(target) is (Reach.Missing, true);
-            }
-            finally
-            {
-                _following--;
-            }
         }
 
-        // There, not there, or a look that failed for another reason (a share dropping a call, a drive not ready, access
-        // refused): a failed look is no verdict (round 5, F-4; taxonomy 13). File.Exists and Directory.Exists say false
-        // for both of the last two.
+        // There, not there, a look that failed for another reason (a share dropping a call, a drive not ready), or one
+        // refused: neither of the last two is a verdict (round 5, F-4; taxonomy 13). File.Exists and Directory.Exists say
+        // false for all three. A refused look isn't passed down: a folder below may be readable (round 7).
         private Found LookFor(string path, out FileAttributes attributes)
         {
             Looks++;
             attributes = default;
             try
             {
-                attributes = File.GetAttributes(path); // a junction's or link's own, not its target's
+                attributes = ReadAttributes(path); // a junction's or link's own, not its target's
                 return Found.Yes;
             }
             catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
             {
                 return Found.No;
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            catch (UnauthorizedAccessException)
+            {
+                return Found.Refused;
+            }
+            catch (IOException)
             {
                 return Found.CantTell;
             }
