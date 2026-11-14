@@ -17,9 +17,8 @@ namespace Aperture.Core.Annotations;
 /// note is appended, never overwritten). Nothing is ever deleted by an import.
 /// The lookup is by the path the entry resolves to: this library's folder, then the entry's path inside it (or, for
 /// rule 3 below, the entry's own path). One that differs from the path the file's tags are kept under only in a
-/// non-ASCII letter's case (exported where a folder inside the library's, or the file, is spelled the other way: on
-/// another PC, say) isn't found: it's saved as a row of its own, which, written last, is the one shown, the file's own
-/// tags kept but not shown. Onto a file whose tags are two such rows already, it's merged into the one spelled as the
+/// non-ASCII letter's case, anywhere in it (exported on another PC, say), isn't found: it's saved as a row of its own,
+/// which, written last, is the one shown, the file's own tags kept but not shown. Onto a file whose tags are two such rows already, it's merged into the one spelled as the
 /// resolved path is (if one is), which, written last, then shows (the 0.9.2 plan's M4; merging such rows is a task of
 /// its own).
 /// </summary>
@@ -36,8 +35,8 @@ public sealed class AnnotationTransfer(AnnotationStore annotations, RootStore ro
     };
 
     /// <summary>
-    /// Writes every non-empty annotation the window shows to <paramref name="filePath"/> (of rows the window takes for
-    /// one path, only the one shown: see <see cref="AnnotationStore.GetAll"/>). Returns the entry count.
+    /// Writes every non-empty annotation, as the window loads them, to <paramref name="filePath"/> (of rows the window
+    /// takes for one path, only the one shown: see <see cref="AnnotationStore.GetAll"/>). Returns the entry count.
     /// </summary>
     public int Export(string filePath)
     {
