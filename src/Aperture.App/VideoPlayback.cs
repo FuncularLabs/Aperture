@@ -24,6 +24,8 @@ public sealed class VideoPlayback : ObservableObject
     private bool _isPlaying;
     private bool _hasFailed;
     private bool _atEnd;
+    // How far before its end a player may be when it says it has ended (its last frame, rounding).
+    private static readonly TimeSpan EndSlack = TimeSpan.FromSeconds(0.5);
     private bool _isMuted;
     private double _volume;
     private bool _soundUnsaved; // a volume set while a video plays: saved once, as it's left (a slider drag sets many)
@@ -326,6 +328,10 @@ public sealed class VideoPlayback : ObservableObject
     private void OnEnded(object? sender, EventArgs e)
     {
         if (!ReferenceEquals(sender, _player) || _player is not { } player)
+            return;
+        // The end comes as an event, after the fact: moved back since (the bar dragged off its end, two seeks in a turn),
+        // it plays or holds where it was moved, and this end is old news (round 5, seed 36 of RealPlayerSequenceTests).
+        if (_duration is { } length && player.Position < length - EndSlack)
             return;
         _atEnd = true;
         IsPlaying = false; // the player itself isn't paused: paused at its end, a seek back lands at 0:00 (round 1, F1)

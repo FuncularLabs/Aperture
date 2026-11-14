@@ -235,6 +235,9 @@ public class RealPlayerSequenceTests
     [InlineData(6)]
     [InlineData(7)]
     [InlineData(8)]
+    [InlineData(25)] // 25, 36 and 39 find round 3's H-1 (a pause counted as it's posted): round 4, N-3
+    [InlineData(36)]
+    [InlineData(39)]
     public void ASequenceOfPlaysPausesSeeksAndDrags_LeavesTheShownStateTrue(int seed)
     {
         WithPlayback((playback, player) =>

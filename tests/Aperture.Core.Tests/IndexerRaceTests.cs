@@ -7,7 +7,8 @@ namespace Aperture.Core.Tests;
 /// <summary>
 /// A run's count and its reads are apart in time (0.9.2 round 2, R2-4 and OOR-1): a file can vanish, be locked, or be
 /// moved in or out by Move to… meanwhile, or the folder go away. None of that ends the run, loses a row it shouldn't,
-/// or keeps one it shouldn't: each test of round 3 ends on <see cref="AssertTheRowsAreTheFiles"/>.
+/// or keeps one it shouldn't: from round 3 on, the tests end on <see cref="AssertTheRowsAreTheFiles"/> where the files
+/// are all there to read.
 /// </summary>
 public class IndexerRaceTests
 {
@@ -198,49 +199,250 @@ public class IndexerRaceTests
         AssertTheRowsAreTheFiles(scope, root);
     }
 
-    [Fact]
-    public void AFolderGoneMidRun_KeepsItsRows()
+    // --- Round 4 (F1, F2): a row goes only when its file's absence can be told. A folder deleted or renamed on a drive
+    // that's there goes, as in 0.9.1; one whose drive or share is gone, or reached through a link to one, keeps its rows
+    // for when it's back. (Round 3 kept them for any folder missing, deleted ones too, and pruned them behind a link.)
+
+    // A folder on a drive that can be unplugged and plugged back in: a junction to a folder moved away and back. Away,
+    // the junction is what Windows shows for a link to a drive that's gone: it's there, and it won't list.
+    private sealed class Drive
     {
-        // M-3: a drive unplugged or a share dropped mid-run made every later file "gone", and the prune took their rows.
+        private readonly string _target;
+
+        public Drive(string link, string target)
+        {
+            Directory.CreateDirectory(target);
+            Junction.Create(link, target);
+            (Link, _target) = (link, target);
+        }
+
+        public string Link { get; }
+
+        public string Combine(string name) => Path.Combine(Link, name);
+
+        public void Unplug() => Directory.Move(_target, _target + "-unplugged");
+
+        public void PlugBackIn() => Directory.Move(_target + "-unplugged", _target);
+    }
+
+    private static Root AddRoot(ApertureScope scope, string path) =>
+        scope.Roots.Add(new Root { Path = path, Alias = Path.GetFileName(path), AddedUtc = DateTime.UtcNow });
+
+    [Fact]
+    public void AFolderWhoseDriveGoesAwayMidRun_KeepsItsRows()
+    {
+        // M-3 (round 3), and F2: the drive goes as the run reads; behind a link it said the folder was there, and the
+        // files it hadn't read yet were "gone".
         using var scope = new ApertureScope();
+        var drive = new Drive(scope.Library.Combine("Photos"), scope.Library.Combine("drive"));
         foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" })
-            TestImages.Write(scope.Library.Combine("Photos", name), 32, 24);
-        var root = scope.Roots.Add(new Root { Path = scope.Library.Combine("Photos"), Alias = "Photos", AddedUtc = DateTime.UtcNow });
+            TestImages.Write(drive.Combine(name), 32, 24);
+        var root = AddRoot(scope, drive.Link);
         scope.Indexer.IndexRoot(root);
         foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" }) // all changed: each to be read again
-            File.SetLastWriteTimeUtc(scope.Library.Combine("Photos", name), DateTime.UtcNow.AddMinutes(-3));
+            File.SetLastWriteTimeUtc(drive.Combine(name), DateTime.UtcNow.AddMinutes(-3));
         scope.Indexer.Reading = _ =>
         {
             scope.Indexer.Reading = null;
-            Directory.Move(scope.Library.Combine("Photos"), scope.Library.Combine("Photos-away")); // as the first is read
+            drive.Unplug(); // as the first is read
         };
 
         var result = scope.Indexer.IndexRoot(root);
 
         Assert.Equal(0, result.Removed);
         Assert.Equal(3, scope.Items.GetForRoot(root.Id).Count);
-        Directory.Move(scope.Library.Combine("Photos-away"), scope.Library.Combine("Photos")); // back
+        drive.PlugBackIn();
         scope.Indexer.IndexRoot(root);
         AssertTheRowsAreTheFiles(scope, root);
     }
 
     [Fact]
-    public void AFolderMissingWhenItsRunStarts_KeepsItsRows()
+    public void AFolderWhoseDriveIsGoneWhenItsRunStarts_KeepsItsRows()
     {
-        // C0 (from before 0.9.2): a USB drive unplugged at launch; the count came back empty and the prune took every row.
+        // C0 (from before 0.9.2), and F2: the count came back empty and the prune took every row.
         using var scope = new ApertureScope();
+        var drive = new Drive(scope.Library.Combine("USB"), scope.Library.Combine("drive"));
         foreach (var name in new[] { "a.jpg", "b.jpg" })
-            TestImages.Write(scope.Library.Combine("USB", name), 32, 24);
-        var root = scope.Roots.Add(new Root { Path = scope.Library.Combine("USB"), Alias = "USB", AddedUtc = DateTime.UtcNow });
+            TestImages.Write(drive.Combine(name), 32, 24);
+        var root = AddRoot(scope, drive.Link);
         scope.Indexer.IndexRoot(root);
         var ids = scope.Items.GetForRoot(root.Id).Select(i => i.Id).Order().ToList();
-        Directory.Move(scope.Library.Combine("USB"), scope.Library.Combine("USB-unplugged"));
+        drive.Unplug();
 
         var result = scope.Indexer.IndexRoot(root);
 
         Assert.Equal(0, result.Removed);
         Assert.Equal(ids, scope.Items.GetForRoot(root.Id).Select(i => i.Id).Order());
-        Directory.Move(scope.Library.Combine("USB-unplugged"), scope.Library.Combine("USB"));
+        drive.PlugBackIn();
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFolderOnADriveLetterThatsGone_KeepsItsRows()
+    {
+        // The drive letter itself goes, as a USB drive's does: nothing above the folder is there to list.
+        using var scope = new ApertureScope();
+        var target = scope.Library.Combine("usb-drive");
+        foreach (var name in new[] { "a.jpg", "b.jpg" })
+            TestImages.Write(Path.Combine(target, "Photos", name), 32, 24);
+        var letter = Subst.FreeLetter();
+        Subst.Create(letter, target);
+        try
+        {
+            var root = AddRoot(scope, letter + @"\Photos");
+            scope.Indexer.IndexRoot(root);
+            Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
+            Subst.Remove(letter);
+
+            var result = scope.Indexer.IndexRoot(root);
+
+            Assert.Equal(0, result.Removed);
+            Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
+            Subst.Create(letter, target);
+            AssertTheRowsAreTheFiles(scope, root);
+        }
+        finally
+        {
+            if (Directory.Exists(letter + @"\"))
+                Subst.Remove(letter);
+        }
+    }
+
+    [Fact]
+    public void ASubfolderWhoseDriveIsGone_KeepsItsRows()
+    {
+        // F2, one level down: a folder of the root that's a link to a drive, unplugged.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("Photos", "a.jpg"), 32, 24);
+        var camera = new Drive(scope.Library.Combine("Photos", "Camera"), scope.Library.Combine("camera-drive"));
+        foreach (var name in new[] { "b.jpg", "c.jpg" })
+            TestImages.Write(camera.Combine(name), 32, 24);
+        var root = AddRoot(scope, scope.Library.Combine("Photos"));
+        scope.Indexer.IndexRoot(root);
+        Assert.Equal(3, scope.Items.GetForRoot(root.Id).Count);
+        camera.Unplug();
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(3, scope.Items.GetForRoot(root.Id).Count);
+        camera.PlugBackIn();
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void ARootDeletedOnADriveThatsThere_LosesItsRows()
+    {
+        // F1: deleted or renamed in Explorer, it kept tiles for files that were gone, for good, and nothing said so.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "a.jpg", Path.Combine("2019", "b.jpg"), Path.Combine("2019", "c.jpg"), Path.Combine("2020", "d.jpg") })
+            TestImages.Write(Path.Combine(scope.Library.Combine("Photos"), name), 32, 24);
+        var root = AddRoot(scope, scope.Library.Combine("Photos"));
+        scope.Indexer.IndexRoot(root);
+        Directory.Move(scope.Library.Combine("Photos"), scope.Library.Combine("Photos, renamed"));
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(4, result.Removed);
+        Assert.Empty(scope.Items.GetForRoot(root.Id));
+    }
+
+    [Fact]
+    public void ASubfolderDeleted_LosesItsRows()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("a.jpg"), 32, 24);
+        foreach (var name in new[] { "b.jpg", "c.jpg" })
+            TestImages.Write(scope.Library.Combine("trip", name), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        Directory.Delete(scope.Library.Combine("trip"), recursive: true);
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(2, result.Removed);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AVideoWhoseDriveGoesAwayMidRun_KeepsItsRowAsItWas()
+    {
+        // F4 / N-2: a video's read doesn't throw for a missing file (the shell's fallback answers), so a video due a
+        // read after its drive went was read anyway: its row took the new time and lost its size, for good.
+        using var scope = new ApertureScope();
+        var drive = new Drive(scope.Library.Combine("Camera"), scope.Library.Combine("drive"));
+        TestImages.Write(drive.Combine("a.jpg"), 32, 24);
+        File.WriteAllText(drive.Combine("v.mp4"), "a video");
+        var root = AddRoot(scope, drive.Link);
+        scope.Indexer.IndexRoot(root);
+        var video = scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo);
+        using (var connection = scope.Database.OpenMetadata())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE items SET width = 512, height = 288 WHERE id = @id;"; // a real video's size
+            command.Parameters.AddWithValue("@id", video.Id);
+            command.ExecuteNonQuery();
+        }
+        foreach (var name in new[] { "a.jpg", "v.mp4" }) // both changed: each to be read again
+            File.SetLastWriteTimeUtc(drive.Combine(name), DateTime.UtcNow.AddMinutes(-3));
+        scope.Indexer.Reading = rel =>
+        {
+            if (rel != "a.jpg")
+                return;
+            scope.Indexer.Reading = null;
+            drive.Unplug(); // as the photo is read, before the video's turn
+        };
+
+        scope.Indexer.IndexRoot(root);
+
+        var kept = scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo);
+        Assert.Equal((video.MTimeUtc, 512, 288), (kept.MTimeUtc, kept.Width ?? 0, kept.Height ?? 0)); // as it was
+        drive.PlugBackIn();
+        scope.Indexer.IndexRoot(root);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_OfAFileSkippedAsOnlineOnly_KeepsItsRow()
+    {
+        // F3: the any-case check counted a file skipped under Skip as indexed, and its only row (under the old name)
+        // went: the file left the view, against C2. The row stays until a run reads the file under its new name.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("local.jpg"), 32, 24);
+        TestImages.Write(scope.Library.Combine("CLOUD.JPG"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var cloud = scope.Library.Combine("cloud.jpg");
+        File.Move(scope.Library.Combine("CLOUD.JPG"), cloud);
+        File.SetAttributes(cloud, File.GetAttributes(cloud) | FileAttributes.Offline);
+        scope.Indexer.RescanAfter = TimeSpan.FromMinutes(5); // answered at once: no second count
+
+        var result = scope.Indexer.IndexRoot(root, null, default, true, (_, _) => Indexing.OnlineOnlyChoice.Skip);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(["CLOUD.JPG", "local.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath).Order(StringComparer.Ordinal));
+        scope.Indexer.IndexRoot(root, null, default, true, (_, _) => Indexing.OnlineOnlyChoice.Now);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_OfAFileLockedAsItsRead_KeepsItsRow()
+    {
+        // F3: the same for a file whose read failed (OOR-1: one still there keeps its row).
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("IMG_1.JPG"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var renamed = scope.Library.Combine("img_1.jpg");
+        File.Move(scope.Library.Combine("IMG_1.JPG"), renamed);
+
+        IndexResult result;
+        using (new FileStream(renamed, FileMode.Open, FileAccess.Read, FileShare.None))
+            result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal((1, 0), (result.Failed, result.Removed));
+        Assert.Equal(["IMG_1.JPG"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath));
+        scope.Indexer.IndexRoot(root);
         AssertTheRowsAreTheFiles(scope, root);
     }
 

@@ -34,8 +34,10 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - Renaming the folder you're in no longer leaves nothing selected in the folder list.
 - Indexing no longer stops at a file that's in use, or deleted or moved while it runs; it
   carries on with the rest.
-- A folder on a drive that isn't plugged in (or a share that's gone) keeps its photos in
-  Aperture until the drive is back, instead of being emptied by the next index.
+- A folder on a drive that isn't plugged in, or on a network share that can't be reached (also
+  through a shortcut-style link to one), keeps its photos in Aperture until it's back, instead
+  of being emptied by the next index. A folder that was deleted or renamed, on a drive that's
+  there, is still emptied, as before.
 
 ## [0.9.1] - 2026-11-13
 

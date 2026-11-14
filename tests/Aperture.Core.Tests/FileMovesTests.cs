@@ -67,8 +67,6 @@ public class FileMovesTests : IDisposable
 
     private string To(string name) => Path.Combine(_to, name);
 
-    // Holds the library's write lock, as a run's open batch does; let go (rolled back) when disposed, so the pooled
-    // connection goes back to the pool without a transaction.
     // The thumbnails' file held, as a run's open batch holds it.
     private IDisposable HoldTheThumbnails()
     {
@@ -77,6 +75,8 @@ public class FileMovesTests : IDisposable
         return new Held(connection, transaction);
     }
 
+    // Holds the library's write lock, as a run's open batch does; let go (rolled back) when disposed, so the pooled
+    // connection goes back to the pool without a transaction.
     private IDisposable HoldTheLibrary()
     {
         var connection = _scope.Database.OpenMetadata();
@@ -819,6 +819,26 @@ public class FileMovesTests : IDisposable
                 @"C:\a.jpg", @"E:\a.jpg", placed: false));
         Assert.Equal(MoveOutcome.InUse,
             FileMoves.OutcomeOf(new IOException("in use", unchecked((int)0x80070020)), @"C:\a.jpg", @"E:\a.jpg", placed: false));
+    }
+
+    [Fact]
+    public void ACopy_HeldOpenByAnotherProgramAsItsFlushed_StillMoves()
+    {
+        // Round 4, F5: the flush opened the new copy for itself alone, so a virus scanner, the search indexer or a sync
+        // client reading it just then turned a good move into "in use", and the copy was thrown away.
+        var a = Photo("a.jpg");
+        FileStream? reader = null;
+        _moves.ForceCopy = true;
+        _moves.BeforeFlush = copy => reader = new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        _moves.Copied = _ => reader?.Dispose();
+
+        var outcome = _moves.Move(a, _to).Outcome;
+        reader?.Dispose();
+
+        Assert.NotNull(reader);
+        Assert.Equal(MoveOutcome.Moved, outcome);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(To("a.jpg")));
     }
 
     [Fact]

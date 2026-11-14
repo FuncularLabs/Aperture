@@ -423,7 +423,8 @@ public class OnlineOnlyPromptTests
             };
 
             f.Vm.AddFolders([f.Folder("A"), f.Folder("B")]);
-            Pump(1500);
+            Assert.True(Sta.PumpUntil(() => f.Asked.Count > 0, Wait)); // a slow runner (round 4, N-e)
+            Pump(1500); // time for a second question, if one came
 
             Assert.Single(f.Asked);
             Assert.True(f.Library.ShutdownAsync().Wait(Wait)); // nothing waits on a question

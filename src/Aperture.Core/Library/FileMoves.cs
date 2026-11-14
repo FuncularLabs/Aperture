@@ -91,6 +91,9 @@ public sealed class FileMoves(ApertureDatabase database)
     /// <summary>Test seam: hears the temporary copy's path once it's made, before it's renamed.</summary>
     internal Action<string>? Copied { get; set; }
 
+    /// <summary>Test seam: hears the temporary copy's path once it's written, just before it's flushed to disk.</summary>
+    internal Action<string>? BeforeFlush { get; set; }
+
     /// <summary>Test seam: hears the bytes copied so far as a copy across drives goes (on the copying thread).</summary>
     internal Action<long>? CopyingChunk { get; set; }
 
@@ -248,7 +251,6 @@ public sealed class FileMoves(ApertureDatabase database)
             throw error switch
             {
                 ErrorRequestAborted => new OperationCanceledException(message),
-                ErrorEncryptionFailed => new IOException(message, unchecked((int)0x80070000 | error)),
                 ErrorAccessDenied => new UnauthorizedAccessException(message),
                 ErrorFileNotFound => new FileNotFoundException(message, from),
                 ErrorPathNotFound => new DirectoryNotFoundException(message),
@@ -257,8 +259,10 @@ public sealed class FileMoves(ApertureDatabase database)
         }
         ct.ThrowIfCancellationRequested();
         // On disk before the original goes (CopyFileEx doesn't flush): writable for the flush, its attributes set later.
+        // Shared: a virus scanner, the search indexer or a sync client may be reading the new file (round 4, F5).
         File.SetAttributes(copy, File.GetAttributes(copy) & ~FileAttributes.ReadOnly);
-        using (var written = new FileStream(copy, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        BeforeFlush?.Invoke(copy);
+        using (var written = new FileStream(copy, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
             written.Flush(flushToDisk: true); // round 3, L-2
         File.SetCreationTimeUtc(copy, File.GetCreationTimeUtc(from)); // CopyFileEx keeps the last-write time, not this
         File.SetLastWriteTimeUtc(copy, File.GetLastWriteTimeUtc(from));

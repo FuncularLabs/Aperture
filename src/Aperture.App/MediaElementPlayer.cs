@@ -8,7 +8,8 @@ namespace Aperture.App;
 /// Quick view's player: a WPF <see cref="MediaElement"/> (Windows' own media playback), made in code for each video and
 /// put in quick view's video host — never in XAML, so a PC without a media player still opens the window (making one
 /// there throws, and the video keeps its still). Closing it stops it, lets go of its file and takes it out of the host.
-/// Exercised by the opt-in <c>RealPlayerTests</c> (APERTURE_MEDIA_TESTS=1): CI has no media player.
+/// Exercised by the opt-in <c>RealPlayerTests</c> and <c>RealPlayerSequenceTests</c> (APERTURE_MEDIA_TESTS=1): CI has
+/// no media player.
 /// </summary>
 public sealed class MediaElementPlayer : IVideoPlayer
 {

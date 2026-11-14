@@ -164,6 +164,29 @@ public class VideoPlaybackTests
     }
 
     [Fact]
+    public void AnEndThePlayerWasMovedBackFrom_IsOldNews()
+    {
+        // Round 5 (seed 36 of RealPlayerSequenceTests, now and then): played, moved to its end and back in quick
+        // succession, the end came after the seek back. The video played on from there while the window showed it
+        // paused at its end.
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+        playback.Toggle();
+        playback.Seek(83);
+        playback.Seek(10);
+
+        _players[0].RaiseEndedAfterASeek();
+
+        Assert.True(playback.IsPlaying);
+        Assert.Equal(10, playback.PositionSeconds);
+        _players[0].PlayTo(83);
+        _players[0].RaiseEnded(); // it plays on to its end: that one counts
+        Assert.False(playback.IsPlaying);
+        Assert.Equal(83, playback.PositionSeconds);
+    }
+
+    [Fact]
     public void Seek_AfterTheEnd_PlaysFromThere()
     {
         var playback = Playback();

@@ -282,6 +282,16 @@ public class MoveFilesTests
     }
 
     [Fact]
+    public void TheSummary_SaysAFileCantStayEncrypted()
+    {
+        // Round 4, F6 / N-b: said of one file or many alike.
+        var folder = @"E:\Photos";
+        var summary = MainViewModel.MoveSummary([new FileMove(@"C:\Photos\a.jpg", folder + @"\a.jpg", MoveOutcome.CantStayEncrypted)], folder);
+
+        Assert.Contains("• 1 — encrypted, and that drive can't keep files encrypted", summary);
+    }
+
+    [Fact]
     public void AMovedOnlineOnlyFile_StaysInTheView_UnderSkip()
     {
         // Round 1 (lens 2, finding 2): its row moves with it, so the next run has nothing to read or ask about.

@@ -133,9 +133,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     {
         var (root, files, existing, nowTicks, onlineOnly) = (scan.Root, scan.Files, scan.Existing, scan.NowTicks, scan.OnlineOnly);
         bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) => scan.IsUnchanged(file, out row);
-        // Gone, not just out of reach: a folder that went away (an unplugged drive, a dropped share) leaves its files
-        // where they were, for when it's back (round 3, M-3).
-        bool Gone(string path) => !File.Exists(path) && Directory.Exists(root.Path);
+        // Not there to read now: never read (a video's read doesn't throw for a missing file, and would rewrite its row
+        // with no size: round 4, F4), and left out of what's seen. The prune decides whether it's gone or out of reach.
+        bool Missing(string path) => !File.Exists(path);
         bool ThumbsFresh(long itemId, ScannedFile file) => scan.ThumbsFresh(itemId, file);
         bool Downloads(ScannedFile file) => scan.Downloads(file);
 
@@ -143,6 +143,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         // the rest, or read them in order as before.
         ct.ThrowIfCancellationRequested();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        // The files whose rows this run wrote or kept as they are, in any case: a row under another case of one of these
+        // is the old name's, and goes. Not the files skipped or whose read failed: their old rows stay (round 4, F3).
+        var indexed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skippedOnlineOnly = 0;
         var work = files;
         if (choice == OnlineOnlyChoice.Skip)
@@ -196,9 +199,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 var unchanged = IsUnchanged(file, out var row);
                 try
                 {
-                    if ((!unchanged || !ThumbsFresh(row.Id, file)) && Gone(file.FullPath))
+                    if ((!unchanged || !ThumbsFresh(row.Id, file)) && Missing(file.FullPath))
                     {
-                        // Gone since it was counted (moved, deleted): not read, not kept (round 2, R2-4).
+                        // Not there since it was counted (moved, deleted, its drive gone): not read (round 2, R2-4).
                         seen.Remove(file.RelPath);
                     }
                     else if (unchanged)
@@ -217,6 +220,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                                 thumbsGenerated += StoreThumbs(upsertThumb, row.Id, file.MTimeTicks, set, nowTicks);
                         }
                         skipped++;
+                        indexed.Add(file.RelPath);
                     }
                     else
                     {
@@ -228,6 +232,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                             failed++;
 
                         var itemId = UpsertItem(upsertItem, root.Id, file, md, set, nowTicks);
+                        indexed.Add(file.RelPath);
                         if (set is not null)
                             thumbsGenerated += StoreThumbs(upsertThumb, itemId, file.MTimeTicks, set, nowTicks);
 
@@ -239,9 +244,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // A file that can't be read just now (in use, gone mid-read) no longer ends the run (OOR-1): one gone
-                    // isn't kept; one still there keeps its row as it was, for the next run to read.
-                    if (Gone(file.FullPath))
+                    // A file that can't be read just now (in use, gone mid-read) no longer ends the run (OOR-1): one not
+                    // there is left to the prune; one still there keeps its row as it was, for the next run to read.
+                    if (Missing(file.FullPath))
                         seen.Remove(file.RelPath);
                     else
                         failed++;
@@ -288,25 +293,28 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         {
             RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly, OnlineOnlyLast = onlineOnlyLast,
         });
-        // A row not seen is pruned unless its file is there after all, in the run's scope and not seen under another case
-        // (moved in by Move to… after the count passed its folder: round 2, R2-4; a rename that changed only the case is
-        // the old name's row, and goes: round 3, M-2). Out of scope (a folder without subfolders, videos left out) it
-        // goes. A folder that can't be reached prunes nothing: its files aren't gone, only out of reach (round 3, M-3, C0).
+        // A row not seen goes if it's out of the run's scope (a folder without subfolders, videos left out). In scope, a
+        // row whose file is there after all stays (moved in by Move to… after the count passed its folder: round 2,
+        // R2-4), unless this run indexed that file under another case (a rename of only the case: the old name's row,
+        // round 3, M-2). A row whose file is missing goes only if its absence can be told (round 4, F1, F2).
+        bool InScope(string relPath) =>
+            (root.Recursive || !relPath.Contains(Path.DirectorySeparatorChar))
+            && SupportedFormats.IsSupported(Path.GetExtension(relPath).ToLowerInvariant(), scan.IncludeVideos);
         var removed = new List<(long Id, string RelPath)>();
-        if (Directory.Exists(root.Path))
+        var absence = new Absence();
+        foreach (var (relPath, item) in existing)
         {
-            var seenAnyCase = new HashSet<string>(seen, StringComparer.OrdinalIgnoreCase);
-            bool StillThere(string relPath) =>
-                !seenAnyCase.Contains(relPath)
-                && (root.Recursive || !relPath.Contains(Path.DirectorySeparatorChar))
-                && SupportedFormats.IsSupported(Path.GetExtension(relPath).ToLowerInvariant(), scan.IncludeVideos)
-                && File.Exists(Path.Combine(root.Path, relPath));
-            foreach (var (relPath, item) in existing)
+            ct.ThrowIfCancellationRequested(); // a big prune on a slow share stops when asked (round 3, N-3)
+            if (seen.Contains(relPath))
+                continue;
+            var goes = !InScope(relPath) || absence.At(Path.Combine(root.Path, relPath)) switch
             {
-                ct.ThrowIfCancellationRequested(); // a big prune on a slow share stops when asked (round 3, N-3)
-                if (!seen.Contains(relPath) && !StillThere(relPath))
-                    removed.Add((item.Id, relPath));
-            }
+                Absence.Look.There => indexed.Contains(relPath), // indexed under another case: the old name's row
+                Absence.Look.Gone => true,
+                _ => false, // out of reach: kept for when it's back
+            };
+            if (goes)
+                removed.Add((item.Id, relPath));
         }
         var removedIds = removed.Count > 0 ? DeleteItems(meta, root.Id, removed) : [];
         if (removedIds.Count > 0)
@@ -377,6 +385,56 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             stored++;
         }
         return stored;
+    }
+
+    /// <summary>
+    /// Where a row's file is, for the prune: there; gone, and that can be told; or missing where that can't be told. A
+    /// missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder deleted
+    /// or renamed on a drive that's there can be told, and its rows go, as in 0.9.1. An unplugged drive, a dropped share,
+    /// or a junction or link to either can't be (a link to one that's gone is there, and won't list): its files keep
+    /// their rows for when it's back (round 4, F1, F2). The folder is looked at first, once per prune, and nothing below
+    /// a folder found missing is looked at: a share that's gone is looked for once, not once per folder or file of it
+    /// (each look at a server that doesn't answer can take seconds).
+    /// </summary>
+    internal sealed class Absence
+    {
+        internal enum Look { There, Gone, OutOfReach }
+
+        private enum Reach { Listed, NotListed, Missing }
+
+        // A folder: listed (a missing file in it is gone), there but not listed, or missing; and, for a missing one,
+        // whether the nearest folder above it that's there is listed.
+        private readonly Dictionary<string, (Reach Reach, bool CanTell)> _known = new(StringComparer.OrdinalIgnoreCase);
+
+        public Look At(string path)
+        {
+            var (reach, canTell) = Folder(Path.GetDirectoryName(path));
+            if (reach == Reach.Missing)
+                return canTell ? Look.Gone : Look.OutOfReach; // the file can't be there: not looked for
+            if (File.Exists(path))
+                return Look.There;
+            return reach == Reach.Listed ? Look.Gone : Look.OutOfReach;
+        }
+
+        private (Reach Reach, bool CanTell) Folder(string? folder)
+        {
+            if (folder is null)
+                return (Reach.Missing, false); // above a drive's or share's root: nothing there to list
+            if (_known.TryGetValue(folder, out var known))
+                return known;
+            for (var above = Path.GetDirectoryName(folder); above is not null; above = Path.GetDirectoryName(above))
+            {
+                if (!_known.TryGetValue(above, out var that))
+                    continue;
+                if (that.Reach == Reach.Missing)
+                    return _known[folder] = that; // under a folder that's missing: missing too, and the same answer
+                break;
+            }
+            var answer = !Directory.Exists(folder) ? (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell)
+                : CatalogRegistry.FolderIsReachable(folder) ? (Reach.Listed, true)
+                : (Reach.NotListed, false);
+            return _known[folder] = answer;
+        }
     }
 
     // Deletes each row only if it's still where the run read it: a row Move to… took elsewhere since is left alone

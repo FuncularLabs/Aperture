@@ -34,7 +34,8 @@ on your machine — it never uploads anything or phones home.
   top-level folders into the order you like. Indexing runs in the background with a progress
   bar along the bottom of the window, so you can keep browsing. Before it would download
   online-only cloud files, it asks whether to skip them, index them after the rest, or now
-  (kept per folder if you like; change it from the folder's right-click menu).
+  (kept per folder if you like; change it from the folder's right-click menu). A folder on a
+  drive that isn't plugged in, or a share that can't be reached, keeps its photos until it's back.
 - **Move to…** from a file's right-click menu moves it (or all of a selection) to another folder,
   with its tags and notes; it asks first when the folder is outside this library's folders.
   Cut and Copy put the whole selection on the clipboard, for Explorer.

@@ -59,7 +59,19 @@ public sealed class FakeVideoPlayer : IVideoPlayer
         Opened?.Invoke(this, EventArgs.Empty);
     }
 
-    public void RaiseEnded() => Ended?.Invoke(this, EventArgs.Empty);
+    /// <summary>It has played to its end (there, as a MediaElement is when it says so).</summary>
+    public void RaiseEnded()
+    {
+        if (Duration is { } length)
+            _position = length;
+        Ended?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// The end it reached before a seek moved it, told only after the seek: a MediaElement's end comes as an event,
+    /// after the fact (round 5, seed 36 of <c>RealPlayerSequenceTests</c>).
+    /// </summary>
+    public void RaiseEndedAfterASeek() => Ended?.Invoke(this, EventArgs.Empty);
     public void RaiseFailed() => Failed?.Invoke(this, EventArgs.Empty);
 
     /// <summary>The last of play or pause it was told: what it's doing.</summary>

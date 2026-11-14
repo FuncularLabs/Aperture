@@ -128,7 +128,7 @@ public class OnlineOnlyDialogTests
 
         Assert.Equal(headline, text);
         Assert.Contains("downloads each one", body);
-        Assert.Contains("Skipped, none is downloaded", body); // what Enter and Esc do
+        Assert.Contains("Skipped, indexing downloads none of them", body); // what Enter and Esc do (round 4, N-f)
         Assert.Contains("until you choose otherwise from the folder's right-click menu", body);
     }
 }
