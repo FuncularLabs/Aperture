@@ -276,10 +276,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             .ToList();
 
         var vm = new AnnotationDialogVm(header, inputs, _availableTags);
-        var dialog = new AnnotationDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow };
-        if (dialog.ShowDialog() != true)
+        if (!ShowAnnotationDialog(vm))
             return;
 
+        // Each under its tile's own path, never the row shown for it (M4: for "σ.jpg" and "ς.jpg", two files the window
+        // takes for one path, that's the other file's).
         foreach (var input in inputs)
         {
             var (tags, note) = vm.ResolveFor(input);
@@ -287,6 +288,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         RefreshAnnotationsInPlace(targets);
     }
+
+    /// <summary>The tag dialog: true when it's saved. A seam, so tests drive the dialog's edits without a window.</summary>
+    internal Func<AnnotationDialogVm, bool> ShowAnnotationDialog { get; set; } = vm =>
+        new AnnotationDialog { DataContext = vm, Owner = System.Windows.Application.Current.MainWindow }.ShowDialog() == true;
 
     /// <summary>Reloads the annotation cache and refreshes the given tiles' badges/tooltips in place.</summary>
     private void RefreshAnnotationsInPlace(IEnumerable<TileVm> tiles)
@@ -1157,7 +1162,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         var current = AnnotationFor(tile.Row);
         var tags = current.Tags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList();
-        _library.SaveAnnotation(tile.FullPath, tags, current.Note);
+        _library.SaveAnnotation(tile.FullPath, tags, current.Note); // the tile's own path, as the dialog's (M4)
         RefreshAnnotationsInPlace([tile]);
     }
 
