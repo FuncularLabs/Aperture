@@ -1629,7 +1629,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private static string Reason(MoveOutcome outcome) => outcome switch
     {
-        MoveOutcome.NameTaken => "a file of that name is already there",
+        MoveOutcome.NameTaken => "a file or folder of that name is already there",
         MoveOutcome.AlreadyThere => "already in that folder",
         MoveOutcome.SourceGone => "no longer on disk",
         MoveOutcome.DestinationGone => "the folder isn't there any more",

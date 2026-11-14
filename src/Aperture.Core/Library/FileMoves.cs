@@ -8,7 +8,7 @@ public enum MoveOutcome
 {
     Moved,
 
-    /// <summary>A file of that name is already in the destination: neither is touched.</summary>
+    /// <summary>A file or folder of that name is already in the destination: neither is touched.</summary>
     NameTaken,
 
     /// <summary>It's in that folder already.</summary>
@@ -97,6 +97,9 @@ public sealed class FileMoves(ApertureDatabase database)
     /// <summary>Test seam: hears the bytes copied so far as a copy across drives goes (on the copying thread).</summary>
     internal Action<long>? CopyingChunk { get; set; }
 
+    /// <summary>Test seam: runs just before a move on one volume renames the file (after its checks and its wait).</summary>
+    internal Action? BeforeRenaming { get; set; }
+
     /// <summary>Test seam: runs just before the write is committed (and before it's made again).</summary>
     internal Action? Committing { get; set; }
 
@@ -129,8 +132,9 @@ public sealed class FileMoves(ApertureDatabase database)
         if (File.Exists(to) || Directory.Exists(to))
             return Result(MoveOutcome.NameTaken);
 
-        var acrossDrives = ForceCopy
-            || !string.Equals(Path.GetPathRoot(from), Path.GetPathRoot(folder), StringComparison.OrdinalIgnoreCase);
+        // By the volume, not the drive letter (round 14, R F-1): renamed onto another volume (a junction or link on this
+        // drive's letter to another drive), Windows copies the file itself, not stopped, not flushed, under its own name.
+        var acrossDrives = ForceCopy || !OnOneVolume(Path.GetDirectoryName(from)!, folder);
         var copy = to + CopySuffix;
         var copyMade = false;
         var placed = false;
@@ -167,7 +171,10 @@ public sealed class FileMoves(ApertureDatabase database)
                 DeleteOriginal(from);
             }
             else
+            {
+                BeforeRenaming?.Invoke();
                 File.Move(from, to, overwrite: false);
+            }
             moved = true;
             if (rekey is not null)
             {
@@ -213,6 +220,41 @@ public sealed class FileMoves(ApertureDatabase database)
         {
             return tagged ? MoveOutcome.MovedTagsBehind : MoveOutcome.Moved;
         }
+    }
+
+    /// <summary>
+    /// Whether two folders are on one volume, by what they lead to (through any junction, link, mount point or drive
+    /// letter), not by their drive letters (round 14, R F-1). Can't tell: not one, so the copy path, which is right on
+    /// one volume too, only slower. Two volumes with one serial number (a disk cloned whole) are taken for one.
+    /// </summary>
+    internal static bool OnOneVolume(string a, string b) => VolumeOf(a) is { } x && VolumeOf(b) is { } y && x == y;
+
+    private static uint? VolumeOf(string folder)
+    {
+        using var handle = CreateFile(folder, 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open,
+            FileFlagBackupSemantics, IntPtr.Zero); // opens the folder a link leads to; reads nothing
+        return !handle.IsInvalid && GetFileInformationByHandle(handle, out var info) ? info.VolumeSerialNumber : null;
+    }
+
+    private const uint FileFlagBackupSemantics = 0x02000000;
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateFileW",
+        CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
+        string name, uint access, FileShare share, IntPtr security, FileMode mode, uint flags, IntPtr template);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+        Microsoft.Win32.SafeHandles.SafeFileHandle file, out ByHandleFileInformation info);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint Attributes;
+        public uint CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh;
+        public uint VolumeSerialNumber;
+        public uint SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
     }
 
     // --- Copying across drives (CopyFileEx: its other streams, encryption and times go with it; stopped on the token)

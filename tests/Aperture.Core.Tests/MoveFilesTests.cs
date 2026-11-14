@@ -225,7 +225,7 @@ public class MoveFilesTests
 
             var summary = Assert.Single(f.Summaries);
             Assert.Contains("Moved 1 of 2 files", summary);
-            Assert.Contains("1 — a file of that name is already there", summary);
+            Assert.Contains("1 — a file or folder of that name is already there", summary); // round 14, N-2
         });
     }
 

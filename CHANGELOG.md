@@ -29,8 +29,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ### Fixed
 - **Cut and Copy take the whole selection.** With several files selected, Cut and Copy (and
-  `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view,
-  its right-click menu's Cut and Copy act on the item shown.
+  `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view
+  and the preview pane, their right-click menu's Cut and Copy act on the item shown.
 - Renaming the folder you're in no longer leaves nothing selected in the folder list.
 - Indexing no longer stops at a file that's in use, or deleted or moved while it runs; it
   carries on with the rest.

@@ -34,7 +34,7 @@ dates. Items are checked off as they ship (each lands a `CHANGELOG.md` entry whe
 
 ## Copy, cut & paste
 
-- [ ] **Fix multi-select copy/cut** *(bug)* — copying or cutting a multi-file selection currently acts on
+- [x] **Fix multi-select copy/cut** *(bug)* — copying or cutting a multi-file selection currently acts on
   only the **first** item, so a paste transfers just one file. Operate on the whole selection.
 
 - [ ] **Carry tags & notes on paste** *(enhancement, related to the above)* — when a copy/cut → paste moves

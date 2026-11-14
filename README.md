@@ -39,7 +39,8 @@ on your machine — it never uploads anything or phones home.
   (unless another drive takes its letter meanwhile).
 - **Move to…** from a file's right-click menu moves it (or all of a selection) to another folder,
   with its tags and notes; it asks first when the folder is outside this library's folders.
-  Cut and Copy put the whole selection on the clipboard, for Explorer.
+  Cut and Copy put the whole selection on the clipboard, for Explorer (in quick view and the
+  preview pane, the item shown).
 - **Separate libraries.** Keep a *Work* and a *Personal* library (or more) that never see
   each other's folders, tags, or search results. They're listed under **LIBRARIES** in the
   folder pane: click one to switch to it, drag one to reorder the list. Each library has its

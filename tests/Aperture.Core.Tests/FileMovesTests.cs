@@ -21,6 +21,12 @@ public sealed class OtherDriveFactAttribute : FactAttribute
                 StringComparison.OrdinalIgnoreCase))
             Skip = "Needs APERTURE_OTHER_DRIVE_DIR: a folder on a drive other than the temp folder's.";
     }
+
+    /// <summary>
+    /// That folder, spelled as the code under test spells a path (D:/x is D:\x): read back under the variable's own
+    /// spelling (forward slashes), a moved file's tags weren't found (round 15).
+    /// </summary>
+    public static string Folder => Path.GetFullPath(Environment.GetEnvironmentVariable("APERTURE_OTHER_DRIVE_DIR")!);
 }
 
 public class FileMovesTests : IDisposable
@@ -536,13 +542,18 @@ public class FileMovesTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)] // across drives: found before anything is copied (round 13, D F-1)
-    public void AFolderOfTheFilesName_IsANameTaken_AndNothingIsCopied(bool acrossDrives)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)] // across drives, a file of that name: found before it's copied (round 14, R F-2, D F-1)
+    [InlineData(true, true)] // a folder of that name (round 13, D F-1)
+    public void ANameTaken_ByAFileOrAFolder_IsSaid_AndNothingIsCopied(bool acrossDrives, bool aFolder)
     {
         var a = Photo("a.jpg");
         _tags.Save(a, ["trip"], "");
-        Directory.CreateDirectory(To("a.jpg"));
+        if (aFolder)
+            Directory.CreateDirectory(To("a.jpg"));
+        else
+            File.WriteAllText(To("a.jpg"), "theirs");
         var copied = new List<string>();
         _moves.ForceCopy = acrossDrives;
         _moves.Copied = copied.Add;
@@ -551,9 +562,81 @@ public class FileMovesTests : IDisposable
 
         Assert.Empty(copied);
         Assert.True(File.Exists(a));
-        Assert.True(Directory.Exists(To("a.jpg")));
-        Assert.Empty(Directory.EnumerateFileSystemEntries(To("a.jpg")));
+        if (aFolder)
+            Assert.Empty(Directory.EnumerateFileSystemEntries(To("a.jpg")));
+        else
+            Assert.Equal("theirs", File.ReadAllText(To("a.jpg")));
         Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [Fact]
+    public void AFileArrivingAfterTheCheck_IsNotOverwritten()
+    {
+        // Round 14, D F-2: the check is made before the move waits (for the library's write, BusyTimeout); a file that
+        // arrives meanwhile, on one drive, is refused by the rename itself, which must never overwrite.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        _moves.BeforeRenaming = () => File.WriteAllText(To("a.jpg"), "theirs");
+
+        Assert.Equal(MoveOutcome.NameTaken, _moves.Move(a, _to).Outcome);
+
+        Assert.Equal("theirs", File.ReadAllText(To("a.jpg")));
+        Assert.True(File.Exists(a));
+        Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [Fact]
+    public void OneVolume_IsToldByTheVolume_NotTheDriveLetter()
+    {
+        // Round 14, R F-1: a junction, a link or a drive letter (subst) can lead to one volume or another whatever the
+        // letters say. Can't tell (a folder missing): not one, so the copy path, which is right on one volume too.
+        using var dir = new TempDir();
+        Directory.CreateDirectory(dir.Combine("a"));
+        Directory.CreateDirectory(dir.Combine("b"));
+        Junction.Create(dir.Combine("link"), dir.Combine("b"));
+
+        Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("b")));
+        Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("link")));
+        Assert.False(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("missing")));
+        var letter = Subst.CreateOnAFreeLetter(dir.Path);
+        try
+        {
+            Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), letter + @"\b")); // another letter, the same volume
+        }
+        finally
+        {
+            Subst.Remove(letter);
+        }
+    }
+
+    [OtherDriveFact]
+    public void AFolderBehindALinkToAnotherDrive_IsMovedAsAcrossDrives()
+    {
+        // Round 14, R F-1: the destination has this drive's letter and another volume (a junction). A rename made Windows
+        // copy the file itself: not stopped by the token, not flushed, under the file's own name (a move cut short left a
+        // full-size broken file there). Now it's copied as across drives.
+        var other = OtherDriveFactAttribute.Folder;
+        var target = Path.Combine(other, "aperture-move-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(target);
+        var link = _scope.Library.Combine("elsewhere");
+        Junction.Create(link, target);
+        try
+        {
+            var a = Photo("a.jpg");
+            var copied = new List<string>();
+            _moves.Copied = copied.Add;
+
+            Assert.Equal(MoveOutcome.Moved, _moves.Move(a, link).Outcome);
+
+            Assert.Single(copied);
+            Assert.False(File.Exists(a));
+            Assert.True(File.Exists(Path.Combine(link, "a.jpg")));
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(target, recursive: true);
+        }
     }
 
     [Fact]
@@ -901,7 +984,7 @@ public class FileMovesTests : IDisposable
     public void AcrossRealDrives_Works()
     {
         // Opt-in: APERTURE_OTHER_DRIVE_DIR names a folder on another drive. Never chosen for you; skipped without it.
-        var other = Environment.GetEnvironmentVariable("APERTURE_OTHER_DRIVE_DIR")!;
+        var other = OtherDriveFactAttribute.Folder;
         var target = Path.Combine(other, "aperture-move-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(target);
         try
