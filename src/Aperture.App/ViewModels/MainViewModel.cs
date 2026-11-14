@@ -1632,9 +1632,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// (a device's name, such as NUL, doesn't end in a dot or a space: round 20, D F-4).
     /// </summary>
     internal static string NothingMovedInto(string name) =>
-        $"Nothing was moved. Windows reads the name “{name}”" +
+        $"Nothing was moved. Windows doesn't read the name “{name}” as it's written" +
         (name.Length > 0 && name[^1] is '.' or ' ' ? " (it ends in a dot or a space)" : "") +
-        " as another folder's, so Aperture can't move files into it.";
+        ", so Aperture can't move files into that folder.";
 
     private static string Reason(MoveOutcome outcome) => outcome switch
     {

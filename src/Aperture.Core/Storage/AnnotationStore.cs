@@ -28,12 +28,21 @@ public sealed class AnnotationStore
             ? new Annotation { Tags = ParseTags(r.Tags), Note = r.Note }
             : Annotation.Empty;
 
-    /// <summary>Every annotation keyed by path — loaded once and cached by the UI.</summary>
-    public Dictionary<string, Annotation> GetAll() =>
-        _db.Provider.GetList<AnnotationRow>()
-            .ToDictionary(r => r.Path,
-                          r => new Annotation { Tags = ParseTags(r.Tags), Note = r.Note },
-                          StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Every annotation keyed by path — loaded once and cached by the UI, which compares paths with every letter's case
+    /// folded. The column folds only ASCII letters', so two rows can be one path to the UI ("Été\a.jpg" and "été\a.jpg":
+    /// a folder renamed so in Explorer, the file tagged again; or "σ.jpg" and "ς.jpg"): the one written last is kept,
+    /// and the load never fails on them, which stopped the library opening (0.9.2 review round 21; merging such rows is
+    /// a task of its own).
+    /// </summary>
+    public Dictionary<string, Annotation> GetAll()
+    {
+        var kept = new Dictionary<string, (long Ticks, Annotation Annotation)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in _db.Provider.GetList<AnnotationRow>())
+            if (!kept.TryGetValue(r.Path, out var other) || r.UpdatedTicks > other.Ticks)
+                kept[r.Path] = (r.UpdatedTicks, new Annotation { Tags = ParseTags(r.Tags), Note = r.Note });
+        return kept.ToDictionary(p => p.Key, p => p.Value.Annotation, StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>Distinct tags across all files, for pick lists / autocomplete.</summary>
     public List<string> GetAllTags()

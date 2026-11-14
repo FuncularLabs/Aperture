@@ -282,7 +282,7 @@ public sealed class FileMoves(ApertureDatabase database)
         }
         for (var i = 0; i < given.Length; i++)
             if (i >= read.Length || !string.Equals(given[i], read[i], StringComparison.OrdinalIgnoreCase))
-                return i == 0 ? given[^1] : given[i]; // read from another root (a device, such as NUL): by its own name
+                return i == 0 ? given[^1] : given[i]; // read from another root (a device such as NUL; a relative path, which no caller gives): its own last name
         return read.Length == given.Length ? null : path;
     }
 
@@ -556,23 +556,10 @@ public sealed class FileMoves(ApertureDatabase database)
     {
         using var read = database.OpenMetadata();
         using var count = read.CreateCommand();
-        count.CommandText = $"SELECT COUNT(*) FROM annotations WHERE {IsPath(read, "@from", from)} OR {IsPath(read, "@to", to)};";
+        count.CommandText = "SELECT COUNT(*) FROM annotations WHERE path = @from OR path = @to;";
         count.Parameters.AddWithValue("@from", from);
         count.Parameters.AddWithValue("@to", to);
         return Convert.ToInt64(count.ExecuteScalar()) > 0;
-    }
-
-    // The SQL that finds a path's annotation row as the window finds it (OrdinalIgnoreCase: every letter's case). The
-    // column's NOCASE folds only ASCII letters, so a path with another letter is matched by a function, row by row; one
-    // without keeps the column's index (round 20, R F-2: a stale "Été\a.jpg" was kept beside "été\a.jpg", and two such
-    // rows make the tags fail to load; and revision 21's accepted half: the move didn't find them under the old path).
-    private static string IsPath(SqliteConnection connection, string parameter, string path)
-    {
-        if (path.All(char.IsAscii))
-            return $"path = {parameter}";
-        connection.CreateFunction("aperture_same_path",
-            (string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase), isDeterministic: true);
-        return $"aperture_same_path(path, {parameter})";
     }
 
     // Whether anything is kept under a moved file's old path now; one that can't be read is taken for none (the write
@@ -632,8 +619,10 @@ public sealed class FileMoves(ApertureDatabase database)
             using var move = connection.CreateCommand();
             move.Transaction = transaction;
             // What's under the new path was left by a file that was there once: this file's tags (or none) replace it.
-            move.CommandText = $"DELETE FROM annotations WHERE {IsPath(connection, "@to", to)}; " +
-                               $"UPDATE annotations SET path = @to WHERE {IsPath(connection, "@from", from)};";
+            // Matched as the column matches (its NOCASE folds ASCII letters' case only), never by a wider fold: .NET's
+            // takes "σ.jpg" and "ς.jpg" for one name where NTFS keeps two files, and round 20's took a neighbour's tags
+            // (round 21, D F-1). Rows the window takes for one path load as one (AnnotationStore.GetAll).
+            move.CommandText = "DELETE FROM annotations WHERE path = @to; UPDATE annotations SET path = @to WHERE path = @from;";
             move.Parameters.AddWithValue("@from", from);
             move.Parameters.AddWithValue("@to", to);
             move.ExecuteNonQuery();

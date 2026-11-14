@@ -962,29 +962,12 @@ public class FileMovesTests : IDisposable
     }
 
     [Fact]
-    public void TagsKeptUnderAnotherCaseOfANonAsciiLetter_FollowTheFile()
+    public void AStaleEntryUnderAnotherCaseOfANonAsciiLetter_LeavesTheLibraryLoading()
     {
-        // Round 20 (revision 21's accepted half): a tagged folder "Été" renamed "été" in Explorer; the library reads the
-        // file as "été\a.jpg" and the window finds its tags kept as "Été\a.jpg" (it folds every letter's case). The
-        // move's SQL folded only ASCII letters' case: it said Moved, and the tags stayed under the old path.
-        var folder = _scope.Library.Combine("été");
-        Directory.CreateDirectory(folder);
-        var a = Path.Combine(folder, "a.jpg");
-        TestImages.Write(a, 32, 24);
-        _tags.Save(_scope.Library.Combine("Été", "a.jpg"), ["trip"], "");
-
-        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
-
-        var all = _tags.GetAll();
-        Assert.Equal(["trip"], all[To("a.jpg")].Tags);
-        Assert.Single(all);
-    }
-
-    [Fact]
-    public void AStaleEntryUnderAnotherCaseOfANonAsciiLetter_IsReplaced_NotKeptBesideIt()
-    {
-        // Round 20, R F-2: what's kept under the new path is replaced (M4), also where it's spelled with a non-ASCII
-        // letter in another case: kept beside it, the two rows made the tags fail to load (the library wouldn't open).
+        // Round 20, R F-2: a stale entry under another case of a non-ASCII letter where the file goes ("Été\a.jpg" for
+        // "été\a.jpg") isn't matched by the column (it folds only ASCII letters' case), so it's kept beside the moved
+        // file's; two such rows made the tags fail to load (the library wouldn't open). They load, the one written last
+        // shown (round 21; merging such rows is a task of its own).
         var folder = _scope.Library.Combine("été");
         Directory.CreateDirectory(folder);
         _tags.Save(_scope.Library.Combine("Été", "a.jpg"), ["stale"], ""); // a file once there, deleted in Explorer
@@ -996,6 +979,48 @@ public class FileMovesTests : IDisposable
         var all = _tags.GetAll();
         Assert.Equal(["trip"], all[Path.Combine(folder, "a.jpg")].Tags);
         Assert.Single(all);
+    }
+
+    [Theory]
+    [InlineData("σ.jpg", "ς.jpg", false, false)] // Greek sigma and final sigma: two files on NTFS, one name to .NET's fold
+    [InlineData("σ.jpg", "ς.jpg", true, false)]
+    [InlineData("10µm.jpg", "10μm.jpg", false, false)] // the micro sign and Greek mu
+    [InlineData("σ.jpg", "ς.jpg", false, true)] // the moved file tagged too: its write is made, and must take only its own
+    [InlineData("σ.jpg", "ς.jpg", true, true)]
+    public void ANeighbourWhoseNameOnlyDotNetFoldsTogether_KeepsItsTags(string tagged, string moved, bool movingOut, bool itsOwn)
+    {
+        // Round 21, D F-1: round 20 matched tag rows by .NET's fold (OrdinalIgnoreCase), which takes these for one name
+        // where NTFS keeps two files: moving the untagged one in deleted its neighbour's tags, moving it out took them.
+        // The move matches as the library's column does, which never takes one file for another.
+        var neighbour = Photo(tagged, movingOut ? "from" : "to"); // beside it as it leaves, or where it goes
+        _tags.Save(neighbour, ["mine"], "");
+        var a = Photo(moved, "from");
+        if (itsOwn)
+            _tags.Save(a, ["its"], "");
+        Assert.True(File.Exists(neighbour));
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.True(File.Exists(neighbour));
+        Assert.True(File.Exists(To(moved)));
+        Assert.Equal(["mine"], _tags.Get(neighbour).Tags);
+        Assert.Equal(itsOwn ? new[] { "its" } : [], _tags.Get(To(moved)).Tags);
+    }
+
+    [Fact]
+    public void AnUntaggedFile_BesideANeighbourOnlyDotNetFoldsTogether_DoesntWaitForABusyLibrary()
+    {
+        // Round 21: whether a file has tags is read as the column reads it too; read by .NET's fold, an untagged "ς.jpg"
+        // beside a tagged "σ.jpg" was taken for tagged, waited for a busy library, and stayed.
+        _tags.Save(Photo("σ.jpg"), ["mine"], "");
+        var a = Photo("ς.jpg");
+        _moves.BusyTimeout = TimeSpan.FromSeconds(2);
+        MoveOutcome outcome;
+        using (HoldTheLibrary())
+            outcome = _moves.Move(a, _to).Outcome;
+
+        Assert.Equal(MoveOutcome.Moved, outcome);
+        Assert.True(File.Exists(To("ς.jpg")));
     }
 
     [Fact]
@@ -1061,7 +1086,9 @@ public class FileMovesTests : IDisposable
         var expected = Path.GetFullPath(path).StartsWith(@"\\.\", StringComparison.Ordinal) ? "NUL" : null;
 
         Assert.Equal(expected, FileMoves.NameReadAsAnother(path));
-        Assert.Equal(expected is null ? null : "nul.", FileMoves.NameReadAsAnother(@"C:\x\nul."));
+        // Read as the device or by the dot rule ("nul" for "nul."): either way the name read as another is its own
+        // (round 21, R F-4 / D F-6).
+        Assert.Equal("nul.", FileMoves.NameReadAsAnother(@"C:\x\nul."));
     }
 
     [Theory]
@@ -1179,9 +1206,9 @@ public class FileMovesTests : IDisposable
         // where that folder is the drive's own root, it's read as itself (round 20, R F-4: by the drive of the folder
         // the test runs in, not an assumed C:).
         var drive = Path.GetPathRoot(Environment.CurrentDirectory)!.TrimEnd('\\');
-        var readAs = Path.TrimEndingDirectorySeparator(Path.GetFullPath(drive));
+        var atTheRoot = string.Equals(Path.GetFullPath(drive), drive + @"\", StringComparison.OrdinalIgnoreCase); // round 21, R F-3
 
-        Assert.Equal(readAs.Length > drive.Length ? drive : null, FileMoves.NameReadAsAnother(drive));
+        Assert.Equal(atTheRoot ? null : drive, FileMoves.NameReadAsAnother(drive));
     }
 
     [Fact]
