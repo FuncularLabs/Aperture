@@ -68,7 +68,9 @@ public sealed record MoveRequest(string Path, long? RootId = null, string? RelPa
 /// <c>&lt;name&gt;.aperture-moving</c> (which no scan picks up), keeping its times and its plain attributes (read-only,
 /// hidden, system, archive; not a cloud placeholder's), then renamed and the original deleted (a read-only one too); a
 /// failure or a stop removes the copy, and an original that can't be deleted keeps it from moving (the copy removed).
-/// Raw SQL on the tags' rows: a move changes no tag's recency or count.
+/// Tags added as a file moves, with no write made for it, follow it once it has. A name ending in a dot or a space
+/// (which Windows' path rules read as another name) isn't moved. Raw SQL on the tags' rows: a move changes no tag's
+/// recency or count.
 /// </summary>
 public sealed class FileMoves(ApertureDatabase database)
 {
@@ -116,6 +118,11 @@ public sealed class FileMoves(ApertureDatabase database)
     /// </param>
     public FileMove Move(string source, string destinationFolder, CancellationToken ct = default, ItemMove? item = null)
     {
+        // Windows' path rules (GetFullPath's) drop the last name's dots and spaces and a folder name's last dot, so such
+        // a name would be read as another: the move would take another file, or go into another folder (round 16,
+        // R F-3). Any name in either path that ends in a dot or a space is refused. Only \\?\ makes such names.
+        if (EndsInADotOrASpace(source) || EndsInADotOrASpace(destinationFolder))
+            return new FileMove(source, destinationFolder, MoveOutcome.Failed);
         string from, folder;
         try
         {
@@ -196,6 +203,12 @@ public sealed class FileMoves(ApertureDatabase database)
                 Committing?.Invoke();
                 rekey.Commit();
             }
+            else if (HasTags(from, from))
+            {
+                // Tagged as it moved (as it was copied, say), with no write made for it (round 16, R F-2): its tags are
+                // made to follow it now, as a write that failed once the file had moved is.
+                return Result(RekeyAgain(from, to, item, tagged: true));
+            }
             return Result(MoveOutcome.Moved);
         }
         catch (Exception ex)
@@ -236,6 +249,9 @@ public sealed class FileMoves(ApertureDatabase database)
             return tagged ? MoveOutcome.MovedTagsBehind : MoveOutcome.Moved;
         }
     }
+
+    private static bool EndsInADotOrASpace(string path) =>
+        path.Split('\\', '/').Any(name => name is not ("" or "." or "..") && name[^1] is '.' or ' ');
 
     // The rename, and only that: Windows isn't let copy the file itself, nor put it over another (round 15, R F-2 /
     // D F-1). False: Windows can't make it a rename ("not the same device": another drive, or another route to this one),

@@ -121,11 +121,13 @@ public class FileMovesTests : IDisposable
         }
     }
 
-    // Whether the library's write lock can be had without waiting (nobody holds it); taken and let go at once, and the
-    // pooled connection goes back with the library's usual busy timeout.
+    // Whether the library's write lock can be had within a second (nobody holds it); taken and let go at once, and the
+    // pooled connection goes back with the library's usual busy timeout. DefaultTimeout too: Microsoft.Data.Sqlite tries
+    // a busy write again for its command timeout (30 s) whatever SQLite's own busy timeout is (round 16, R F-5).
     private bool CanTakeTheLibraryAtOnce()
     {
         using var connection = _scope.Database.OpenMetadata();
+        connection.DefaultTimeout = 1;
         using (var none = connection.CreateCommand())
         {
             none.CommandText = "PRAGMA busy_timeout=0;";
@@ -167,10 +169,14 @@ public class FileMovesTests : IDisposable
             start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         var errors = process.StandardError.ReadToEndAsync();
-        var output = process.StandardOutput.ReadToEnd();
-        Assert.True(process.WaitForExit(60_000), "the probe didn't finish");
+        var output = process.StandardOutput.ReadToEndAsync(); // read aside, so a hung probe is timed out, then killed
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail("the probe didn't finish in 60 s");
+        }
         Assert.True(process.ExitCode == 0, $"the probe failed ({process.ExitCode}): {errors.Result}");
-        var lines = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var lines = output.Result.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(2, lines.Length);
         return (lines[0], lines[1]);
     }
@@ -557,6 +563,35 @@ public class FileMovesTests : IDisposable
         Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
     }
 
+    [Theory]
+    [InlineData(false)] // across drives
+    [InlineData(true)] // a rename Windows refuses as another device (17)
+    public void ATagWriteThatFails_AfterACopiedFileMoved_IsTriedAgain(bool refused)
+    {
+        // Round 16, D F-1: a copied move sets "moved" itself; without it, a write that failed once the file had moved
+        // was undone and never made again, and the move said Failed (against M6).
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        if (refused)
+            _moves.RenameRefusedWith = 17;
+        else
+            _moves.ForceCopy = true;
+        var commits = 0;
+        _moves.Committing = () =>
+        {
+            if (++commits == 1)
+                throw new SqliteException("disk I/O error", 10);
+        };
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.Equal(2, commits);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(To("a.jpg")));
+        Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+    }
+
     [Fact]
     public void ATagWriteThatKeepsFailing_AfterTheFileMoved_SaysItsTagsStayedBehind()
     {
@@ -706,6 +741,109 @@ public class FileMovesTests : IDisposable
         Assert.Empty(copied);
         Assert.True(File.Exists(a));
         Assert.Empty(Directory.EnumerateFileSystemEntries(_to));
+        Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [Theory]
+    [InlineData("copy")] // across drives: added as the file is copied (minutes, for a large video)
+    [InlineData("refused")] // a rename Windows refuses as another device (17), so copied
+    [InlineData("rename")] // added just before the rename
+    public void ATagAddedWhileTheFileMoves_GoesWithIt(string how)
+    {
+        // Round 16, R F-2: whether a file has tags was read once, before the move; one with none and no row in this
+        // library made no write, so a tag added meanwhile stayed under the old path, and the move said Moved.
+        var a = Photo("a.jpg");
+        Action late = () => _tags.Save(a, ["late"], "");
+        if (how == "copy")
+            _moves.ForceCopy = true;
+        if (how == "refused")
+            _moves.RenameRefusedWith = 17;
+        if (how == "rename")
+            _moves.BeforeRenaming = late;
+        else
+            _moves.Copied = _ => late();
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.True(File.Exists(To("a.jpg")));
+        Assert.Equal(["late"], _tags.Get(To("a.jpg")).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+    }
+
+    [Theory]
+    [InlineData("the file")] // "a.jpg " beside "a.jpg"
+    [InlineData("a folder above the file")] // "from2.\a.jpg" beside "from2\a.jpg"
+    [InlineData("the destination folder")] // "to2." beside "to2"
+    public void ANameEndingInADotOrASpace_IsntMovedAsAnotherName(string where)
+    {
+        // Round 16, R F-3: Windows' path rules (GetFullPath's) drop the last name's dots and spaces, and a folder name's
+        // last dot, so Move to… acted on another file (its twin went, with its tags) or into another folder. Made only
+        // with \\?\ (WSL, some tools; not Explorer), such a name is refused, in either path: nothing is touched.
+        var twinFrom = _scope.Library.Combine("from2");
+        var twinTo = _scope.Library.Combine("to2");
+        Directory.CreateDirectory(twinTo);
+        var other = Photo("a.jpg", "from2");
+        _tags.Save(other, ["theirs"], "");
+        var dotted = where switch
+        {
+            "the file" => other + " ",
+            "a folder above the file" => twinFrom + ".",
+            _ => twinTo + ".",
+        };
+        var asked = where switch
+        {
+            "the file" => dotted,
+            "a folder above the file" => Path.Combine(dotted, "a.jpg"),
+            _ => Photo("b.jpg"),
+        };
+        var into = where == "the destination folder" ? dotted : twinTo;
+        try
+        {
+            if (where == "the file")
+                File.WriteAllText(@"\\?\" + asked, "mine");
+            else
+                Directory.CreateDirectory(@"\\?\" + dotted);
+            if (where == "a folder above the file")
+                File.WriteAllText(@"\\?\" + asked, "mine");
+
+            Assert.Equal(MoveOutcome.Failed, _moves.Move(asked, into).Outcome);
+
+            Assert.True(File.Exists(other));
+            Assert.Equal(["theirs"], _tags.Get(other).Tags);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(twinTo));
+            Assert.True(File.Exists(@"\\?\" + asked));
+            if (where == "the destination folder")
+                Assert.Empty(Directory.EnumerateFileSystemEntries(@"\\?\" + dotted));
+        }
+        finally
+        {
+            // .NET's own calls can't reach these names except in their \\?\ form.
+            if (where != "the destination folder" && File.Exists(@"\\?\" + asked))
+                File.Delete(@"\\?\" + asked);
+            if (where != "the file" && Directory.Exists(@"\\?\" + dotted))
+                Directory.Delete(@"\\?\" + dotted, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, MoveOutcome.SourceGone)]
+    [InlineData(true, MoveOutcome.DestinationGone)]
+    public void WhatGoesDuringTheWait_IsSaidByTheRename(bool theFolder, MoveOutcome outcome)
+    {
+        // Round 16, D F-3: the rename's own errors (Windows' 2 and 3, mapped by Aperture since round 15, not .NET): the
+        // file or the destination folder gone while a tagged move waited for the library.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        _moves.BeforeRenaming = () =>
+        {
+            if (theFolder)
+                Directory.Delete(_to);
+            else
+                File.Delete(a);
+        };
+
+        Assert.Equal(outcome, _moves.Move(a, _to).Outcome);
+
         Assert.Equal(["trip"], _tags.Get(a).Tags);
     }
 
@@ -939,6 +1077,31 @@ public class FileMovesTests : IDisposable
         var again = _scope.Indexer.IndexRoot(root);
         Assert.Empty(reads);
         Assert.Equal((0, 0, 0), (again.Added, again.Updated, again.Removed));
+    }
+
+    [Theory]
+    [InlineData(false)] // across drives
+    [InlineData(true)] // a rename Windows refuses as another device (17)
+    public void ARowGoesWithACopiedFile_AndTheLibraryIsntHeldWhileItsCopied(bool refused)
+    {
+        // Round 16, D F-2: an untagged file with a row, copied: its row goes with it (M5), the brief write for it isn't
+        // held through the copy (a run would wait, and the next try would find the library "busy" by its own lock),
+        // and nothing holds the library once it's moved.
+        var a = Photo("a.jpg");
+        var (root, id) = Indexed("a.jpg");
+        if (refused)
+            _moves.RenameRefusedWith = 17;
+        else
+            _moves.ForceCopy = true;
+        var heldWhileCopying = true;
+        _moves.Copied = _ => heldWhileCopying = !CanTakeTheLibraryAtOnce();
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.False(heldWhileCopying);
+        var row = Assert.Single(_scope.Items.GetForRoot(root.Id));
+        Assert.Equal((id, Path.Combine("to", "a.jpg")), (row.Id, row.RelPath));
+        Assert.True(CanTakeTheLibraryAtOnce());
     }
 
     [Fact]
