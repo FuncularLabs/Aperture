@@ -134,7 +134,7 @@ public class MoveFilesTests
 
                 Assert.True(File.Exists(f.Photos.Combine("Photos", "a.jpg")));
                 Assert.Equal(["t.jpg"], Directory.GetFiles(f.Trips).Select(Path.GetFileName));
-                Assert.Empty(Directory.EnumerateFiles(f.Trips, "*", SearchOption.AllDirectories).Where(p => !p.EndsWith("t.jpg")));
+                Assert.DoesNotContain(Directory.EnumerateFiles(f.Trips, "*", SearchOption.AllDirectories), p => !p.EndsWith("t.jpg"));
                 Assert.Empty(Directory.EnumerateFiles(@"\\?\" + odd, "*", SearchOption.AllDirectories));
                 Assert.Empty(f.Questions);
                 var summary = Assert.Single(f.Summaries);
@@ -147,6 +147,18 @@ public class MoveFilesTests
                 Directory.Delete(@"\\?\" + odd, recursive: true); // .NET reaches such a name only in its \\?\ form
             }
         });
+    }
+
+    [Theory]
+    [InlineData("Trips.", true)]
+    [InlineData("Trips ", true)]
+    [InlineData("NUL", false)] // a device's name, read as the device: it doesn't end in a dot or a space (round 20, D F-4)
+    public void TheNothingMovedMessage_SaysTheNameEndsInADotOrASpace_OnlyWhenItDoes(string name, bool ends)
+    {
+        var message = MainViewModel.NothingMovedInto(name);
+
+        Assert.Contains($"“{name}”", message);
+        Assert.Equal(ends, message.Contains("ends in a dot or a space"));
     }
 
     [Fact]

@@ -1627,6 +1627,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ => null,
     };
 
+    /// <summary>
+    /// What's said when the folder picked is one Windows' path rules read as another (round 17); why only when it's true
+    /// (a device's name, such as NUL, doesn't end in a dot or a space: round 20, D F-4).
+    /// </summary>
+    internal static string NothingMovedInto(string name) =>
+        $"Nothing was moved. Windows reads the name “{name}”" +
+        (name.Length > 0 && name[^1] is '.' or ' ' ? " (it ends in a dot or a space)" : "") +
+        " as another folder's, so Aperture can't move files into it.";
+
     private static string Reason(MoveOutcome outcome) => outcome switch
     {
         MoveOutcome.NameTaken => "a file or folder of that name is already there",
@@ -1682,8 +1691,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             // Windows' path rules read "Trips." as "Trips": checked before the folder is read here, which reads it that
             // way too (round 17, R F-1 / D F-1); the name said is the one read as another (round 18, D-2).
-            ShowMoveSummary($"Nothing was moved. Windows reads the name “{odd}” (it ends in a dot or a space) as " +
-                            "another folder's, so Aperture can't move files into it.");
+            ShowMoveSummary(NothingMovedInto(odd));
             return;
         }
 

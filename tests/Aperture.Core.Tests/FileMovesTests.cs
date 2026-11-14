@@ -961,6 +961,109 @@ public class FileMovesTests : IDisposable
         Assert.Single(_tags.GetAll()); // one row, under the spelling the window looks it up by
     }
 
+    [Fact]
+    public void TagsKeptUnderAnotherCaseOfANonAsciiLetter_FollowTheFile()
+    {
+        // Round 20 (revision 21's accepted half): a tagged folder "Été" renamed "été" in Explorer; the library reads the
+        // file as "été\a.jpg" and the window finds its tags kept as "Été\a.jpg" (it folds every letter's case). The
+        // move's SQL folded only ASCII letters' case: it said Moved, and the tags stayed under the old path.
+        var folder = _scope.Library.Combine("été");
+        Directory.CreateDirectory(folder);
+        var a = Path.Combine(folder, "a.jpg");
+        TestImages.Write(a, 32, 24);
+        _tags.Save(_scope.Library.Combine("Été", "a.jpg"), ["trip"], "");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        var all = _tags.GetAll();
+        Assert.Equal(["trip"], all[To("a.jpg")].Tags);
+        Assert.Single(all);
+    }
+
+    [Fact]
+    public void AStaleEntryUnderAnotherCaseOfANonAsciiLetter_IsReplaced_NotKeptBesideIt()
+    {
+        // Round 20, R F-2: what's kept under the new path is replaced (M4), also where it's spelled with a non-ASCII
+        // letter in another case: kept beside it, the two rows made the tags fail to load (the library wouldn't open).
+        var folder = _scope.Library.Combine("été");
+        Directory.CreateDirectory(folder);
+        _tags.Save(_scope.Library.Combine("Été", "a.jpg"), ["stale"], ""); // a file once there, deleted in Explorer
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, folder).Outcome);
+
+        var all = _tags.GetAll();
+        Assert.Equal(["trip"], all[Path.Combine(folder, "a.jpg")].Tags);
+        Assert.Single(all);
+    }
+
+    [Fact]
+    public void ARowsBriefWriteThatFails_DoesntMakeLaterFilesSayTheLibraryIsBusy()
+    {
+        // Round 20, D F-1: the third place a failure could mark the library busy: an untagged file's brief row write that
+        // fails for another reason (here a row given a folder the library hasn't: its foreign key) lets the row go, and
+        // later files that need the write are tried as usual.
+        var a = Photo("a.jpg");
+        var b = Photo("b.jpg");
+        var (root, _) = Indexed("a.jpg");
+        _tags.Save(b, ["trip"], "");
+
+        Assert.Equal(MoveOutcome.Moved,
+            _moves.Move(a, _to, default, new ItemMove(root.Id, Path.Combine("from", "a.jpg"), 999_999, "a.jpg")).Outcome);
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(b, _to).Outcome);
+
+        Assert.Equal(["trip"], _tags.Get(To("b.jpg")).Tags);
+    }
+
+    [Fact]
+    public void APathGivenWithForwardSlashes_KeepsTheTagsAsTheLibraryKeepsThem()
+    {
+        // Round 20, D F-2: AsGiven keeps a path's own spelling only where GetFullPath's differs from it in case alone;
+        // given with forward slashes (which the rule takes), the tags are keyed by GetFullPath's, as the library keeps them.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a.Replace('\\', '/'), _to.Replace('\\', '/')).Outcome);
+
+        Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+        Assert.Single(_tags.GetAll());
+    }
+
+    [Fact]
+    public void AnUntaggedOnlineOnlyFile_WhoseWriteKeepsFailing_IsMoved_NotSaidToHaveLostTags()
+    {
+        // Round 20, D F-3: its write was needed for its row, not for tags: failing again once it has moved, it's Moved
+        // (the next run reads it as new: accepted, M5), never "moved without its tags and notes".
+        var a = Photo("a.jpg");
+        File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline);
+        var (root, _) = Indexed("a.jpg");
+        var commits = 0;
+        _moves.Committing = () =>
+        {
+            commits++;
+            throw new SqliteException("disk I/O error", 10);
+        };
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.Equal(2, commits);
+        Assert.True(File.Exists(To("a.jpg")));
+    }
+
+    [Fact]
+    public void ADeviceName_IsTheNameReadAsAnother()
+    {
+        // Round 20, D F-4: where Windows reads "C:\x\NUL" as its device (\\.\NUL), the name read as another is "NUL",
+        // not the drive's; where it reads it as itself, there's none.
+        const string path = @"C:\x\NUL";
+        var expected = Path.GetFullPath(path).StartsWith(@"\\.\", StringComparison.Ordinal) ? "NUL" : null;
+
+        Assert.Equal(expected, FileMoves.NameReadAsAnother(path));
+        Assert.Equal(expected is null ? null : "nul.", FileMoves.NameReadAsAnother(@"C:\x\nul."));
+    }
+
     [Theory]
     [InlineData("a commit that fails")] // a disk I/O error, after the move
     [InlineData("a file in use")] // before it
@@ -1064,10 +1167,21 @@ public class FileMovesTests : IDisposable
     [InlineData(@"C:\x\sp \sub", null)]
     [InlineData(@"C:\x\.", ".")] // round 19, D N-1: a name the rules drop, at the end
     [InlineData(@"C:\x\..\y", "x")] // the first name the rules don't keep (".." drops "x" with it)
-    [InlineData("C:", "C:")] // a drive's own folder, as it is now: read as another path
     public void NameReadAsAnother_IsTheFirstNameWindowsPathRulesChange(string path, string? name)
     {
         Assert.Equal(name, FileMoves.NameReadAsAnother(path));
+    }
+
+    [Fact]
+    public void ADriveAlone_IsReadAsTheFolderItsIn()
+    {
+        // Round 19, D N-1: "C:" is read as the folder the process is in on that drive (another path, named by itself);
+        // where that folder is the drive's own root, it's read as itself (round 20, R F-4: by the drive of the folder
+        // the test runs in, not an assumed C:).
+        var drive = Path.GetPathRoot(Environment.CurrentDirectory)!.TrimEnd('\\');
+        var readAs = Path.TrimEndingDirectorySeparator(Path.GetFullPath(drive));
+
+        Assert.Equal(readAs.Length > drive.Length ? drive : null, FileMoves.NameReadAsAnother(drive));
     }
 
     [Fact]
@@ -1082,8 +1196,8 @@ public class FileMovesTests : IDisposable
         var length = GetShortPathName(longOne, buffer, buffer.Capacity);
         var shortOne = length > 0 ? buffer.ToString() : longOne;
 
-        Assert.Equal(!string.Equals(Path.GetFileName(shortOne), Path.GetFileName(longOne), StringComparison.OrdinalIgnoreCase),
-            FileMoves.IsReadAsAnotherName(shortOne));
+        // The whole path (round 20, R F-5): a folder above may have a short name where a new one gets none.
+        Assert.Equal(!string.Equals(shortOne, longOne, StringComparison.OrdinalIgnoreCase), FileMoves.IsReadAsAnotherName(shortOne));
         Assert.False(FileMoves.IsReadAsAnotherName(longOne));
     }
 
