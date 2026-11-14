@@ -410,13 +410,13 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// Where a row's file is, for the prune (I2): there; gone, and that can be told; or out of reach, where that can't be
     /// told. A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder
     /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1; a file in a folder's place
-    /// is seen, so the folder below it is gone whatever is above, unless it's a reparse point: a file-type link may point
-    /// to a folder, and a cloud placeholder, an app alias or a WSL link can't be told from one, so it tells nothing
-    /// (round 10: accepted, such a file put where a folder was keeps the folder's rows). A link (a
+    /// is seen, so the folder below it is gone whatever is above, unless it's a reparse point: that's resolved as a link
+    /// (it won't list), so a file-type link is followed, and one with no target (a cloud placeholder, an app alias, a WSL
+    /// link) tells nothing (round 11, D F-2; accepted: such a file put where a folder was keeps its rows). A link (a
     /// junction or symbolic link) that won't list is what its final target is: deleted on a drive that's there, its rows
     /// go (round 6, L-4); on an unplugged drive or a dropped share, they stay. A link Windows can't follow to its end (to
     /// a file, round in a loop, to a share that times out, inside a folder this user may not list) is what the folder it
-    /// points to first is, decided as any folder is (a file: gone; a link: that link's answer; a loop: can't tell). A
+    /// points to first is, decided as any folder is (a plain file: gone; a link: that link's answer; a loop: can't tell). A
     /// folder this user may not list keeps its files' rows (a folder below it is looked at itself, and may list: round 6,
     /// L-2), and so does a look that fails or is refused (round 5, F-4; round 7). "There" is the path, not the volume:
     /// another drive given an unplugged drive's letter is the drive that's there (round 5, L-4, an accepted residual).
@@ -490,8 +490,6 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
                     Found.Yes when !attributes.HasFlag(FileAttributes.Directory) && !attributes.HasFlag(FileAttributes.ReparsePoint)
                         => (Reach.Missing, true), // a file in its place
-                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) // a reparse point in its place: tells nothing
-                        => (Reach.NotListed, false), // (a file-type link, a cloud placeholder, an alias, a WSL link: round 10)
                     Found.Yes when Lists(folder) => (Reach.Listed, true),
                     Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => BehindALink(folder),
                     Found.Yes => (Reach.NotListed, false),
@@ -518,9 +516,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         // round 6, L-4; on a drive or share that's gone: out of reach), or a look that failed; and that's answered for
         // every folder below the link without a look (round 7, R7-5). One Windows can't follow to its end (to a file, to a
         // link to one, round in a loop, to a share that times out, inside a folder this user may not list: round 9, R9-2)
-        // is what the folder it points to first is, decided as
-        // any folder is: a file there is a folder gone (round 7, R7-2; round 8, F-2), a loop comes back to a folder being
-        // decided and can't tell, a share that times out is a look that failed (round 8, F-4).
+        // is what the folder it points to first is, decided as any folder is: a plain file there is a folder gone (round
+        // 7, R7-2; round 8, F-2), a loop comes back to a folder being decided and can't tell, a share that times out is a
+        // look that failed (round 8, F-4). A reparse point that isn't a link (no target) tells nothing (round 11).
         private (Reach Reach, bool CanTell) BehindALink(string link)
         {
             string? target;

@@ -22,11 +22,12 @@ public class IndexerAbsenceTests
 
     [Theory]
     [InlineData(false)] // a folder below it answers "not found", as below a plain file
-    [InlineData(true)] // as Windows answers below a real placeholder, alias or WSL link: "can't be accessed" (0x80070780)
-    public void AReparsePointFileInAFoldersPlace_TellsNothing_InAnyOrder(bool realAnswer)
+    [InlineData(true)] // as Windows answers below a real alias or WSL link: an error, not "not found" (0x80070780, 0x8007010B)
+    public void AReparsePointFileInAFoldersPlace_ThatIsntALink_TellsNothing_InAnyOrder(bool realAnswer)
     {
         // Round 10, R F1/F2: round 9 took such a file for a file, so its folder's rows went, below it in an order that hung
-        // on what was asked first, and a WSL link (which .NET can't read) was taken for one. It tells nothing: rows stay.
+        // on what was asked first, and a WSL link (which .NET can't read) was taken for one. It's resolved as a link, and has
+        // no target (round 11, D F-2): it tells nothing, rows stay, and that isn't passed down (round 11, D F-4).
         using var dir = new TempDir();
         File.WriteAllText(dir.Combine("trip"), "a reparse point where the folder was");
         string[] asked = [dir.Combine("trip", "a.jpg"), dir.Combine("trip", "day1", "b.jpg"), dir.Combine("trip", "day2", "c.jpg")];
@@ -45,6 +46,8 @@ public class IndexerAbsenceTests
             var absence = New();
             foreach (var path in order)
                 Assert.Equal(Look.OutOfReach, absence.At(path));
+            // The file's attributes, its listing (it won't), its resolution (no target); then each folder below, its own look.
+            Assert.Equal(5, absence.Looks);
         }
     }
 
@@ -90,7 +93,7 @@ public class IndexerAbsenceTests
         try
         {
             Junction.Create(W("lists", "tocard"), letter + @"\Photos");
-            Junction.Create(W("lists", "jfile"), letter + @"\Photos"); // read as a file-type link: round 10, L-1
+            Junction.Create(W("lists", "jfile"), letter + @"\Photos"); // read as a file-type link, to a drive that's gone
         }
         finally
         {
@@ -115,14 +118,14 @@ public class IndexerAbsenceTests
         Directory.CreateDirectory(W("elsewhere", "Gone2"));
         Junction.Create(W("locked", "linkgone"), W("elsewhere", "Gone2")); // round 9, R9-2: a link inside a folder that won't list
         Directory.Delete(W("elsewhere", "Gone2"));
-        File.WriteAllText(W("filelink"), "read as a file-type symbolic link, to a folder deleted");
-        Junction.Create(W("lists", "tofilelink"), W("filelink")); // round 8, R's observation; round 9, N9-2
-        File.WriteAllText(W("lists", "afilelink"), "read as a file-type symbolic link, to a volume that isn't there");
+        File.WriteAllText(W("filelink"), "read as a file-type symbolic link, resolved to a folder deleted (the seam)");
+        Junction.Create(W("lists", "tofilelink"), W("filelink")); // round 8, R's observation; round 9, N9-2; round 11, F-1
+        File.WriteAllText(W("lists", "afilelink"), "read as a file-type symbolic link, resolved to a volume that isn't there");
         Directory.CreateDirectory(W("elsewhere", "GoneR"));
         Junction.Create(W("lists", "raced"), W("elsewhere", "GoneR")); // its resolutions made to fail: round 9, N9-3
         Junction.Create(W("lists", "raced2"), W("elsewhere", "GoneR"));
         Junction.Create(W("lists", "cloudfolder"), W("elsewhere", "GoneR")); // a reparse point that isn't a link: round 10, N-7
-        File.WriteAllText(W("lists", "unreadable"), "a reparse point whose link check fails");
+        File.WriteAllText(W("lists", "unreadable"), "a reparse-point file that isn't a link (no target)");
         Directory.Delete(W("elsewhere", "GoneR"));
         File.WriteAllText(W("locked", "Trip"), "a file where a folder was, in a folder that can't be listed");
         Directory.CreateDirectory(W("elsewhere", "Gone"));
@@ -136,7 +139,9 @@ public class IndexerAbsenceTests
         Indexer.Absence New() => new()
         {
             ResolveLink = (link, final) =>
-                string.Equals(link, W("lists", "raced"), StringComparison.OrdinalIgnoreCase)
+                string.Equals(link, W("filelink"), StringComparison.OrdinalIgnoreCase) ? W("elsewhere", "GoneF")
+                : string.Equals(link, W("lists", "afilelink"), StringComparison.OrdinalIgnoreCase) ? @"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos"
+                : string.Equals(link, W("lists", "raced"), StringComparison.OrdinalIgnoreCase)
                     ? throw new IOException("The specified network name is no longer available.", unchecked((int)0x80070040))
                 : string.Equals(link, W("lists", "raced2"), StringComparison.OrdinalIgnoreCase)
                     ? (final ? throw new IOException("The name of the file cannot be resolved by the system.", unchecked((int)0x80070781))
@@ -192,13 +197,13 @@ public class IndexerAbsenceTests
                 (W("lists", "tolocked", "gone.jpg"), Look.OutOfReach, "a file gone, behind such a link"),
                 (W("lists", "tolocked", "open", "there.jpg"), Look.There, "a file there, in a folder that lists behind such a link (R8-1)"),
                 (W("lists", "tolocked", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists behind such a link"),
-                (W("lists", "tofilelink", "a.jpg"), Look.OutOfReach, "a link to a file-type link: tells nothing (round 10; accepted)"),
-                (W("lists", "afilelink", "a.jpg"), Look.OutOfReach, "a file-type link in a folder's place: tells nothing"),
+                (W("lists", "tofilelink", "a.jpg"), Look.Gone, "a link to a file-type link to a folder deleted: followed (round 11, F-1)"),
+                (W("lists", "afilelink", "a.jpg"), Look.OutOfReach, "a file-type link to a volume that isn't there, in a folder's place"),
                 (W("lists", "raced", "a.jpg"), Look.OutOfReach, "a link whose both resolutions fail (round 9, N9-3)"),
                 (W("lists", "raced2", "a.jpg"), Look.OutOfReach, "a link whose first target is refused"),
-                (W("lists", "jfile", "a.jpg"), Look.OutOfReach, "a reparse point (a junction) read as a file, in a folder's place: tells nothing"),
+                (W("lists", "jfile", "a.jpg"), Look.OutOfReach, "a file-type link to a drive that's gone (a junction read as one)"),
                 (W("lists", "cloudfolder", "a.jpg"), Look.OutOfReach, "a reparse point that won't list and isn't a link (a cloud folder: round 10, N-7)"),
-                (W("lists", "unreadable", "a.jpg"), Look.OutOfReach, "a reparse-point file in a folder's place: tells nothing"),
+                (W("lists", "unreadable", "a.jpg"), Look.OutOfReach, "a reparse-point file that isn't a link, in a folder's place: tells nothing"),
                 (W("lists", "placeholder", "a.jpg"), Look.OutOfReach, "a cloud placeholder in a folder's place: tells nothing (round 10; accepted)"),
                 (W("lists", "toplaceholder", "a.jpg"), Look.OutOfReach, "a link to a cloud placeholder: tells nothing"),
                 (W("locked", "linkgone", "a.jpg"), Look.Gone, "a link to a folder deleted, inside a folder this user may not list (round 9, R9-2)"),
