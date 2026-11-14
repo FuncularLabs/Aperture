@@ -282,13 +282,15 @@ public class MoveFilesTests
     }
 
     [Fact]
-    public void TheSummary_SaysAFileCantStayEncrypted()
+    public void TheSummary_SaysAFileCantStayEncrypted_OrWasntReached()
     {
         // Round 4, F6 / N-b: said of one file or many alike.
         var folder = @"E:\Photos";
         var summary = MainViewModel.MoveSummary([new FileMove(@"C:\Photos\a.jpg", folder + @"\a.jpg", MoveOutcome.CantStayEncrypted)], folder);
 
         Assert.Contains("• 1 — encrypted, and that drive can't keep files encrypted", summary);
+        Assert.Contains("• 1 — not reached: Aperture stopped the move", // round 5, F-8 (e)
+            MainViewModel.MoveSummary([new FileMove(@"C:\Photos\b.jpg", folder + @"\b.jpg", MoveOutcome.Stopped)], folder));
     }
 
     [Fact]

@@ -330,7 +330,8 @@ public sealed class VideoPlayback : ObservableObject
         if (!ReferenceEquals(sender, _player) || _player is not { } player)
             return;
         // The end comes as an event, after the fact: moved back since (the bar dragged off its end, two seeks in a turn),
-        // it plays or holds where it was moved, and this end is old news (round 5, seed 36 of RealPlayerSequenceTests).
+        // it plays or holds where it was moved, and this end is old news (round 4's layer: seed 36 of
+        // RealPlayerSequenceTests).
         if (_duration is { } length && player.Position < length - EndSlack)
             return;
         _atEnd = true;

@@ -35,9 +35,10 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 - Indexing no longer stops at a file that's in use, or deleted or moved while it runs; it
   carries on with the rest.
 - A folder on a drive that isn't plugged in, or on a network share that can't be reached (also
-  through a shortcut-style link to one), keeps its photos in Aperture until it's back, instead
-  of being emptied by the next index. A folder that was deleted or renamed, on a drive that's
-  there, is still emptied, as before.
+  through a folder link, a junction or symbolic link, to one), keeps its photos in Aperture until
+  it's back, instead of being emptied by the next index. If another drive takes the unplugged
+  drive's letter meanwhile, the folder is emptied as if it had been deleted. A folder that was
+  deleted or renamed is still emptied, as before, when Aperture can look in the folder it was in.
 
 ## [0.9.1] - 2026-11-13
 

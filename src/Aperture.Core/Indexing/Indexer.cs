@@ -144,7 +144,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         ct.ThrowIfCancellationRequested();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         // The files whose rows this run wrote or kept as they are, in any case: a row under another case of one of these
-        // is the old name's, and goes. Not the files skipped or whose read failed: their old rows stay (round 4, F3).
+        // is the old name's, and goes. Not the files skipped, nor those whose read threw (in use, say): their old rows
+        // stay (round 4, F3). A file whose thumbnails couldn't be made still has its row written, so it counts.
         var indexed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skippedOnlineOnly = 0;
         var work = files;
@@ -228,18 +229,27 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                         Reading?.Invoke(file.RelPath);
                         var md = file.Kind == MediaKind.Video ? default : _metadata.Read(file.FullPath);
                         var set = GenerateThumbnails(file);
-                        if (set is null)
-                            failed++;
-
-                        var itemId = UpsertItem(upsertItem, root.Id, file, md, set, nowTicks);
-                        indexed.Add(file.RelPath);
-                        if (set is not null)
-                            thumbsGenerated += StoreThumbs(upsertThumb, itemId, file.MTimeTicks, set, nowTicks);
-
-                        if (existing.ContainsKey(file.RelPath))
-                            updated++;
+                        if (set is null && Missing(file.FullPath))
+                        {
+                            // Gone as it was read (its drive unplugged, say): a video's read doesn't throw for that, and
+                            // its row would be written with no size. Not written; left to the prune (round 5, L-2).
+                            seen.Remove(file.RelPath);
+                        }
                         else
-                            added++;
+                        {
+                            if (set is null)
+                                failed++;
+
+                            var itemId = UpsertItem(upsertItem, root.Id, file, md, set, nowTicks);
+                            indexed.Add(file.RelPath);
+                            if (set is not null)
+                                thumbsGenerated += StoreThumbs(upsertThumb, itemId, file.MTimeTicks, set, nowTicks);
+
+                            if (existing.ContainsKey(file.RelPath))
+                                updated++;
+                            else
+                                added++;
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -388,13 +398,16 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     }
 
     /// <summary>
-    /// Where a row's file is, for the prune: there; gone, and that can be told; or missing where that can't be told. A
-    /// missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder deleted
+    /// Where a row's file is, for the prune: there; gone, and that can be told; or out of reach, where that can't be told.
+    /// A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder deleted
     /// or renamed on a drive that's there can be told, and its rows go, as in 0.9.1. An unplugged drive, a dropped share,
-    /// or a junction or link to either can't be (a link to one that's gone is there, and won't list): its files keep
-    /// their rows for when it's back (round 4, F1, F2). The folder is looked at first, once per prune, and nothing below
-    /// a folder found missing is looked at: a share that's gone is looked for once, not once per folder or file of it
-    /// (each look at a server that doesn't answer can take seconds).
+    /// a junction or link to either (it's there, and won't list), or a folder this user may not list can't be: its files
+    /// keep their rows for when it's back (round 4, F1, F2). A look is a verdict only when Windows says "not found"; any
+    /// other error (a share dropping a call) is out of reach (round 5, F-4). "There" is the path, not the volume: another
+    /// drive given an unplugged drive's letter is the drive that's there (round 5, L-4, an accepted residual). Each
+    /// folder is looked at once per prune; a file only in a folder that lists, and nothing below a folder found missing
+    /// or not listed: a share that's gone is looked for once, not once per folder or file of it (each look at a server
+    /// that doesn't answer can take seconds).
     /// </summary>
     internal sealed class Absence
     {
@@ -409,11 +422,35 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         public Look At(string path)
         {
             var (reach, canTell) = Folder(Path.GetDirectoryName(path));
-            if (reach == Reach.Missing)
-                return canTell ? Look.Gone : Look.OutOfReach; // the file can't be there: not looked for
-            if (File.Exists(path))
-                return Look.There;
-            return reach == Reach.Listed ? Look.Gone : Look.OutOfReach;
+            return reach switch
+            {
+                Reach.Missing => canTell ? Look.Gone : Look.OutOfReach, // the file can't be there: not looked for
+                Reach.NotListed => Look.OutOfReach, // what's in it can't be told (a scan couldn't read it either): round 5, N-1
+                _ => LookFor(path, out _) switch { Found.Yes => Look.There, Found.No => Look.Gone, _ => Look.OutOfReach },
+            };
+        }
+
+        private enum Found { Yes, No, CantTell }
+
+        // There, not there, or a look that failed for another reason (a share dropping a call, a drive not ready): a
+        // failed look is no verdict (round 5, F-4; taxonomy 13). File.Exists and Directory.Exists say false for both of
+        // the last two.
+        private static Found LookFor(string path, out FileAttributes attributes)
+        {
+            attributes = default;
+            try
+            {
+                attributes = File.GetAttributes(path); // a junction's or link's own, not its target's
+                return Found.Yes;
+            }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return Found.No;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return Found.CantTell;
+            }
         }
 
         private (Reach Reach, bool CanTell) Folder(string? folder)
@@ -426,13 +463,17 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             {
                 if (!_known.TryGetValue(above, out var that))
                     continue;
-                if (that.Reach == Reach.Missing)
-                    return _known[folder] = that; // under a folder that's missing: missing too, and the same answer
-                break;
+                if (that.Reach != Reach.Listed)
+                    return _known[folder] = that; // below a folder missing or not listed: the same answer, no look (F-3)
+                break; // below one that lists: looked at itself
             }
-            var answer = !Directory.Exists(folder) ? (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell)
-                : CatalogRegistry.FolderIsReachable(folder) ? (Reach.Listed, true)
-                : (Reach.NotListed, false);
+            var answer = LookFor(folder, out var attributes) switch
+            {
+                Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
+                Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
+                Found.Yes => CatalogRegistry.FolderIsReachable(folder) ? (Reach.Listed, true) : (Reach.NotListed, false),
+                _ => (Reach.NotListed, false), // the look failed: out of reach
+            };
             return _known[folder] = answer;
         }
     }

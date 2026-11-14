@@ -69,7 +69,7 @@ public sealed class FakeVideoPlayer : IVideoPlayer
 
     /// <summary>
     /// The end it reached before a seek moved it, told only after the seek: a MediaElement's end comes as an event,
-    /// after the fact (round 5, seed 36 of <c>RealPlayerSequenceTests</c>).
+    /// after the fact (round 4's layer, plan revision 6: seed 36 of <c>RealPlayerSequenceTests</c>).
     /// </summary>
     public void RaiseEndedAfterASeek() => Ended?.Invoke(this, EventArgs.Empty);
     public void RaiseFailed() => Failed?.Invoke(this, EventArgs.Empty);

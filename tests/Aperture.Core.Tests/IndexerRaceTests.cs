@@ -277,35 +277,63 @@ public class IndexerRaceTests
         AssertTheRowsAreTheFiles(scope, root);
     }
 
+    // A drive letter (subst) for a folder, as a USB drive has: unplugged, the letter itself is gone, so nothing above
+    // the folder is there to list. Only its own letter is taken away again on dispose (round 5, N-4: another suite on
+    // the same PC may have taken the letter since).
+    private sealed class LetterDrive : IDisposable
+    {
+        private readonly string _target, _letter;
+        private bool _ours;
+
+        public LetterDrive(string target, string folder)
+        {
+            Directory.CreateDirectory(Path.Combine(target, folder));
+            (_target, _letter) = (target, Subst.CreateOnAFreeLetter(target));
+            _ours = true;
+            Link = _letter + @"\" + folder;
+        }
+
+        public string Link { get; }
+
+        public string Combine(string name) => Path.Combine(Link, name);
+
+        public void Unplug()
+        {
+            Subst.Remove(_letter);
+            _ours = false;
+        }
+
+        public void PlugBackIn()
+        {
+            Subst.Create(_letter, _target);
+            _ours = true;
+        }
+
+        public void Dispose()
+        {
+            if (_ours)
+                Subst.Remove(_letter);
+        }
+    }
+
     [Fact]
     public void AFolderOnADriveLetterThatsGone_KeepsItsRows()
     {
-        // The drive letter itself goes, as a USB drive's does: nothing above the folder is there to list.
         using var scope = new ApertureScope();
-        var target = scope.Library.Combine("usb-drive");
+        using var drive = new LetterDrive(scope.Library.Combine("usb-drive"), "Photos");
         foreach (var name in new[] { "a.jpg", "b.jpg" })
-            TestImages.Write(Path.Combine(target, "Photos", name), 32, 24);
-        var letter = Subst.FreeLetter();
-        Subst.Create(letter, target);
-        try
-        {
-            var root = AddRoot(scope, letter + @"\Photos");
-            scope.Indexer.IndexRoot(root);
-            Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
-            Subst.Remove(letter);
+            TestImages.Write(drive.Combine(name), 32, 24);
+        var root = AddRoot(scope, drive.Link);
+        scope.Indexer.IndexRoot(root);
+        Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
+        drive.Unplug();
 
-            var result = scope.Indexer.IndexRoot(root);
+        var result = scope.Indexer.IndexRoot(root);
 
-            Assert.Equal(0, result.Removed);
-            Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
-            Subst.Create(letter, target);
-            AssertTheRowsAreTheFiles(scope, root);
-        }
-        finally
-        {
-            if (Directory.Exists(letter + @"\"))
-                Subst.Remove(letter);
-        }
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
+        drive.PlugBackIn();
+        AssertTheRowsAreTheFiles(scope, root);
     }
 
     [Fact]
@@ -364,16 +392,24 @@ public class IndexerRaceTests
         AssertTheRowsAreTheFiles(scope, root);
     }
 
-    [Fact]
-    public void AVideoWhoseDriveGoesAwayMidRun_KeepsItsRowAsItWas()
+    [Theory]
+    [InlineData(false, "a.jpg")] // a link to the drive; the drive goes as the photo before it is read
+    [InlineData(false, "v.mp4")] // ... as the video itself is read (round 5, L-2)
+    [InlineData(true, "a.jpg")] // the drive letter itself goes (round 5, L-1: round 3's check missed only this)
+    [InlineData(true, "v.mp4")]
+    public void AVideoWhoseDriveGoesAwayMidRun_KeepsItsRowAsItWas(bool itsLetter, string goesAsItsRead)
     {
         // F4 / N-2: a video's read doesn't throw for a missing file (the shell's fallback answers), so a video due a
-        // read after its drive went was read anyway: its row took the new time and lost its size, for good.
+        // read after its drive went was read anyway: its row took the new time and lost its size, for good. Round 5,
+        // L-2: the same if the drive went as the video's own read began.
         using var scope = new ApertureScope();
-        var drive = new Drive(scope.Library.Combine("Camera"), scope.Library.Combine("drive"));
-        TestImages.Write(drive.Combine("a.jpg"), 32, 24);
-        File.WriteAllText(drive.Combine("v.mp4"), "a video");
-        var root = AddRoot(scope, drive.Link);
+        using var letter = itsLetter ? new LetterDrive(scope.Library.Combine("camera-card"), "Camera") : null;
+        var link = itsLetter ? null : new Drive(scope.Library.Combine("Camera"), scope.Library.Combine("drive"));
+        Action unplug = itsLetter ? letter!.Unplug : link!.Unplug, plugBackIn = itsLetter ? letter!.PlugBackIn : link!.PlugBackIn;
+        string In(string name) => itsLetter ? letter!.Combine(name) : link!.Combine(name);
+        TestImages.Write(In("a.jpg"), 32, 24);
+        File.WriteAllText(In("v.mp4"), "a video");
+        var root = AddRoot(scope, itsLetter ? letter!.Link : link!.Link);
         scope.Indexer.IndexRoot(root);
         var video = scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo);
         using (var connection = scope.Database.OpenMetadata())
@@ -384,20 +420,21 @@ public class IndexerRaceTests
             command.ExecuteNonQuery();
         }
         foreach (var name in new[] { "a.jpg", "v.mp4" }) // both changed: each to be read again
-            File.SetLastWriteTimeUtc(drive.Combine(name), DateTime.UtcNow.AddMinutes(-3));
+            File.SetLastWriteTimeUtc(In(name), DateTime.UtcNow.AddMinutes(-3));
         scope.Indexer.Reading = rel =>
         {
-            if (rel != "a.jpg")
+            if (rel != goesAsItsRead)
                 return;
             scope.Indexer.Reading = null;
-            drive.Unplug(); // as the photo is read, before the video's turn
+            unplug();
         };
 
-        scope.Indexer.IndexRoot(root);
+        var result = scope.Indexer.IndexRoot(root);
 
         var kept = scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo);
         Assert.Equal((video.MTimeUtc, 512, 288), (kept.MTimeUtc, kept.Width ?? 0, kept.Height ?? 0)); // as it was
-        drive.PlugBackIn();
+        Assert.Equal(0, result.Removed);
+        plugBackIn();
         scope.Indexer.IndexRoot(root);
         AssertTheRowsAreTheFiles(scope, root);
     }
@@ -422,6 +459,31 @@ public class IndexerRaceTests
         Assert.Equal(0, result.Removed);
         Assert.Equal(["CLOUD.JPG", "local.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath).Order(StringComparer.Ordinal));
         scope.Indexer.IndexRoot(root, null, default, true, (_, _) => Indexing.OnlineOnlyChoice.Now);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    private sealed class Heard(Action<IndexProgress> heard) : IProgress<IndexProgress>
+    {
+        public void Report(IndexProgress value) => heard(value);
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_ThenARunStoppedAtItsPrune_TheNextRunLeavesOneRow()
+    {
+        // Round 5, L-3: the new name's row was saved, the old one's not yet pruned (a pause, Stop, switch or exit). The
+        // next run finds the new name unchanged: kept as it is, it still counts as indexed, so the old name's row goes.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("IMG_1.JPG"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        File.Move(scope.Library.Combine("IMG_1.JPG"), scope.Library.Combine("img_1.jpg"));
+        using var stop = new CancellationTokenSource();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => scope.Indexer.IndexRoot(
+            root, new Heard(p => { if (p.Phase == IndexPhase.Pruning) stop.Cancel(); }), stop.Token));
+        Assert.Equal(["IMG_1.JPG", "img_1.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath).Order(StringComparer.Ordinal));
+
+        Assert.Equal(1, scope.Indexer.IndexRoot(root).Removed);
         AssertTheRowsAreTheFiles(scope, root);
     }
 

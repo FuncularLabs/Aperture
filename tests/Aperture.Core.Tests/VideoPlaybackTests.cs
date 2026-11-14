@@ -164,9 +164,24 @@ public class VideoPlaybackTests
     }
 
     [Fact]
+    public void AnEnd_OfAVideoWhoseLengthIsntKnown_Counts()
+    {
+        // Round 5, F-6: the check for an end the player was moved back from needs the length; without one, the end is
+        // taken as it comes (V12: shown paused at its end, and Space plays it again).
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: null);
+        playback.Toggle();
+
+        _players[0].RaiseEndedAfterASeek(); // wherever it says it is
+
+        Assert.False(playback.IsPlaying);
+    }
+
+    [Fact]
     public void AnEndThePlayerWasMovedBackFrom_IsOldNews()
     {
-        // Round 5 (seed 36 of RealPlayerSequenceTests, now and then): played, moved to its end and back in quick
+        // Round 4's layer, seed 36 of RealPlayerSequenceTests (now and then): played, moved to its end and back in quick
         // succession, the end came after the seek back. The video played on from there while the window showed it
         // paused at its end.
         var playback = Playback();

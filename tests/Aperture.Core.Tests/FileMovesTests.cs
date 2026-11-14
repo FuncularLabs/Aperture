@@ -821,15 +821,20 @@ public class FileMovesTests : IDisposable
             FileMoves.OutcomeOf(new IOException("in use", unchecked((int)0x80070020)), @"C:\a.jpg", @"E:\a.jpg", placed: false));
     }
 
-    [Fact]
-    public void ACopy_HeldOpenByAnotherProgramAsItsFlushed_StillMoves()
+    [Theory]
+    [InlineData(System.Security.AccessControl.FileSystemRights.Read)] // a virus scanner, the search indexer
+    [InlineData(System.Security.AccessControl.FileSystemRights.Read | System.Security.AccessControl.FileSystemRights.Write)] // a sync client
+    [InlineData(System.Security.AccessControl.FileSystemRights.Read | System.Security.AccessControl.FileSystemRights.Delete)] // one that may move it
+    public void ACopy_HeldOpenByAnotherProgramAsItsFlushed_StillMoves(System.Security.AccessControl.FileSystemRights holds)
     {
-        // Round 4, F5: the flush opened the new copy for itself alone, so a virus scanner, the search indexer or a sync
-        // client reading it just then turned a good move into "in use", and the copy was thrown away.
+        // Round 4, F5: the flush opened the new copy for itself alone, so another program holding it just then turned a
+        // good move into "in use", and the copy was thrown away. Round 5, N-3 / F-5: a reader alone let a flush shared
+        // only for reading pass; one holding it to write or delete needs those shared too.
         var a = Photo("a.jpg");
         FileStream? reader = null;
         _moves.ForceCopy = true;
-        _moves.BeforeFlush = copy => reader = new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        _moves.BeforeFlush = copy => reader = new FileInfo(copy).Create(
+            FileMode.Open, holds, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.None, null);
         _moves.Copied = _ => reader?.Dispose();
 
         var outcome = _moves.Move(a, _to).Outcome;
