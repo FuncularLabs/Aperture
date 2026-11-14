@@ -108,6 +108,25 @@ public class AnnotationLoadTests
     }
 
     [Fact]
+    public void ClearingOneOfTwoNamesOnlyDotNetFoldsTogether_LeavesTheOtherFilesTags()
+    {
+        // Round 28, D F-1: the window's clear saves under the tile's path (M4), so clearing an untagged "ς.jpg", which
+        // shows "σ.jpg"'s tags (two files on NTFS, one path to the window), deletes nothing of σ.jpg's; clearing through
+        // the row shown would.
+        using var scope = new ApertureScope();
+        var tags = new AnnotationStore(scope.Database);
+        var sigma = scope.Library.Combine("σ.jpg");
+        tags.Save(sigma, ["mine"], "my note");
+        var final = scope.Library.Combine("ς.jpg");
+        Assert.Equal(["mine"], tags.GetAll()[final].Tags); // shown on ς.jpg's tile
+
+        tags.Save(final, [], ""); // the window's clear there
+
+        Assert.Equal(["mine"], tags.Get(sigma).Tags);
+        Assert.Equal("my note", tags.Get(sigma).Note);
+    }
+
+    [Fact]
     public void TagStats_TheRowUsedLast_WinsWhenReadLast_OrFirst()
     {
         // Round 23, D F-4: the merge's other half, a row read after one used later: the uses still add up, under the

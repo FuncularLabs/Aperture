@@ -62,6 +62,36 @@ public class AnnotationTransferTests
     }
 
     [Fact]
+    public void AnImportForOneOfTwoNamesOnlyDotNetFoldsTogether_LeavesTheOtherFilesRow()
+    {
+        // Round 28, D F-1: an import reaches the row its entry's path resolves to (M4), never the row the window shows
+        // for it: for "ς.jpg" beside a tagged "σ.jpg" (two files on NTFS, one path to the window), that's another file's.
+        using var export = new TempDir();
+        var exportFile = export.Combine("tags.json");
+        using var b = new ApertureScope();
+        var sigma = MakeFile(b.Library, "σ.jpg");
+        var final = MakeFile(b.Library, "ς.jpg");
+        b.Roots.Add(new Root { Path = b.Library.Path, Alias = "Photos", AddedUtc = DateTime.UtcNow });
+        var store = new AnnotationStore(b.Database);
+        store.Save(sigma, ["mine"], "my note");
+        File.WriteAllText(exportFile, $$"""
+            {
+              "version": 1,
+              "entries": [
+                { "path": {{System.Text.Json.JsonSerializer.Serialize(final)}}, "rootAlias": "Photos", "relPath": "ς.jpg", "tags": ["theirs"], "note": "" }
+              ]
+            }
+            """);
+
+        var summary = new AnnotationTransfer(store, b.Roots).Import(exportFile);
+
+        Assert.Equal(1, summary.Applied);
+        Assert.Equal(["mine"], store.Get(sigma).Tags);
+        Assert.Equal("my note", store.Get(sigma).Note);
+        Assert.Equal(["theirs"], store.Get(final).Tags); // nothing of σ.jpg's brought along
+    }
+
+    [Fact]
     public void Import_counts_unresolved_and_skips_empty_entries()
     {
         using var export = new TempDir();
