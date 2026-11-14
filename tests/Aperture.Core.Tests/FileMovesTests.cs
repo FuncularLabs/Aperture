@@ -69,6 +69,14 @@ public class FileMovesTests : IDisposable
 
     // Holds the library's write lock, as a run's open batch does; let go (rolled back) when disposed, so the pooled
     // connection goes back to the pool without a transaction.
+    // The thumbnails' file held, as a run's open batch holds it.
+    private IDisposable HoldTheThumbnails()
+    {
+        var connection = _scope.Database.OpenThumbnails();
+        var transaction = connection.BeginTransaction(deferred: false);
+        return new Held(connection, transaction);
+    }
+
     private IDisposable HoldTheLibrary()
     {
         var connection = _scope.Database.OpenMetadata();
@@ -763,6 +771,54 @@ public class FileMovesTests : IDisposable
         using var read = connection.CreateCommand();
         read.CommandText = "PRAGMA busy_timeout;";
         Assert.Equal(5000L, Convert.ToInt64(read.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void AStaleRowsThumbnails_DontHoldTheMoveUp_WhileARunHoldsThem()
+    {
+        // Round 3, N-1: their delete waited the thumbnails' busy timeout and the driver's retries (up to 30 s), unstopped.
+        var a = Photo("a.jpg");
+        var stale = Photo("a.jpg", "to");
+        var (root, _) = Indexed("a.jpg");
+        File.Delete(stale);
+        var watch = Stopwatch.StartNew();
+        using (HoldTheThumbnails())
+        {
+            Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+        }
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"it waited {watch.Elapsed}"); // left to the cache: ids aren't reused
+    }
+
+    [Fact]
+    public void AnOnlineOnlyFile_AcrossDrives_WithTheLibraryBusy_IsntCopied()
+    {
+        // Round 3, N-2: it was copied (downloaded) first, then found it couldn't take its row, and the copy thrown away.
+        var a = Photo("a.jpg");
+        File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline);
+        var (root, _) = Indexed("a.jpg");
+        _moves.ForceCopy = true;
+        _moves.BusyTimeout = TimeSpan.FromMilliseconds(200);
+        var copied = 0;
+        _moves.CopyingChunk = _ => copied++;
+        using (HoldTheLibrary())
+        {
+            Assert.Equal(MoveOutcome.LibraryBusy, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+        }
+
+        Assert.Equal(0, copied);
+        Assert.Empty(Directory.GetFiles(_to));
+    }
+
+    [Fact]
+    public void AnEncryptedFile_ForADriveThatCantKeepItEncrypted_IsSaid()
+    {
+        // Round 3, L-3: CopyFileEx refuses (ERROR_ENCRYPTION_FAILED) rather than write a decrypted copy; said as such.
+        Assert.Equal(MoveOutcome.CantStayEncrypted,
+            FileMoves.OutcomeOf(new IOException("The specified file could not be encrypted.", unchecked((int)0x80071770)),
+                @"C:\a.jpg", @"E:\a.jpg", placed: false));
+        Assert.Equal(MoveOutcome.InUse,
+            FileMoves.OutcomeOf(new IOException("in use", unchecked((int)0x80070020)), @"C:\a.jpg", @"E:\a.jpg", placed: false));
     }
 
     [Fact]

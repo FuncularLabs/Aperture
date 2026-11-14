@@ -1637,6 +1637,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         MoveOutcome.AccessDenied => "Windows didn't allow the move",
         MoveOutcome.LibraryBusy => "the library was busy indexing; try again in a moment",
         MoveOutcome.Stopped => "not reached: Aperture stopped the move",
+        MoveOutcome.CantStayEncrypted => "encrypted, and that drive can't keep them encrypted",
         _ => "couldn't be moved",
     };
 

@@ -6,7 +6,8 @@ namespace Aperture.Core.Tests;
 
 /// <summary>
 /// A run's count and its reads are apart in time (0.9.2 round 2, R2-4 and OOR-1): a file can vanish, be locked, or be
-/// moved in or out by Move to… meanwhile. None of that ends the run, loses a row it shouldn't, or keeps one it shouldn't.
+/// moved in or out by Move to… meanwhile, or the folder go away. None of that ends the run, loses a row it shouldn't,
+/// or keeps one it shouldn't: each test of round 3 ends on <see cref="AssertTheRowsAreTheFiles"/>.
 /// </summary>
 public class IndexerRaceTests
 {
@@ -23,6 +24,30 @@ public class IndexerRaceTests
 
         Assert.Equal(["a.jpg", "c.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.FileName).Order());
         Assert.Equal(2, result.Added);
+    }
+
+    [Fact]
+    public void AFileGoneMidRead_LosesItsRow_AndTheRunGoesOn()
+    {
+        // Round 3 (dispositions lens), N-5: the file vanishes as it's read (a read that throws), not before.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "a.jpg", "b.jpg" })
+            TestImages.Write(scope.Library.Combine(name), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var b = scope.Library.Combine("b.jpg");
+        File.SetLastWriteTimeUtc(b, DateTime.UtcNow.AddMinutes(-3)); // to be read again
+        scope.Indexer.Reading = rel =>
+        {
+            if (rel == "b.jpg")
+                File.Delete(b); // after the run found it there, before its read
+        };
+
+        var result = scope.Indexer.IndexRoot(root);
+        scope.Indexer.Reading = null;
+
+        Assert.Equal(1, result.Removed);
+        AssertTheRowsAreTheFiles(scope, root);
     }
 
     [Fact]
@@ -126,5 +151,133 @@ public class IndexerRaceTests
 
         Assert.Equal(["top.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.FileName));
         Assert.Equal(2, result.Removed);
+    }
+
+    // --- Round 3: the rows are the files (review round 3, M-2, M-3, L-1; C0). Each test ends on the same rule, so a
+    // fix for one case that breaks another fails here: one row per file a scan finds now, in its case, and a second run
+    // changes nothing.
+
+    private static void AssertTheRowsAreTheFiles(ApertureScope scope, Root root)
+    {
+        var files = Indexing.FileScanner.Scan(root.Path, recursive: root.Recursive).Select(f => f.RelPath).Order(StringComparer.Ordinal);
+        var rows = scope.Items.GetForRoot(root.Id).Select(i => i.RelPath).Order(StringComparer.Ordinal);
+        Assert.Equal(files, rows);
+        var again = scope.Indexer.IndexRoot(root);
+        Assert.Equal((0, 0, 0), (again.Added, again.Updated, again.Removed));
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_LeavesOneRow()
+    {
+        // M-2: the prune's "its file is there after all" found the old name's file, whatever its case: two rows for good.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("IMG_1.JPG"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+
+        File.Move(scope.Library.Combine("IMG_1.JPG"), scope.Library.Combine("img_1.jpg"));
+        scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(["img_1.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath));
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFolderRenamedOnlyInCase_LeavesOneRowEach()
+    {
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("trips", "a.jpg"), 32, 24);
+        TestImages.Write(scope.Library.Combine("trips", "b.jpg"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+
+        Directory.Move(scope.Library.Combine("trips"), scope.Library.Combine("trips-"));
+        Directory.Move(scope.Library.Combine("trips-"), scope.Library.Combine("Trips"));
+        scope.Indexer.IndexRoot(root);
+
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFolderGoneMidRun_KeepsItsRows()
+    {
+        // M-3: a drive unplugged or a share dropped mid-run made every later file "gone", and the prune took their rows.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" })
+            TestImages.Write(scope.Library.Combine("Photos", name), 32, 24);
+        var root = scope.Roots.Add(new Root { Path = scope.Library.Combine("Photos"), Alias = "Photos", AddedUtc = DateTime.UtcNow });
+        scope.Indexer.IndexRoot(root);
+        foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" }) // all changed: each to be read again
+            File.SetLastWriteTimeUtc(scope.Library.Combine("Photos", name), DateTime.UtcNow.AddMinutes(-3));
+        scope.Indexer.Reading = _ =>
+        {
+            scope.Indexer.Reading = null;
+            Directory.Move(scope.Library.Combine("Photos"), scope.Library.Combine("Photos-away")); // as the first is read
+        };
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(3, scope.Items.GetForRoot(root.Id).Count);
+        Directory.Move(scope.Library.Combine("Photos-away"), scope.Library.Combine("Photos")); // back
+        scope.Indexer.IndexRoot(root);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFolderMissingWhenItsRunStarts_KeepsItsRows()
+    {
+        // C0 (from before 0.9.2): a USB drive unplugged at launch; the count came back empty and the prune took every row.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "a.jpg", "b.jpg" })
+            TestImages.Write(scope.Library.Combine("USB", name), 32, 24);
+        var root = scope.Roots.Add(new Root { Path = scope.Library.Combine("USB"), Alias = "USB", AddedUtc = DateTime.UtcNow });
+        scope.Indexer.IndexRoot(root);
+        var ids = scope.Items.GetForRoot(root.Id).Select(i => i.Id).Order().ToList();
+        Directory.Move(scope.Library.Combine("USB"), scope.Library.Combine("USB-unplugged"));
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(ids, scope.Items.GetForRoot(root.Id).Select(i => i.Id).Order());
+        Directory.Move(scope.Library.Combine("USB-unplugged"), scope.Library.Combine("USB"));
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AMoveLandingDuringTheRun_KeepsTheRowItTook()
+    {
+        // L-1: the run's rows were read before the move; the file it was to read was gone, and the prune deleted its row
+        // by id — the row the move had just taken to the other folder. The window is the online-only question: the run
+        // has counted and read its rows, and holds no write yet (inside a batch, the move's row write waits instead).
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("A", "a.jpg"), 32, 24);
+        TestImages.Write(scope.Library.Combine("A", "b.jpg"), 32, 24);
+        Directory.CreateDirectory(scope.Library.Combine("B"));
+        var rootA = scope.Roots.Add(new Root { Path = scope.Library.Combine("A"), Alias = "A", AddedUtc = DateTime.UtcNow });
+        var rootB = scope.Roots.Add(new Root { Path = scope.Library.Combine("B"), Alias = "B", AddedUtc = DateTime.UtcNow });
+        scope.Indexer.IndexRoot(rootA);
+        var b = scope.Library.Combine("A", "b.jpg");
+        File.SetLastWriteTimeUtc(b, DateTime.UtcNow.AddMinutes(-3)); // b is to be read again
+        var cloud = scope.Library.Combine("A", "c.jpg");
+        TestImages.Write(cloud, 32, 24);
+        File.SetAttributes(cloud, File.GetAttributes(cloud) | FileAttributes.Offline); // so the run asks
+        var moved = scope.Items.GetForRoot(rootA.Id).Single(i => i.FileName == "b.jpg").Id;
+        var moves = new FileMoves(scope.Database);
+        scope.Indexer.RescanAfter = TimeSpan.FromMinutes(5); // answered at once: no second count
+
+        scope.Indexer.IndexRoot(rootA, null, default, true, (_, _) =>
+        {
+            Assert.Equal(MoveOutcome.Moved, moves.Move(b, scope.Library.Combine("B"), default,
+                new ItemMove(rootA.Id, "b.jpg", rootB.Id, "b.jpg")).Outcome); // while the question waits
+            return Indexing.OnlineOnlyChoice.Now;
+        });
+
+        Assert.Equal(["a.jpg", "c.jpg"], scope.Items.GetForRoot(rootA.Id).Select(i => i.RelPath).Order());
+        Assert.Equal(moved, Assert.Single(scope.Items.GetForRoot(rootB.Id)).Id);
+        AssertTheRowsAreTheFiles(scope, rootA);
+        Assert.Equal(1, scope.Indexer.IndexRoot(rootB).Updated); // b had changed before it moved: its row is brought up to date
+        Assert.Equal(moved, Assert.Single(scope.Items.GetForRoot(rootB.Id)).Id);
+        AssertTheRowsAreTheFiles(scope, rootB);
     }
 }

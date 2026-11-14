@@ -109,9 +109,11 @@ public class IndexerOnlineOnlyTests
     }
 
     [Fact]
-    public void ALongWaitForTheAnswer_CountsAgain_SoAFileGoneMeanwhileGetsNoRow()
+    public void ALongWaitForTheAnswer_CountsAgain_SoWhatChangedMeanwhileIsIndexed()
     {
-        // Round 1 (lens 2, finding 10): the question can wait a long time; what was counted before it may be gone.
+        // Round 1 (lens 2, finding 10): the question can wait a long time, the folder unwatched; what was counted before
+        // it may be gone, and more may have come. (Round 3: a file gone is now left out by the run itself, R2-4; only a
+        // second count finds one that came.)
         var (scope, root, reads) = Library("there.jpg");
         using var _ = scope;
         scope.Indexer.RescanAfter = TimeSpan.Zero;
@@ -119,11 +121,28 @@ public class IndexerOnlineOnlyTests
         scope.Indexer.IndexRoot(root, null, default, true, (_, _) =>
         {
             File.Delete(scope.Library.Combine("there.jpg"));
+            TestImages.Write(scope.Library.Combine("new.jpg"), 64, 48);
+            return OnlineOnlyChoice.Now;
+        });
+
+        Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg", "new.jpg"], Names(scope, root));
+        Assert.DoesNotContain("there.jpg", reads);
+    }
+
+    [Fact]
+    public void AShortWaitForTheAnswer_DoesntCountAgain()
+    {
+        var (scope, root, _) = Library();
+        using var _ = scope;
+        scope.Indexer.RescanAfter = TimeSpan.FromMinutes(5);
+
+        scope.Indexer.IndexRoot(root, null, default, true, (_, _) =>
+        {
+            TestImages.Write(scope.Library.Combine("new.jpg"), 64, 48); // came meanwhile: the next run's
             return OnlineOnlyChoice.Now;
         });
 
         Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg"], Names(scope, root));
-        Assert.DoesNotContain("there.jpg", reads);
     }
 
     [Fact]
@@ -136,10 +155,11 @@ public class IndexerOnlineOnlyTests
         await scope.Indexer.IndexRootAsync(root, null, default, true, (_, _) =>
         {
             File.Delete(scope.Library.Combine("there.jpg"));
+            TestImages.Write(scope.Library.Combine("new.jpg"), 64, 48);
             return Task.FromResult(OnlineOnlyChoice.Now);
         });
 
-        Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg"], Names(scope, root));
+        Assert.Equal(["cloud1.jpg", "cloud2.jpg", "here.jpg", "new.jpg"], Names(scope, root));
     }
 
     [Fact]

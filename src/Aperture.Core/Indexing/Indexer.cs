@@ -133,6 +133,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     {
         var (root, files, existing, nowTicks, onlineOnly) = (scan.Root, scan.Files, scan.Existing, scan.NowTicks, scan.OnlineOnly);
         bool IsUnchanged(ScannedFile file, out ItemStore.ExistingItem row) => scan.IsUnchanged(file, out row);
+        // Gone, not just out of reach: a folder that went away (an unplugged drive, a dropped share) leaves its files
+        // where they were, for when it's back (round 3, M-3).
+        bool Gone(string path) => !File.Exists(path) && Directory.Exists(root.Path);
         bool ThumbsFresh(long itemId, ScannedFile file) => scan.ThumbsFresh(itemId, file);
         bool Downloads(ScannedFile file) => scan.Downloads(file);
 
@@ -193,7 +196,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 var unchanged = IsUnchanged(file, out var row);
                 try
                 {
-                    if ((!unchanged || !ThumbsFresh(row.Id, file)) && !File.Exists(file.FullPath))
+                    if ((!unchanged || !ThumbsFresh(row.Id, file)) && Gone(file.FullPath))
                     {
                         // Gone since it was counted (moved, deleted): not read, not kept (round 2, R2-4).
                         seen.Remove(file.RelPath);
@@ -238,7 +241,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 {
                     // A file that can't be read just now (in use, gone mid-read) no longer ends the run (OOR-1): one gone
                     // isn't kept; one still there keeps its row as it was, for the next run to read.
-                    if (!File.Exists(file.FullPath))
+                    if (Gone(file.FullPath))
                         seen.Remove(file.RelPath);
                     else
                         failed++;
@@ -285,23 +288,29 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         {
             RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly, OnlineOnlyLast = onlineOnlyLast,
         });
-        // A row not seen is pruned unless its file is there after all, in the run's scope: moved in by Move to… after the
-        // count passed its folder (round 2, R2-4). Out of scope (a folder without subfolders, videos left out) it goes.
-        var rootThere = Directory.Exists(root.Path);
-        bool StillThere(string relPath) =>
-            rootThere
-            && (root.Recursive || !relPath.Contains(Path.DirectorySeparatorChar))
-            && SupportedFormats.IsSupported(Path.GetExtension(relPath).ToLowerInvariant(), scan.IncludeVideos)
-            && File.Exists(Path.Combine(root.Path, relPath));
-        var removedIds = existing
-            .Where(kv => !seen.Contains(kv.Key) && !StillThere(kv.Key))
-            .Select(kv => kv.Value.Id)
-            .ToList();
-        if (removedIds.Count > 0)
+        // A row not seen is pruned unless its file is there after all, in the run's scope and not seen under another case
+        // (moved in by Move to… after the count passed its folder: round 2, R2-4; a rename that changed only the case is
+        // the old name's row, and goes: round 3, M-2). Out of scope (a folder without subfolders, videos left out) it
+        // goes. A folder that can't be reached prunes nothing: its files aren't gone, only out of reach (round 3, M-3, C0).
+        var removed = new List<(long Id, string RelPath)>();
+        if (Directory.Exists(root.Path))
         {
-            DeleteItems(meta, removedIds);
-            new ThumbnailStore(_db).DeleteForItems(removedIds);
+            var seenAnyCase = new HashSet<string>(seen, StringComparer.OrdinalIgnoreCase);
+            bool StillThere(string relPath) =>
+                !seenAnyCase.Contains(relPath)
+                && (root.Recursive || !relPath.Contains(Path.DirectorySeparatorChar))
+                && SupportedFormats.IsSupported(Path.GetExtension(relPath).ToLowerInvariant(), scan.IncludeVideos)
+                && File.Exists(Path.Combine(root.Path, relPath));
+            foreach (var (relPath, item) in existing)
+            {
+                ct.ThrowIfCancellationRequested(); // a big prune on a slow share stops when asked (round 3, N-3)
+                if (!seen.Contains(relPath) && !StillThere(relPath))
+                    removed.Add((item.Id, relPath));
+            }
         }
+        var removedIds = removed.Count > 0 ? DeleteItems(meta, root.Id, removed) : [];
+        if (removedIds.Count > 0)
+            new ThumbnailStore(_db).DeleteForItems(removedIds);
 
         progress?.Report(new IndexProgress
         {
@@ -370,19 +379,27 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         return stored;
     }
 
-    private static void DeleteItems(SqliteConnection meta, IReadOnlyList<long> ids)
+    // Deletes each row only if it's still where the run read it: a row Move to… took elsewhere since is left alone
+    // (round 3, L-1). Returns the ids it deleted (their thumbnails go too).
+    private static List<long> DeleteItems(SqliteConnection meta, long rootId, IReadOnlyList<(long Id, string RelPath)> rows)
     {
+        var deleted = new List<long>();
         using var tx = meta.BeginTransaction();
         using var cmd = meta.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "DELETE FROM items WHERE id = @id;";
-        var p = cmd.Parameters.Add("@id", SqliteType.Integer);
-        foreach (var id in ids)
+        cmd.CommandText = "DELETE FROM items WHERE id = @id AND root_id = @root AND rel_path = @rel;";
+        var id = cmd.Parameters.Add("@id", SqliteType.Integer);
+        cmd.Parameters.AddWithValue("@root", rootId);
+        var rel = cmd.Parameters.Add("@rel", SqliteType.Text);
+        foreach (var row in rows)
         {
-            p.Value = id;
-            cmd.ExecuteNonQuery();
+            id.Value = row.Id;
+            rel.Value = row.RelPath;
+            if (cmd.ExecuteNonQuery() > 0)
+                deleted.Add(row.Id);
         }
         tx.Commit();
+        return deleted;
     }
 
     private static SqliteCommand CreateUpsertItemCommand(SqliteConnection conn)

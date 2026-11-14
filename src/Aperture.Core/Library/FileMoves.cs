@@ -36,6 +36,9 @@ public enum MoveOutcome
 
     /// <summary>Moved, but its tags and notes couldn't be moved with it: they stay under its old path.</summary>
     MovedTagsBehind,
+
+    /// <summary>It's encrypted, and the destination drive can't keep it encrypted (FAT32, exFAT): it stays.</summary>
+    CantStayEncrypted,
 }
 
 public sealed record FileMove(string Source, string Destination, MoveOutcome Outcome);
@@ -140,6 +143,8 @@ public sealed class FileMoves(ApertureDatabase database)
             needsWrite = tagged || (item is not null && Indexing.CloudFiles.IsOnlineOnly(File.GetAttributes(from)));
             if (needsWrite && _busy)
                 return Result(MoveOutcome.LibraryBusy); // found busy already: neither copied nor waited for
+            if (acrossDrives && needsWrite)
+                ProbeTheWrite(); // busy: it stays without being copied (downloaded) first (round 3, N-2)
             if (acrossDrives)
             {
                 copyMade = true; // before the copy: one that fails part-way is removed too (round 1, N3)
@@ -189,7 +194,9 @@ public sealed class FileMoves(ApertureDatabase database)
     }
 
     // The write failed once the file had moved (a full disk, an I/O error): made again in a write of its own. Failing
-    // again, a tagged file's tags stay under its old path (said); an online-only file's row is moved by the next run.
+    // again, a tagged file's tags stay under its old path (said: MovedTagsBehind); an untagged online-only file is just
+    // Moved, and the next run of its destination reads it as new (downloads it; under Skip, leaves it out) — accepted.
+    // (round 3, L-4: no run moves a row.)
     private MoveOutcome RekeyAgain(string from, string to, ItemMove? item, bool tagged)
     {
         try
@@ -218,7 +225,8 @@ public sealed class FileMoves(ApertureDatabase database)
         string existingFileName, string newFileName, CopyProgressRoutine? progress, IntPtr data, ref int cancel, uint flags);
 
     private const uint ProgressContinue = 0, ProgressCancel = 1, CallbackChunkFinished = 0;
-    private const int ErrorRequestAborted = 1235, ErrorAccessDenied = 5, ErrorFileNotFound = 2, ErrorPathNotFound = 3;
+    private const int ErrorRequestAborted = 1235, ErrorAccessDenied = 5, ErrorFileNotFound = 2, ErrorPathNotFound = 3,
+        ErrorEncryptionFailed = 6000;
 
     private void CopyTo(string from, string copy, CancellationToken ct)
     {
@@ -240,6 +248,7 @@ public sealed class FileMoves(ApertureDatabase database)
             throw error switch
             {
                 ErrorRequestAborted => new OperationCanceledException(message),
+                ErrorEncryptionFailed => new IOException(message, unchecked((int)0x80070000 | error)),
                 ErrorAccessDenied => new UnauthorizedAccessException(message),
                 ErrorFileNotFound => new FileNotFoundException(message, from),
                 ErrorPathNotFound => new DirectoryNotFoundException(message),
@@ -247,8 +256,19 @@ public sealed class FileMoves(ApertureDatabase database)
             };
         }
         ct.ThrowIfCancellationRequested();
+        // On disk before the original goes (CopyFileEx doesn't flush): writable for the flush, its attributes set later.
+        File.SetAttributes(copy, File.GetAttributes(copy) & ~FileAttributes.ReadOnly);
+        using (var written = new FileStream(copy, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            written.Flush(flushToDisk: true); // round 3, L-2
         File.SetCreationTimeUtc(copy, File.GetCreationTimeUtc(from)); // CopyFileEx keeps the last-write time, not this
         File.SetLastWriteTimeUtc(copy, File.GetLastWriteTimeUtc(from));
+    }
+
+    // Whether the library's write can be had now (waiting BusyTimeout), before a copy across drives that the write must
+    // follow: a run holding it would make the copy for nothing. Taken and let go at once.
+    private void ProbeTheWrite()
+    {
+        using var probe = BeginRekey(@"\\?\probe-from", @"\\?\probe-to", null, wait: true); // rolled back on dispose
     }
 
     // Deletes the original once its copy is in place; a read-only one is made writable for it, and read-only again if
@@ -277,10 +297,14 @@ public sealed class FileMoves(ApertureDatabase database)
         catch (Exception) { /* best effort: it stays where it was either way */ }
     }
 
+    internal static MoveOutcome OutcomeOf(Exception ex, string from, string to, bool placed) => Outcome(ex, from, to, placed);
+
     private static MoveOutcome Outcome(Exception ex, string from, string to, bool placed) => ex switch
     {
         OperationCanceledException => MoveOutcome.Stopped,
         LibraryBusyException => MoveOutcome.LibraryBusy,
+        // CopyFileEx won't write a decrypted copy where encryption can't be kept (FAT32, exFAT): round 3, L-3.
+        IOException io when (io.HResult & 0xFFFF) == ErrorEncryptionFailed => MoveOutcome.CantStayEncrypted,
         UnauthorizedAccessException => MoveOutcome.AccessDenied,
         FileNotFoundException when !File.Exists(from) => MoveOutcome.SourceGone,
         DirectoryNotFoundException when !File.Exists(from) => MoveOutcome.SourceGone,
@@ -320,10 +344,7 @@ public sealed class FileMoves(ApertureDatabase database)
             transaction.Commit();
             _done = true;
             if (staleId is { } id)
-            {
-                try { new ThumbnailStore(database).DeleteForItems([id]); } // the stale row's thumbnails go with it
-                catch (Exception) { /* best effort: the cache's own pruning finds them in time */ }
-            }
+                DeleteThumbnailsBriefly(database, id);
         }
 
         public void Dispose()
@@ -339,6 +360,31 @@ public sealed class FileMoves(ApertureDatabase database)
             }
             transaction.Dispose();
             Release(connection);
+        }
+    }
+
+    // The stale row's thumbnails, if the thumbnails' file can be written at once; else left (a run holds it): ids aren't
+    // reused, so they never show for another file, and the cache's own pruning takes them in time (round 3, N-1).
+    private static void DeleteThumbnailsBriefly(ApertureDatabase database, long itemId)
+    {
+        SqliteConnection? connection = null;
+        try
+        {
+            connection = database.OpenThumbnails();
+            connection.DefaultTimeout = 1;
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA busy_timeout=0; DELETE FROM thumbs WHERE item_id = @id;";
+            command.Parameters.AddWithValue("@id", itemId);
+            command.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // Busy or broken: best effort.
+        }
+        finally
+        {
+            if (connection is not null)
+                Release(connection);
         }
     }
 

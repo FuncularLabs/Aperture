@@ -16,8 +16,9 @@ public sealed class MediaElementPlayer : IVideoPlayer
     private readonly MediaElement _element;
     private int _asked;   // each play, pause, seek and close: a deferred pause runs only if nothing came after it
     private bool _seeked; // moved since the last play or pause
-    private bool _playing;     // told to play, and not told to pause since (an ended video still counts: it isn't paused)
-    private bool _paused;      // told to pause at least once (the first pause after Open is what opens the video)
+    // The MediaElement itself has been paused, and not played since. Set only where _element.Pause() runs — never when a
+    // pause is merely posted, since a later seek cancels a posted one (round 3, H-1). An ended video isn't paused.
+    private bool _elementPaused;
     private bool _played;      // told to play at least once
     private TimeSpan? _before; // a seek made before it was ever played, set again once it is (round 2, R2-1)
 
@@ -85,7 +86,7 @@ public sealed class MediaElementPlayer : IVideoPlayer
     {
         _asked++;
         _seeked = false;
-        _playing = true;
+        _elementPaused = false;
         _played = true;
         _element.Play();
         if (_before is { } at)
@@ -96,41 +97,47 @@ public sealed class MediaElementPlayer : IVideoPlayer
     }
 
     /// <summary>
-    /// Pauses. A video already paused (opened by a pause, or paused since) is left alone: a second pause on a
-    /// MediaElement opened by a pause sends it back to 0:00 (round 2, R2-1). Straight after a seek the pause is posted
-    /// at Background priority, so the seek is taken before it: a MediaElement that has reached its end and is paused
-    /// straight after a seek goes back to 0:00, while one paused a moment later stays there (round 1, A-F1). A play,
-    /// another seek or a close meanwhile cancels it.
+    /// Pauses. A MediaElement already paused is left alone: a second pause on one opened by a pause sends it back to 0:00
+    /// (round 2, R2-1). Straight after a seek the pause is posted at Background priority, so the seek is taken before it:
+    /// a MediaElement that has reached its end and is paused straight after a seek goes back to 0:00, while one paused a
+    /// moment later stays there (round 1, A-F1). A play, another seek or a close meanwhile cancels the posted pause —
+    /// and the element counts as paused only once one has run, so the next pause is made again (round 3, H-1).
     /// </summary>
     public void Pause()
     {
         var asked = ++_asked;
-        if (_paused && !_playing)
+        if (_elementPaused)
         {
             _seeked = false;
             return; // already paused: left where it is
         }
-        _paused = true;
-        _playing = false;
         if (!_seeked)
         {
             _element.Pause();
+            _elementPaused = true;
             return;
         }
         _seeked = false;
         _element.Dispatcher.BeginInvoke(() =>
         {
-            if (asked == _asked)
-                _element.Pause();
+            if (asked != _asked)
+                return; // a play, seek or close came after it
+            _element.Pause();
+            _elementPaused = true;
         }, DispatcherPriority.Background);
     }
 
-    public void Rewind() => _element.Position = TimeSpan.Zero;
+    /// <summary>Back to the start (after it ended); a seek made before the first play is forgotten (round 3, M-1).</summary>
+    public void Rewind()
+    {
+        _before = null;
+        _element.Position = TimeSpan.Zero;
+    }
 
     public void Close()
     {
         _asked++;
-        _playing = false;
+        _elementPaused = false;
         _element.Stop();
         _element.Close();      // lets go of the file
         _element.Source = null;
