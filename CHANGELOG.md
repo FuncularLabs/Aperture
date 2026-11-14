@@ -38,9 +38,10 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   through a folder link, a junction or symbolic link, to one), keeps its photos in Aperture until
   it's back, instead of being emptied by the next index. If another drive takes the unplugged
   drive's letter meanwhile, the folder is emptied as if it had been deleted. A folder that was
-  deleted or renamed, or that a folder link points to, is still emptied, as before, when
-  Aperture can look in the nearest folder above it that's still there (not when a cloud placeholder
-  file of the same name has taken its place: then its photos stay until that file goes).
+  deleted or renamed (or a folder link whose target was) is still emptied, as before, when
+  Aperture can look in the nearest folder above it that's still there. One exception: if a file
+  synced by OneDrive or Dropbox, downloaded or not, now has the folder's name, its photos stay
+  until that file goes.
 
 ## [0.9.1] - 2026-11-13
 

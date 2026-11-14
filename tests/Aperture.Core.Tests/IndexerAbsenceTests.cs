@@ -20,9 +20,25 @@ public class IndexerAbsenceTests
 {
     private static readonly Indexer.Absence Shipped = new(); // its seams as they ship
 
+    [AppAliasFact]
+    public void ARealAppAlias_InAFoldersPlace_TellsNothing_InAnyOrder()
+    {
+        // Round 12, D N-3: the stand-ins elsewhere are plain files given reparse attributes; this is a real reparse point
+        // that isn't a link (an app execution alias, read only), through the seams that ship: no target, rows stay.
+        var alias = AppAliasFactAttribute.Alias!;
+        string[] asked = [Path.Combine(alias, "a.jpg"), Path.Combine(alias, "day1", "b.jpg"), Path.Combine(alias, "day2", "c.jpg")];
+        foreach (var order in new[] { asked, asked.Reverse().ToArray() })
+        {
+            var absence = new Indexer.Absence();
+            foreach (var path in order)
+                Assert.Equal(Look.OutOfReach, absence.At(path));
+            Assert.Equal(5, absence.Looks); // its attributes, listing (it won't), resolution (none); each folder below
+        }
+    }
+
     [Theory]
     [InlineData(false)] // a folder below it answers "not found", as below a plain file
-    [InlineData(true)] // as Windows answers below a real alias or WSL link: an error, not "not found" (0x80070780, 0x8007010B)
+    [InlineData(true)] // as Windows answers below a real alias or WSL link: an error, not "not found" (0x8007010B, 0x80070780)
     public void AReparsePointFileInAFoldersPlace_ThatIsntALink_TellsNothing_InAnyOrder(bool realAnswer)
     {
         // Round 10, R F1/F2: round 9 took such a file for a file, so its folder's rows went, below it in an order that hung
@@ -125,7 +141,6 @@ public class IndexerAbsenceTests
         Junction.Create(W("lists", "raced"), W("elsewhere", "GoneR")); // its resolutions made to fail: round 9, N9-3
         Junction.Create(W("lists", "raced2"), W("elsewhere", "GoneR"));
         Junction.Create(W("lists", "cloudfolder"), W("elsewhere", "GoneR")); // a reparse point that isn't a link: round 10, N-7
-        File.WriteAllText(W("lists", "unreadable"), "a reparse-point file that isn't a link (no target)");
         Directory.Delete(W("elsewhere", "GoneR"));
         File.WriteAllText(W("locked", "Trip"), "a file where a folder was, in a folder that can't be listed");
         Directory.CreateDirectory(W("elsewhere", "Gone"));
@@ -157,7 +172,6 @@ public class IndexerAbsenceTests
                       || string.Equals(path, W("lists", "afilelink"), StringComparison.OrdinalIgnoreCase)
                         ? FileAttributes.Archive | FileAttributes.ReparsePoint // what a file-type symbolic link reads as
                     : string.Equals(path, W("lists", "jfile"), StringComparison.OrdinalIgnoreCase)
-                      || string.Equals(path, W("lists", "unreadable"), StringComparison.OrdinalIgnoreCase)
                         ? FileAttributes.Archive | FileAttributes.ReparsePoint // a junction read as a file-type link
                     : string.Equals(path, W("lists", "placeholder"), StringComparison.OrdinalIgnoreCase)
                       || string.Equals(path, W("placeholder2"), StringComparison.OrdinalIgnoreCase)
@@ -203,7 +217,6 @@ public class IndexerAbsenceTests
                 (W("lists", "raced2", "a.jpg"), Look.OutOfReach, "a link whose first target is refused"),
                 (W("lists", "jfile", "a.jpg"), Look.OutOfReach, "a file-type link to a drive that's gone (a junction read as one)"),
                 (W("lists", "cloudfolder", "a.jpg"), Look.OutOfReach, "a reparse point that won't list and isn't a link (a cloud folder: round 10, N-7)"),
-                (W("lists", "unreadable", "a.jpg"), Look.OutOfReach, "a reparse-point file that isn't a link, in a folder's place: tells nothing"),
                 (W("lists", "placeholder", "a.jpg"), Look.OutOfReach, "a cloud placeholder in a folder's place: tells nothing (round 10; accepted)"),
                 (W("lists", "toplaceholder", "a.jpg"), Look.OutOfReach, "a link to a cloud placeholder: tells nothing"),
                 (W("locked", "linkgone", "a.jpg"), Look.Gone, "a link to a folder deleted, inside a folder this user may not list (round 9, R9-2)"),
@@ -397,5 +410,34 @@ public class IndexerAbsenceTests
         Assert.Equal(3, absence.Looks); // the folder's attributes, its listing, the file's attributes
         Assert.Equal(Look.There, absence.At(dir.Combine("b.jpg")));
         Assert.Equal(4, absence.Looks);
+    }
+}
+
+/// <summary>
+/// A fact that runs only where this user has an app execution alias (a real reparse point that isn't a link) in
+/// %LOCALAPPDATA%\Microsoft\WindowsApps; it's only looked at, never run or changed.
+/// </summary>
+public sealed class AppAliasFactAttribute : FactAttribute
+{
+    public static readonly string? Alias = Find();
+
+    public AppAliasFactAttribute()
+    {
+        if (Alias is null)
+            Skip = "No app execution alias in this user's WindowsApps folder.";
+    }
+
+    private static string? Find()
+    {
+        try
+        {
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
+            return Directory.EnumerateFiles(folder, "*.exe").FirstOrDefault(f =>
+                File.GetAttributes(f).HasFlag(FileAttributes.ReparsePoint) && Directory.ResolveLinkTarget(f, false) is null);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 }

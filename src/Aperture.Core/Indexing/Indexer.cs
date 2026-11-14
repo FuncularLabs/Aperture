@@ -410,8 +410,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// Where a row's file is, for the prune (I2): there; gone, and that can be told; or out of reach, where that can't be
     /// told. A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder
     /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1; a file in a folder's place
-    /// is seen, so the folder below it is gone whatever is above, unless it's a reparse point: that's resolved as a link
-    /// (it won't list), so a file-type link is followed, and one with no target (a cloud placeholder, an app alias, a WSL
+    /// is seen, so the folder below it is gone whatever is above, unless it's a reparse point: that's taken as a link (a
+    /// listing, then its target), so a file-type link is followed, and one with no target (a cloud file, an app alias, a WSL
     /// link) tells nothing (round 11, D F-2; accepted: such a file put where a folder was keeps its rows). A link (a
     /// junction or symbolic link) that won't list is what its final target is: deleted on a drive that's there, its rows
     /// go (round 6, L-4); on an unplugged drive or a dropped share, they stay. A link Windows can't follow to its end (to
@@ -544,7 +544,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 }
             }
             if (target is null)
-                return (Reach.NotListed, false); // a reparse point that isn't a link (a cloud or deduplicated folder)
+                return (Reach.NotListed, false); // a reparse point that isn't a link (a cloud file or folder, an alias, a WSL link)
             return Folder(Path.TrimEndingDirectorySeparator(target)) switch
             {
                 (Reach.Missing, var canTell) => (Reach.Missing, canTell),
