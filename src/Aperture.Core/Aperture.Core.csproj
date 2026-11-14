@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Aperture.Core.Tests" />
+    <InternalsVisibleTo Include="Aperture.MoveProbe" />
   </ItemGroup>
 
 </Project>

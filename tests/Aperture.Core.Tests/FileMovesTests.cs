@@ -6,10 +6,6 @@ using Microsoft.Data.Sqlite;
 
 namespace Aperture.Core.Tests;
 
-/// <summary>
-/// One file moved by Move to… (0.9.2 M3, M4, M7): never over another, tags and notes with it in one short write, a
-/// move across drives through a temporary copy, and whatever fails leaves the file and its tags where they were.
-/// </summary>
 /// <summary>Runs only with APERTURE_OTHER_DRIVE_DIR set to a folder on another drive than the temp folder's.</summary>
 public sealed class OtherDriveFactAttribute : FactAttribute
 {
@@ -24,11 +20,36 @@ public sealed class OtherDriveFactAttribute : FactAttribute
 
     /// <summary>
     /// That folder, spelled as the code under test spells a path (D:/x is D:\x): read back under the variable's own
-    /// spelling (forward slashes), a moved file's tags weren't found (round 15).
+    /// spelling (forward slashes), a moved file's tags weren't found (plan revision 16).
     /// </summary>
     public static string Folder => Path.GetFullPath(Environment.GetEnvironmentVariable("APERTURE_OTHER_DRIVE_DIR")!);
 }
 
+/// <summary>
+/// Runs only where the temp folder's drive's own share (\\localhost\C$, an administrator's) reaches the temp folder: one
+/// volume by another route, which Windows can't rename across (round 15, R F-2 / D F-1).
+/// </summary>
+public sealed class LoopbackShareFactAttribute : FactAttribute
+{
+    public LoopbackShareFactAttribute()
+    {
+        if (!Directory.Exists(Of(Path.GetTempPath())))
+            Skip = @"Needs \\localhost\<drive>$ (the drive's administrative share) to reach the temp folder.";
+    }
+
+    /// <summary>A local folder's path by its drive's share on this PC: C:\x is \\localhost\C$\x.</summary>
+    public static string Of(string localPath)
+    {
+        var full = Path.GetFullPath(localPath);
+        return @"\\localhost\" + full[0] + "$" + full[2..];
+    }
+}
+
+/// <summary>
+/// One file moved by Move to… (0.9.2 M3, M4, M7): never over another, tags and notes with it in one short write, a
+/// move Windows can't make as a rename (across drives) through a temporary copy, and whatever fails leaves the file and
+/// its tags where they were.
+/// </summary>
 public class FileMovesTests : IDisposable
 {
     private readonly ApertureScope _scope = new();
@@ -98,6 +119,60 @@ public class FileMovesTests : IDisposable
             transaction.Dispose();
             connection.Dispose();
         }
+    }
+
+    // Whether the library's write lock can be had without waiting (nobody holds it); taken and let go at once, and the
+    // pooled connection goes back with the library's usual busy timeout.
+    private bool CanTakeTheLibraryAtOnce()
+    {
+        using var connection = _scope.Database.OpenMetadata();
+        using (var none = connection.CreateCommand())
+        {
+            none.CommandText = "PRAGMA busy_timeout=0;";
+            none.ExecuteNonQuery();
+        }
+        try
+        {
+            using var transaction = connection.BeginTransaction(deferred: false); // BEGIN IMMEDIATE
+            transaction.Rollback();
+            return true;
+        }
+        catch (SqliteException)
+        {
+            return false;
+        }
+        finally
+        {
+            using var usual = connection.CreateCommand();
+            usual.CommandText = "PRAGMA busy_timeout=5000;";
+            usual.ExecuteNonQuery();
+        }
+    }
+
+    // One move in tests/Aperture.MoveProbe, a process that isn't long-path aware, as Aperture.exe isn't (round 15,
+    // R F-1): what it says of itself, and the move's outcome.
+    private static (string Aware, string Outcome) MoveInAProbe(string data, string file, string folder, bool copy)
+    {
+        var exe = AppContext.BaseDirectory.Replace(@"\Aperture.Core.Tests\bin\", @"\Aperture.MoveProbe\bin\")
+            + "Aperture.MoveProbe.exe";
+        Assert.True(File.Exists(exe), $"the probe isn't built: {exe}");
+        var start = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in new[] { data, file, folder, copy ? "copy" : "rename" })
+            start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        var errors = process.StandardError.ReadToEndAsync();
+        var output = process.StandardOutput.ReadToEnd();
+        Assert.True(process.WaitForExit(60_000), "the probe didn't finish");
+        Assert.True(process.ExitCode == 0, $"the probe failed ({process.ExitCode}): {errors.Result}");
+        var lines = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        return (lines[0], lines[1]);
     }
 
     [Fact]
@@ -586,26 +661,191 @@ public class FileMovesTests : IDisposable
     }
 
     [Fact]
-    public void OneVolume_IsToldByTheVolume_NotTheDriveLetter()
+    public void ARenameWindowsRefuses_AsAnotherDevice_IsCopiedByAperture_WithTheLibraryLetGoMeanwhile()
     {
-        // Round 14, R F-1: a junction, a link or a drive letter (subst) can lead to one volume or another whatever the
-        // letters say. Can't tell (a folder missing): not one, so the copy path, which is right on one volume too.
-        using var dir = new TempDir();
-        Directory.CreateDirectory(dir.Combine("a"));
-        Directory.CreateDirectory(dir.Combine("b"));
-        Junction.Create(dir.Combine("link"), dir.Combine("b"));
+        // Round 15, R F-2 / D F-1: Windows is asked to rename only; where it can't (another drive, or another route to
+        // this one: a share, another share of it), it says "not the same device" (17), exactly where, asked to rename
+        // with copying allowed, it would copy the file itself (not stopped, not flushed, under its own name). Aperture
+        // then copies it, as across drives; the library's write, taken for the rename, isn't held while it copies.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        _moves.RenameRefusedWith = 17;
+        var copied = new List<string>();
+        var heldWhileCopying = true;
+        _moves.Copied = copy =>
+        {
+            copied.Add(copy);
+            heldWhileCopying = !CanTakeTheLibraryAtOnce();
+        };
 
-        Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("b")));
-        Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("link")));
-        Assert.False(FileMoves.OnOneVolume(dir.Combine("a"), dir.Combine("missing")));
-        var letter = Subst.CreateOnAFreeLetter(dir.Path);
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.Single(copied);
+        Assert.False(heldWhileCopying);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(To("a.jpg")));
+        Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+    }
+
+    [Theory]
+    [InlineData(5, MoveOutcome.AccessDenied)]
+    [InlineData(32, MoveOutcome.InUse)] // a sharing violation
+    [InlineData(1, MoveOutcome.Failed)]
+    public void ARenameWindowsRefusesOtherwise_IsSaid_AndNothingIsCopied(int error, MoveOutcome outcome)
+    {
+        // Round 15: only "not the same device" makes a copy; any other refusal is the move's answer.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        _moves.RenameRefusedWith = error;
+        var copied = new List<string>();
+        _moves.Copied = copied.Add;
+
+        Assert.Equal(outcome, _moves.Move(a, _to).Outcome);
+
+        Assert.Empty(copied);
+        Assert.True(File.Exists(a));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_to));
+        Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [Fact]
+    public void AnotherLetterForThisFolder_IsARename()
+    {
+        // Round 15, R F-3: another drive letter for this same folder (subst) is renamed onto by Windows: no copy.
+        var a = Photo("a.jpg");
+        var copied = new List<string>();
+        _moves.Copied = copied.Add;
+        var renaming = false;
+        _moves.BeforeRenaming = () => renaming = true;
+        var letter = Subst.CreateOnAFreeLetter(_to);
         try
         {
-            Assert.True(FileMoves.OnOneVolume(dir.Combine("a"), letter + @"\b")); // another letter, the same volume
+            Assert.Equal(MoveOutcome.Moved, _moves.Move(a, letter + @"\").Outcome);
+
+            Assert.True(renaming);
+            Assert.Empty(copied);
+            Assert.False(File.Exists(a));
+            Assert.True(File.Exists(To("a.jpg")));
         }
         finally
         {
             Subst.Remove(letter);
+        }
+    }
+
+    [Fact]
+    public void LongPath_IsWindowsLongForm_OnlyPastMaxPath()
+    {
+        // Round 15, R F-1: Aperture.exe isn't long-path aware, so Windows' own calls need the \\?\ form past MAX_PATH
+        // (260 with its end); as .NET's own calls make it, only then.
+        var at259 = @"C:\" + new string('a', 256);
+        var at260 = at259 + "b";
+        var shared = @"\\server\share\" + new string('a', 250);
+
+        Assert.Equal(at259, FileMoves.LongPath(at259));
+        Assert.Equal(@"\\?\" + at260, FileMoves.LongPath(at260));
+        Assert.Equal(@"\\?\UNC\server\share\" + new string('a', 250), FileMoves.LongPath(shared));
+        Assert.Equal(@"\\?\" + at260, FileMoves.LongPath(@"\\?\" + at260));
+        Assert.Equal(@"\\.\" + at260, FileMoves.LongPath(@"\\.\" + at260));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // across drives: the copy's name is longer still
+    public void ALongPath_IsMoved_ByAProcessThatIsntLongPathAware(bool acrossDrives)
+    {
+        // Round 15, R F-1: this test host is long-path aware and Aperture.exe isn't, so the move runs in a probe that
+        // isn't (tests/Aperture.MoveProbe). Without the \\?\ form, a move on one volume said "the folder isn't there
+        // any more", and one across drives always had.
+        var deep = _scope.Library.Combine(new string('d', 120), new string('e', 120));
+        var from = Path.Combine(deep, "from");
+        var to = Path.Combine(deep, "to");
+        Directory.CreateDirectory(from);
+        Directory.CreateDirectory(to);
+        var a = Path.Combine(from, "a.jpg");
+        TestImages.Write(a, 32, 24);
+        Assert.True(Path.Combine(to, "a.jpg").Length > 260);
+        using var data = new TempDir();
+
+        var (aware, outcome) = MoveInAProbe(data.Path, a, to, acrossDrives);
+
+        Assert.Equal("not long-path aware", aware);
+        Assert.Equal(nameof(MoveOutcome.Moved), outcome);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(Path.Combine(to, "a.jpg")));
+        Assert.Empty(Directory.EnumerateFiles(to, "*" + FileMoves.CopySuffix));
+    }
+
+    [Fact]
+    public void ANameTaken_OnOneDrive_IsSaidAtOnce_WithTheLibraryBusy()
+    {
+        // Round 15, R F-4: on one drive the rename refuses a taken name too, so the early check's own work there is not
+        // waiting: a tagged file whose name is taken is said at once, not LibraryBusy after the wait (which would take
+        // the next tagged file for busy as well).
+        var a = Photo("a.jpg");
+        var b = Photo("b.jpg");
+        _tags.Save(a, ["trip"], "");
+        _tags.Save(b, ["trip"], "");
+        File.WriteAllText(To("a.jpg"), "theirs");
+        _moves.BusyTimeout = TimeSpan.FromSeconds(2);
+        var watch = Stopwatch.StartNew();
+        using (HoldTheLibrary())
+        {
+            Assert.Equal(MoveOutcome.NameTaken, _moves.Move(a, _to).Outcome);
+        }
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1.5), $"it waited {watch.Elapsed}");
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(b, _to).Outcome);
+        Assert.Equal("theirs", File.ReadAllText(To("a.jpg")));
+        Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [LoopbackShareFact]
+    public void AShareOfThisFolder_IsMovedAsAcrossDrives()
+    {
+        // Round 15, R F-2 / D F-1: one volume by another route (here the drive's own share): its volume serial number is
+        // this one's, and Windows can't rename across: renamed with copying allowed, it copied the file itself.
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        var copied = new List<string>();
+        _moves.Copied = copied.Add;
+        var share = LoopbackShareFactAttribute.Of(_to);
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, share).Outcome);
+
+        Assert.Single(copied);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(To("a.jpg")));
+        Assert.Empty(Directory.EnumerateFiles(_to, "*" + FileMoves.CopySuffix));
+        Assert.Equal(["trip"], _tags.Get(Path.Combine(share, "a.jpg")).Tags);
+    }
+
+    [OtherDriveFact]
+    public void AFileBehindALinkToAnotherDrive_IsMovedAsAcrossDrives()
+    {
+        // Round 15, R F-3 / D F-3: R F-1's "(or source)": the file's own folder is a junction to another drive.
+        var target = Path.Combine(OtherDriveFactAttribute.Folder, "aperture-move-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(target);
+        var link = _scope.Library.Combine("elsewhere");
+        Junction.Create(link, target);
+        try
+        {
+            var a = Path.Combine(link, "a.jpg");
+            TestImages.Write(a, 32, 24);
+            var copied = new List<string>();
+            _moves.Copied = copied.Add;
+
+            Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+            Assert.Single(copied);
+            Assert.False(File.Exists(a));
+            Assert.True(File.Exists(To("a.jpg")));
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(target, recursive: true);
         }
     }
 

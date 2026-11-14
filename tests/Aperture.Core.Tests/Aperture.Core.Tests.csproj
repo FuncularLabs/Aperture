@@ -23,6 +23,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aperture.Core\Aperture.Core.csproj" />
     <ProjectReference Include="..\..\src\Aperture.App\Aperture.App.csproj" />
+    <!-- Built, not referenced: FileMovesTests runs it as a process that isn't long-path aware (0.9.2 round 15). -->
+    <ProjectReference Include="..\Aperture.MoveProbe\Aperture.MoveProbe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

@@ -61,7 +61,9 @@ public sealed record MoveRequest(string Path, long? RootId = null, string? RelPa
 /// <see cref="MoveOutcome.MovedTagsBehind"/>. For a local file with no tags (nothing kept under either path) the row is
 /// an aid, not a condition: the write is tried briefly (about a second, and not again once the library has been found
 /// busy), and without it the file moves anyway and the next run of the destination reads it as new. Once the library
-/// has been found busy, later files that need the write aren't waited for either. Across drives a file is copied first
+/// has been found busy, later files that need the write aren't waited for either. Windows is asked to rename the file only
+/// (never to copy it itself, never over another file); where it can't (another drive, or another route to one: a share
+/// of it, another share, a junction or link to another drive), the file is moved as across drives: copied first
 /// (CopyFileEx, so its other streams and encryption go with it; stopped on the move's token) to
 /// <c>&lt;name&gt;.aperture-moving</c> (which no scan picks up), keeping its times and its plain attributes (read-only,
 /// hidden, system, archive; not a cloud placeholder's), then renamed and the original deleted (a read-only one too); a
@@ -97,7 +99,13 @@ public sealed class FileMoves(ApertureDatabase database)
     /// <summary>Test seam: hears the bytes copied so far as a copy across drives goes (on the copying thread).</summary>
     internal Action<long>? CopyingChunk { get; set; }
 
-    /// <summary>Test seam: runs just before a move on one volume renames the file (after its checks and its wait).</summary>
+    /// <summary>
+    /// Test seam: the Windows error the rename is refused with (17: not the same device), as if Windows had refused it,
+    /// instead of renaming.
+    /// </summary>
+    internal int? RenameRefusedWith { get; set; }
+
+    /// <summary>Test seam: runs just before the rename is tried (after its checks and its wait); not under ForceCopy.</summary>
     internal Action? BeforeRenaming { get; set; }
 
     /// <summary>Test seam: runs just before the write is committed (and before it's made again).</summary>
@@ -132,9 +140,7 @@ public sealed class FileMoves(ApertureDatabase database)
         if (File.Exists(to) || Directory.Exists(to))
             return Result(MoveOutcome.NameTaken);
 
-        // By the volume, not the drive letter (round 14, R F-1): renamed onto another volume (a junction or link on this
-        // drive's letter to another drive), Windows copies the file itself, not stopped, not flushed, under its own name.
-        var acrossDrives = ForceCopy || !OnOneVolume(Path.GetDirectoryName(from)!, folder);
+        var acrossDrives = ForceCopy;
         var copy = to + CopySuffix;
         var copyMade = false;
         var placed = false;
@@ -142,6 +148,9 @@ public sealed class FileMoves(ApertureDatabase database)
         var tagged = false;
         var needsWrite = false;
         Rekey? rekey = null;
+        Rekey? BeginTheWrite() => needsWrite ? BeginRekey(from, to, item, wait: true)
+            : item is not null && !_busy ? TryBeginRekey(from, to, item)
+            : null;
         try
         {
             tagged = HasTags(from, to);
@@ -150,32 +159,38 @@ public sealed class FileMoves(ApertureDatabase database)
             needsWrite = tagged || (item is not null && Indexing.CloudFiles.IsOnlineOnly(File.GetAttributes(from)));
             if (needsWrite && _busy)
                 return Result(MoveOutcome.LibraryBusy); // found busy already: neither copied nor waited for
-            if (acrossDrives && needsWrite)
-                ProbeTheWrite(); // busy: it stays without being copied (downloaded) first (round 3, N-2)
+            if (!acrossDrives)
+            {
+                ct.ThrowIfCancellationRequested();
+                rekey = BeginTheWrite();
+                BeforeRenaming?.Invoke();
+                moved = Renamed(from, to);
+                if (!moved)
+                {
+                    // Windows can't rename it there (round 15, R F-2 / D F-1): another drive, or another route to this
+                    // one. Asked to rename with copying allowed, Windows copied it itself: not stopped, not flushed,
+                    // under the file's own name. Moved as across drives instead, the write let go while it's copied.
+                    rekey?.Dispose();
+                    rekey = null;
+                    acrossDrives = true;
+                }
+            }
             if (acrossDrives)
             {
+                if (needsWrite)
+                    ProbeTheWrite(); // busy: it stays without being copied (downloaded) first (round 3, N-2)
                 copyMade = true; // before the copy: one that fails part-way is removed too (round 1, N3)
                 CopyTo(from, copy, ct);
                 Copied?.Invoke(copy);
-            }
-            ct.ThrowIfCancellationRequested();
-            rekey = needsWrite ? BeginRekey(from, to, item, wait: true)
-                : item is not null && !_busy ? TryBeginRekey(from, to, item)
-                : null;
-            if (acrossDrives)
-            {
-                File.Move(copy, to, overwrite: false);
+                ct.ThrowIfCancellationRequested();
+                rekey = BeginTheWrite();
+                File.Move(copy, to, overwrite: false); // in one folder: always a rename
                 copyMade = false;
                 placed = true;
                 File.SetAttributes(to, File.GetAttributes(from) & PlainAttributes);
                 DeleteOriginal(from);
+                moved = true;
             }
-            else
-            {
-                BeforeRenaming?.Invoke();
-                File.Move(from, to, overwrite: false);
-            }
-            moved = true;
             if (rekey is not null)
             {
                 Committing?.Invoke();
@@ -222,39 +237,49 @@ public sealed class FileMoves(ApertureDatabase database)
         }
     }
 
-    /// <summary>
-    /// Whether two folders are on one volume, by what they lead to (through any junction, link, mount point or drive
-    /// letter), not by their drive letters (round 14, R F-1). Can't tell: not one, so the copy path, which is right on
-    /// one volume too, only slower. Two volumes with one serial number (a disk cloned whole) are taken for one.
-    /// </summary>
-    internal static bool OnOneVolume(string a, string b) => VolumeOf(a) is { } x && VolumeOf(b) is { } y && x == y;
-
-    private static uint? VolumeOf(string folder)
+    // The rename, and only that: Windows isn't let copy the file itself, nor put it over another (round 15, R F-2 /
+    // D F-1). False: Windows can't make it a rename ("not the same device": another drive, or another route to this one),
+    // which is exactly where, asked with copying allowed, it would have copied it. Any other refusal is the move's answer.
+    private bool Renamed(string from, string to)
     {
-        using var handle = CreateFile(folder, 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open,
-            FileFlagBackupSemantics, IntPtr.Zero); // opens the folder a link leads to; reads nothing
-        return !handle.IsInvalid && GetFileInformationByHandle(handle, out var info) ? info.VolumeSerialNumber : null;
+        var error = RenameRefusedWith
+            ?? (MoveFileEx(LongPath(from), LongPath(to), 0) ? 0 : System.Runtime.InteropServices.Marshal.GetLastPInvokeError());
+        return error switch
+        {
+            0 => true,
+            ErrorNotSameDevice => false,
+            _ => throw Win32Error(error, from),
+        };
     }
 
-    private const uint FileFlagBackupSemantics = 0x02000000;
-
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateFileW",
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "MoveFileExW",
         CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
-    private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
-        string name, uint access, FileShare share, IntPtr security, FileMode mode, uint flags, IntPtr template);
-
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandle(
-        Microsoft.Win32.SafeHandles.SafeFileHandle file, out ByHandleFileInformation info);
+    private static extern bool MoveFileEx(string existingFileName, string newFileName, uint flags);
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct ByHandleFileInformation
+    /// <summary>
+    /// A full path as Windows' own calls take it at any length (round 15, R F-1): Aperture.exe isn't long-path aware, so
+    /// from MAX_PATH (260 with its end) on it's given in its \\?\ form (\\?\UNC\ for a share); shorter, as it is, as
+    /// .NET's own calls do.
+    /// </summary>
+    internal static string LongPath(string fullPath) =>
+        fullPath.Length < 260 || fullPath.StartsWith(@"\\?\", StringComparison.Ordinal)
+            || fullPath.StartsWith(@"\\.\", StringComparison.Ordinal) ? fullPath
+        : fullPath.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + fullPath[2..]
+        : @"\\?\" + fullPath;
+
+    // A Windows error as .NET's own calls throw it.
+    private static Exception Win32Error(int error, string from)
     {
-        public uint Attributes;
-        public uint CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh;
-        public uint VolumeSerialNumber;
-        public uint SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        var message = new System.ComponentModel.Win32Exception(error).Message;
+        return error switch
+        {
+            ErrorRequestAborted => new OperationCanceledException(message),
+            ErrorAccessDenied => new UnauthorizedAccessException(message),
+            ErrorFileNotFound => new FileNotFoundException(message, from),
+            ErrorPathNotFound => new DirectoryNotFoundException(message),
+            _ => new IOException(message, unchecked((int)0x80070000 | error)),
+        };
     }
 
     // --- Copying across drives (CopyFileEx: its other streams, encryption and times go with it; stopped on the token)
@@ -271,7 +296,7 @@ public sealed class FileMoves(ApertureDatabase database)
 
     private const uint ProgressContinue = 0, ProgressCancel = 1, CallbackChunkFinished = 0;
     private const int ErrorRequestAborted = 1235, ErrorAccessDenied = 5, ErrorFileNotFound = 2, ErrorPathNotFound = 3,
-        ErrorEncryptionFailed = 6000;
+        ErrorEncryptionFailed = 6000, ErrorNotSameDevice = 17;
 
     private void CopyTo(string from, string copy, CancellationToken ct)
     {
@@ -283,21 +308,13 @@ public sealed class FileMoves(ApertureDatabase database)
                 CopyingChunk?.Invoke(transferred);
             return ct.IsCancellationRequested ? ProgressCancel : ProgressContinue; // cancelled: the copy is deleted
         };
-        var copied = CopyFileEx(from, copy, progress, IntPtr.Zero, ref cancel, 0);
+        var copied = CopyFileEx(LongPath(from), LongPath(copy), progress, IntPtr.Zero, ref cancel, 0);
         var error = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
         GC.KeepAlive(progress);
         if (!copied)
         {
             ct.ThrowIfCancellationRequested();
-            var message = new System.ComponentModel.Win32Exception(error).Message;
-            throw error switch
-            {
-                ErrorRequestAborted => new OperationCanceledException(message),
-                ErrorAccessDenied => new UnauthorizedAccessException(message),
-                ErrorFileNotFound => new FileNotFoundException(message, from),
-                ErrorPathNotFound => new DirectoryNotFoundException(message),
-                _ => new IOException(message, unchecked((int)0x80070000 | error)),
-            };
+            throw Win32Error(error, from);
         }
         ct.ThrowIfCancellationRequested();
         // On disk before the original goes (CopyFileEx doesn't flush): writable for the flush, its attributes set later.
