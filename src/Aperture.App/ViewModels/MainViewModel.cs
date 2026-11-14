@@ -1678,6 +1678,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var picked = PickMoveDestination(FolderShown());
         if (string.IsNullOrWhiteSpace(picked) || _closing)
             return;
+        if (FileMoves.IsReadAsAnotherName(picked))
+        {
+            // Windows' path rules read "Trips." as "Trips": checked before the folder is read here, which reads it that
+            // way too (round 17, R F-1 / D F-1).
+            ShowMoveSummary($"Nothing was moved. Windows reads the name “{NameOf(picked)}” (it ends in a dot or a " +
+                            "space) as another folder's, so Aperture can't move files into it.");
+            return;
+        }
 
         IsMoving = true;
         try

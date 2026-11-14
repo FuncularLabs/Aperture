@@ -61,7 +61,8 @@ public sealed record MoveRequest(string Path, long? RootId = null, string? RelPa
 /// <see cref="MoveOutcome.MovedTagsBehind"/>. For a local file with no tags (nothing kept under either path) the row is
 /// an aid, not a condition: the write is tried briefly (about a second, and not again once the library has been found
 /// busy), and without it the file moves anyway and the next run of the destination reads it as new. Once the library
-/// has been found busy, later files that need the write aren't waited for either. Windows is asked to rename the file only
+/// has been found busy, later files that need the write aren't waited for either (one that has moved already, whose tags
+/// must follow it, is, once: round 17, R F-6). Windows is asked to rename the file only
 /// (never to copy it itself, never over another file); where it can't (another drive, or another route to one: a share
 /// of it, another share, a junction or link to another drive), the file is moved as across drives: copied first
 /// (CopyFileEx, so its other streams and encryption go with it; stopped on the move's token) to
@@ -118,10 +119,9 @@ public sealed class FileMoves(ApertureDatabase database)
     /// </param>
     public FileMove Move(string source, string destinationFolder, CancellationToken ct = default, ItemMove? item = null)
     {
-        // Windows' path rules (GetFullPath's) drop the last name's dots and spaces and a folder name's last dot, so such
-        // a name would be read as another: the move would take another file, or go into another folder (round 16,
-        // R F-3). Any name in either path that ends in a dot or a space is refused. Only \\?\ makes such names.
-        if (EndsInADotOrASpace(source) || EndsInADotOrASpace(destinationFolder))
+        // A path Windows' path rules read as another name would move another file, or into another folder (round 16,
+        // R F-3): refused. Move to… checks the folder picked before it's read too (round 17, R F-1 / D F-1).
+        if (IsReadAsAnotherName(source) || IsReadAsAnotherName(destinationFolder))
             return new FileMove(source, destinationFolder, MoveOutcome.Failed);
         string from, folder;
         try
@@ -148,13 +148,22 @@ public sealed class FileMoves(ApertureDatabase database)
             return Result(MoveOutcome.NameTaken);
 
         var acrossDrives = ForceCopy;
-        var copy = to + CopySuffix;
+        var copy = CopyNameFor(to);
         var copyMade = false;
         var placed = false;
         var moved = false;
         var tagged = false;
         var needsWrite = false;
         Rekey? rekey = null;
+        // The file has moved, and no write for it was kept (none made, or the one made failed). What must follow it is
+        // made to, once more: a write that was needed (M6), and its tags, read now, not before, so ones added as it
+        // moved follow it too (round 16, R F-2; round 17, R F-2 / D F-3); failing again, a tagged file is
+        // MovedTagsBehind. A mere aid (an untagged file's row) is let go.
+        MoveOutcome Settled()
+        {
+            var taggedNow = tagged || TaggedAt(from);
+            return needsWrite || taggedNow ? RekeyAgain(from, to, item, taggedNow) : MoveOutcome.Moved;
+        }
         Rekey? BeginTheWrite() => needsWrite ? BeginRekey(from, to, item, wait: true)
             : item is not null && !_busy ? TryBeginRekey(from, to, item)
             : null;
@@ -198,25 +207,18 @@ public sealed class FileMoves(ApertureDatabase database)
                 DeleteOriginal(from);
                 moved = true;
             }
-            if (rekey is not null)
-            {
-                Committing?.Invoke();
-                rekey.Commit();
-            }
-            else if (HasTags(from, from))
-            {
-                // Tagged as it moved (as it was copied, say), with no write made for it (round 16, R F-2): its tags are
-                // made to follow it now, as a write that failed once the file had moved is.
-                return Result(RekeyAgain(from, to, item, tagged: true));
-            }
+            if (rekey is null)
+                return Result(Settled());
+            Committing?.Invoke();
+            rekey.Commit();
             return Result(MoveOutcome.Moved);
         }
         catch (Exception ex)
         {
             rekey?.Dispose(); // rolled back: the tags and the row stay where they were
             rekey = null;
-            if (moved) // the file has moved: what needs to follow it is made to, once more; a mere aid is let go
-                return Result(needsWrite ? RekeyAgain(from, to, item, tagged) : MoveOutcome.Moved);
+            if (moved)
+                return Result(Settled());
             if (copyMade)
                 TryDelete(copy);
             if (placed && File.Exists(from))
@@ -250,8 +252,45 @@ public sealed class FileMoves(ApertureDatabase database)
         }
     }
 
-    private static bool EndsInADotOrASpace(string path) =>
-        path.Split('\\', '/').Any(name => name is not ("" or "." or "..") && name[^1] is '.' or ' ');
+    /// <summary>
+    /// Whether Windows' usual path rules (GetFullPath's) read <paramref name="path"/> as another name. They drop the last
+    /// name's dots and spaces and a folder name's last dot (round 16, R F-3), and only those are refused (round 17,
+    /// D F-2): the move would take another file, or go into another folder. Such names are made only with \\?\.
+    /// </summary>
+    public static bool IsReadAsAnotherName(string path)
+    {
+        try
+        {
+            return !NamesOf(path).SequenceEqual(NamesOf(Path.GetFullPath(path)), StringComparer.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false; // not a path Windows takes at all: said where it's used
+        }
+    }
+
+    private static string[] NamesOf(string path) => path.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+
+    private const int MaxNameLength = 255;
+
+    /// <summary>
+    /// The temporary copy's path: <c>&lt;name&gt;.aperture-moving</c>; where that's longer than a name may be (255), the
+    /// name cut short, then a mark of the whole name, so a leftover copy is still found and replaced (round 17, R F-4).
+    /// Never cut between the two halves of a character.
+    /// </summary>
+    internal static string CopyNameFor(string to)
+    {
+        var name = Path.GetFileName(to);
+        if (name.Length + CopySuffix.Length <= MaxNameLength)
+            return to + CopySuffix;
+        var whole = name.ToUpperInvariant(); // one mark for what one folder takes for one name
+        var mark = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Runtime.InteropServices.MemoryMarshal.AsBytes(whole.AsSpan())), 0, 4);
+        var keep = MaxNameLength - CopySuffix.Length - mark.Length - 1;
+        if (char.IsHighSurrogate(name[keep - 1]))
+            keep--;
+        return Path.Combine(Path.GetDirectoryName(to)!, name[..keep] + "~" + mark + CopySuffix);
+    }
 
     // The rename, and only that: Windows isn't let copy the file itself, nor put it over another (round 15, R F-2 /
     // D F-1). False: Windows can't make it a rename ("not the same device": another drive, or another route to this one),
@@ -493,6 +532,20 @@ public sealed class FileMoves(ApertureDatabase database)
         count.Parameters.AddWithValue("@from", from);
         count.Parameters.AddWithValue("@to", to);
         return Convert.ToInt64(count.ExecuteScalar()) > 0;
+    }
+
+    // Whether anything is kept under a moved file's old path now; one that can't be read is taken for none (the write
+    // to move them would fail as well).
+    private bool TaggedAt(string path)
+    {
+        try
+        {
+            return HasTags(path, path);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     // A local, untagged file's row: the write tried once, briefly. Busy, or failing in any way (round 2, R2-5), the file

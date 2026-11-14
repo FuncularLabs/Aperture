@@ -771,17 +771,142 @@ public class FileMovesTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)] // across drives
+    [InlineData(true)] // a rename Windows refuses as another device (17), so copied
+    public void ATagAddedAsItsCopied_WhenTheRowsWriteFails_IsTriedAgain(bool refused)
+    {
+        // Round 17, R F-2 / D F-3: an untagged file with a row; a tag added as it's copied; the row's brief write (which
+        // carries the tag) fails once the file has moved. What follows was decided from "tagged" as read before the
+        // copy: Moved, never tried again, the tag under the old path.
+        var a = Photo("a.jpg");
+        var (root, id) = Indexed("a.jpg");
+        if (refused)
+            _moves.RenameRefusedWith = 17;
+        else
+            _moves.ForceCopy = true;
+        _moves.Copied = _ => _tags.Save(a, ["late"], "");
+        var commits = 0;
+        _moves.Committing = () =>
+        {
+            if (++commits == 1)
+                throw new SqliteException("disk I/O error", 10);
+        };
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.Equal(2, commits);
+        Assert.Equal(["late"], _tags.Get(To("a.jpg")).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+        var row = Assert.Single(_scope.Items.GetForRoot(root.Id));
+        Assert.Equal((id, Path.Combine("to", "a.jpg")), (row.Id, row.RelPath));
+    }
+
+    [Theory]
+    [InlineData("no row")] // the late write is the only one
+    [InlineData("online-only, with a row")] // its write was needed, and fails again
+    public void ATagAddedAsItsCopied_WhenEveryWriteFails_IsSaidToHaveStayedBehind(string kind)
+    {
+        // Round 17, R F-3 / D F-4, R F-2: the tags of a file that has moved, whose write can't be made, are said to have
+        // stayed behind (MovedTagsBehind), never Moved with nothing said, whenever they were added.
+        var a = Photo("a.jpg");
+        ItemMove? item = null;
+        if (kind != "no row")
+        {
+            File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline);
+            var (root, _) = Indexed("a.jpg");
+            item = Row(root, "a.jpg");
+        }
+        _moves.ForceCopy = true;
+        _moves.Copied = _ => _tags.Save(a, ["late"], "");
+        _moves.Committing = () => throw new SqliteException("disk I/O error", 10);
+
+        Assert.Equal(MoveOutcome.MovedTagsBehind, _moves.Move(a, _to, default, item).Outcome);
+
+        Assert.True(File.Exists(To("a.jpg")));
+        Assert.Equal(["late"], _tags.Get(a).Tags);
+    }
+
+    [Fact]
+    public void ATagAdded_OnceTheLibraryWasFoundBusy_TakesTheFilesRowWithIt()
+    {
+        // Round 17, R F-3: with the library found busy once, an untagged file's row isn't tried for; a tag added as it
+        // moves is made to follow it, and its row with it.
+        var x = Photo("x.jpg");
+        _tags.Save(x, ["held"], "");
+        _moves.BusyTimeout = TimeSpan.FromMilliseconds(200);
+        using (HoldTheLibrary())
+            Assert.Equal(MoveOutcome.LibraryBusy, _moves.Move(x, _to).Outcome); // found busy
+        var a = Photo("a.jpg");
+        var (root, id) = Indexed("a.jpg");
+        _moves.BeforeRenaming = () => _tags.Save(a, ["late"], "");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.Equal(["late"], _tags.Get(To("a.jpg")).Tags);
+        var row = _scope.Items.GetForRoot(root.Id).Single(i => i.Id == id);
+        Assert.Equal(Path.Combine("to", "a.jpg"), row.RelPath);
+    }
+
+    [Theory]
+    [InlineData(239)] // the copy's name, 16 longer, still fits
+    [InlineData(245)]
+    [InlineData(255)] // the longest a name may be
+    public void AFileWithALongName_IsMovedAcrossDrives_AndALeftoverCopyOfItIsReplaced(int length)
+    {
+        // Round 17, R F-4: "<name>.aperture-moving" is 16 longer than the name; past 255 (a name's limit) the copy
+        // couldn't be made, and the file "couldn't be moved", where Windows would have moved it.
+        var name = new string('a', length - 4) + ".jpg";
+        var a = Photo(name);
+        _tags.Save(a, ["trip"], "");
+        var leftover = FileMoves.CopyNameFor(To(name));
+        File.WriteAllText(leftover, "left by a move that was killed");
+        _moves.ForceCopy = true;
+        var copies = new List<string>();
+        _moves.Copied = copies.Add;
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.Equal([leftover], copies);
+        Assert.True(Path.GetFileName(leftover).Length <= 255);
+        Assert.True(File.Exists(To(name)));
+        Assert.False(File.Exists(a));
+        Assert.Empty(Directory.EnumerateFiles(_to, "*" + FileMoves.CopySuffix));
+        Assert.Equal(["trip"], _tags.Get(To(name)).Tags);
+    }
+
+    [Fact]
+    public void CopyNameFor_IsTheNameAndTheSuffix_OrACutNameThatsStillTheFilesOwn()
+    {
+        // Round 17, R F-4: a predictable name (a leftover copy is found by it), within 255, never a split character.
+        var folder = @"C:\x";
+        Assert.Equal(@"C:\x\a.jpg" + FileMoves.CopySuffix, FileMoves.CopyNameFor(@"C:\x\a.jpg"));
+        var longOne = Path.Combine(folder, new string('a', 251) + ".jpg");
+        var another = Path.Combine(folder, new string('a', 250) + "b.jpg");
+        var cut = FileMoves.CopyNameFor(longOne);
+        Assert.Equal(cut, FileMoves.CopyNameFor(longOne));
+        Assert.NotEqual(cut, FileMoves.CopyNameFor(another));
+        Assert.Equal(folder, Path.GetDirectoryName(cut));
+        Assert.EndsWith(FileMoves.CopySuffix, cut);
+        Assert.True(Path.GetFileName(cut).Length <= 255);
+        // 253: a letter, then characters made of two halves each, so a cut at an even length splits one.
+        var faces = Path.Combine(folder, "b" + string.Concat(Enumerable.Repeat("😀", 124)) + ".jpg");
+        var name = Path.GetFileName(FileMoves.CopyNameFor(faces));
+        Assert.True(name.Length <= 255);
+        Assert.Equal(name, System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(name))); // no half left
+    }
+
+    [Theory]
     [InlineData("the file")] // "a.jpg " beside "a.jpg"
     [InlineData("a folder above the file")] // "from2.\a.jpg" beside "from2\a.jpg"
     [InlineData("the destination folder")] // "to2." beside "to2"
-    public void ANameEndingInADotOrASpace_IsntMovedAsAnotherName(string where)
+    [InlineData("a folder above the destination")] // "to2.\sub" beside "to2\sub" (round 17, D F-5)
+    public void ANameWindowsReadsAsAnother_IsntMoved(string where)
     {
         // Round 16, R F-3: Windows' path rules (GetFullPath's) drop the last name's dots and spaces, and a folder name's
         // last dot, so Move to… acted on another file (its twin went, with its tags) or into another folder. Made only
-        // with \\?\ (WSL, some tools; not Explorer), such a name is refused, in either path: nothing is touched.
+        // with \\?\ (WSL, some tools; not Explorer), a path those rules change is refused: nothing is touched.
         var twinFrom = _scope.Library.Combine("from2");
         var twinTo = _scope.Library.Combine("to2");
-        Directory.CreateDirectory(twinTo);
         var other = Photo("a.jpg", "from2");
         _tags.Save(other, ["theirs"], "");
         var dotted = where switch
@@ -796,7 +921,10 @@ public class FileMovesTests : IDisposable
             "a folder above the file" => Path.Combine(dotted, "a.jpg"),
             _ => Photo("b.jpg"),
         };
-        var into = where == "the destination folder" ? dotted : twinTo;
+        var below = where == "a folder above the destination";
+        var into = where == "the destination folder" ? dotted : below ? Path.Combine(dotted, "sub") : twinTo;
+        var twinInto = below ? Path.Combine(twinTo, "sub") : twinTo;
+        Directory.CreateDirectory(twinInto);
         try
         {
             if (where == "the file")
@@ -805,24 +933,78 @@ public class FileMovesTests : IDisposable
                 Directory.CreateDirectory(@"\\?\" + dotted);
             if (where == "a folder above the file")
                 File.WriteAllText(@"\\?\" + asked, "mine");
+            if (below)
+                Directory.CreateDirectory(@"\\?\" + into);
 
             Assert.Equal(MoveOutcome.Failed, _moves.Move(asked, into).Outcome);
 
             Assert.True(File.Exists(other));
             Assert.Equal(["theirs"], _tags.Get(other).Tags);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(twinTo));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(twinInto));
             Assert.True(File.Exists(@"\\?\" + asked));
-            if (where == "the destination folder")
-                Assert.Empty(Directory.EnumerateFileSystemEntries(@"\\?\" + dotted));
+            if (where is "the destination folder" or "a folder above the destination")
+                Assert.Empty(Directory.EnumerateFileSystemEntries(@"\\?\" + into));
         }
         finally
         {
             // .NET's own calls can't reach these names except in their \\?\ form.
-            if (where != "the destination folder" && File.Exists(@"\\?\" + asked))
+            if (where == "the file" && File.Exists(@"\\?\" + asked))
                 File.Delete(@"\\?\" + asked);
             if (where != "the file" && Directory.Exists(@"\\?\" + dotted))
                 Directory.Delete(@"\\?\" + dotted, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData("the file's folder")] // "sp \a.jpg"
+    [InlineData("a folder above the destination")] // "sp \sub"
+    public void ANameWindowsKeeps_IsMoved(string where)
+    {
+        // Round 17, D F-2: a folder name ending in a space, not the last name, is kept by Windows' path rules; refused
+        // all the same, it made such a folder's files, or a destination under it, unmovable.
+        var spaced = _scope.Library.Combine("sp ");
+        Directory.CreateDirectory(@"\\?\" + spaced); // as the last name, "sp " would be made as "sp"
+        try
+        {
+            var a = where == "the file's folder" ? Path.Combine(spaced, "a.jpg") : Photo("a.jpg");
+            if (where == "the file's folder")
+                TestImages.Write(a, 32, 24);
+            var into = where == "the file's folder" ? _to : Path.Combine(spaced, "sub");
+            Directory.CreateDirectory(into);
+            _tags.Save(a, ["trip"], "");
+
+            Assert.Equal(MoveOutcome.Moved, _moves.Move(a, into).Outcome);
+
+            Assert.False(File.Exists(a));
+            Assert.True(File.Exists(Path.Combine(into, "a.jpg")));
+            Assert.Equal(["trip"], _tags.Get(Path.Combine(into, "a.jpg")).Tags);
+        }
+        finally
+        {
+            Directory.Delete(@"\\?\" + spaced, recursive: true); // .NET reaches it only in its \\?\ form
+        }
+    }
+
+    [Theory]
+    [InlineData(@"C:\x\a.jpg", false)]
+    [InlineData(@"C:\x\sp \a.jpg", false)] // a folder's last space is kept
+    [InlineData(@"C:\x\to2..\a.jpg", false)] // so are two dots
+    [InlineData(@"C:\x\to2. \a.jpg", false)]
+    [InlineData(@"C:\x\to\", false)] // a separator at the end
+    [InlineData(@"C:/x/a.jpg", false)] // forward ones
+    [InlineData(@"C:\", false)]
+    [InlineData(@"\\server\share\x", false)]
+    [InlineData(@"\\?\C:\x\a.jpg.", false)] // the \\?\ form isn't read by those rules
+    [InlineData(@"C:\x\a.jpg ", true)]
+    [InlineData(@"C:\x\a.jpg.", true)]
+    [InlineData(@"C:\x\to2.\a.jpg", true)] // a folder's last dot is dropped
+    [InlineData(@"C:\x\to2..", true)] // and the last name's dots
+    [InlineData(@"C:\x\to2 ", true)]
+    [InlineData(@"\\server\share\x.", true)]
+    public void IsReadAsAnotherName_IsWhatWindowsPathRulesChange(string path, bool another)
+    {
+        // Round 17, D F-2: refused is exactly what GetFullPath reads as another name, no more (R F-3's rule was wider).
+        Assert.Equal(another, FileMoves.IsReadAsAnotherName(path));
     }
 
     [Theory]
