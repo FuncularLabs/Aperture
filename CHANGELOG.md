@@ -29,8 +29,8 @@ All notable changes to Aperture Image Browser are documented here. The format fo
 
 ### Fixed
 - **Cut and Copy take the whole selection.** With several files selected, Cut and Copy (and
-  `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view
-  they still act on the item shown.
+  `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view,
+  its right-click menu's Cut and Copy act on the item shown.
 - Renaming the folder you're in no longer leaves nothing selected in the folder list.
 - Indexing no longer stops at a file that's in use, or deleted or moved while it runs; it
   carries on with the rest.
@@ -39,9 +39,9 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   it's back, instead of being emptied by the next index. If another drive takes the unplugged
   drive's letter meanwhile, the folder is emptied as if it had been deleted. A folder that was
   deleted or renamed (or a folder link whose target was) is still emptied, as before, when
-  Aperture can look in the nearest folder above it that's still there. One exception: if a file
-  synced by OneDrive or Dropbox, downloaded or not, now has the folder's name, its photos stay
-  until that file goes.
+  Aperture can look in the nearest folder above it that's still there. One exception: if a
+  special Windows file (a link Windows can't follow, such as one made in WSL, or a Store app's
+  command alias) now has the folder's name, its photos stay until that file goes.
 
 ## [0.9.1] - 2026-11-13
 

@@ -535,6 +535,41 @@ public class FileMovesTests : IDisposable
         Assert.Empty(Directory.GetFiles(_to, "*" + FileMoves.CopySuffix));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // across drives: found before anything is copied (round 13, D F-1)
+    public void AFolderOfTheFilesName_IsANameTaken_AndNothingIsCopied(bool acrossDrives)
+    {
+        var a = Photo("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        Directory.CreateDirectory(To("a.jpg"));
+        var copied = new List<string>();
+        _moves.ForceCopy = acrossDrives;
+        _moves.Copied = copied.Add;
+
+        Assert.Equal(MoveOutcome.NameTaken, _moves.Move(a, _to).Outcome);
+
+        Assert.Empty(copied);
+        Assert.True(File.Exists(a));
+        Assert.True(Directory.Exists(To("a.jpg")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(To("a.jpg")));
+        Assert.Equal(["trip"], _tags.Get(a).Tags);
+    }
+
+    [Fact]
+    public void AFolderOfTheFilesName_MadeDuringTheCopy_IsANameTaken()
+    {
+        // The catch's "taken meanwhile" arm: a folder too, not only a file (round 13, D F-1).
+        var a = Photo("a.jpg");
+        _moves.ForceCopy = true;
+        _moves.Copied = _ => Directory.CreateDirectory(To("a.jpg"));
+
+        Assert.Equal(MoveOutcome.NameTaken, _moves.Move(a, _to).Outcome);
+
+        Assert.True(File.Exists(a));
+        Assert.Empty(Directory.GetFiles(_to)); // the copy removed
+    }
+
     [Fact]
     public void ANameTakenDuringTheCopy_IsNotOverwritten()
     {

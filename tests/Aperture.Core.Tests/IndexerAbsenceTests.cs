@@ -432,8 +432,8 @@ public sealed class AppAliasFactAttribute : FactAttribute
         try
         {
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
-            return Directory.EnumerateFiles(folder, "*.exe").FirstOrDefault(f =>
-                File.GetAttributes(f).HasFlag(FileAttributes.ReparsePoint) && Directory.ResolveLinkTarget(f, false) is null);
+            // By the attribute alone: what such a file resolves to is what the test is for (round 13, D N-2).
+            return Directory.EnumerateFiles(folder, "*.exe").FirstOrDefault(f => File.GetAttributes(f).HasFlag(FileAttributes.ReparsePoint));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

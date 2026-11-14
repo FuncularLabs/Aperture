@@ -313,7 +313,7 @@ public sealed class FileMoves(ApertureDatabase database)
         FileNotFoundException when !File.Exists(from) => MoveOutcome.SourceGone,
         DirectoryNotFoundException when !File.Exists(from) => MoveOutcome.SourceGone,
         DirectoryNotFoundException => MoveOutcome.DestinationGone,
-        IOException when !placed && File.Exists(to) => MoveOutcome.NameTaken, // taken meanwhile
+        IOException when !placed && (File.Exists(to) || Directory.Exists(to)) => MoveOutcome.NameTaken, // taken meanwhile (a folder too: round 13)
         IOException io when (io.HResult & 0xFFFF) is 32 or 33 => MoveOutcome.InUse, // sharing or lock violation
         _ => MoveOutcome.Failed,
     };
