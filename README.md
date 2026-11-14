@@ -165,7 +165,7 @@ images and a short video. Nothing there is anyone's personal photo. See
 
 ## Status
 
-Daily-driver quality on Windows, backed by 87 Core unit tests. Built as a series of
+Daily-driver quality on Windows, backed by more than 1,300 unit tests. Built as a series of
 milestones (indexer/cache → union grid → sections/sort/captions → daily-driver polish)
 plus many rounds of usage feedback; see the commit history for the full trail.
 

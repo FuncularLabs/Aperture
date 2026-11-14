@@ -126,8 +126,8 @@ public sealed class FileMoves(ApertureDatabase database)
         string from, folder;
         try
         {
-            from = Path.GetFullPath(source);
-            folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationFolder));
+            from = AsGiven(source, Path.GetFullPath(source));
+            folder = Path.TrimEndingDirectorySeparator(AsGiven(destinationFolder, Path.GetFullPath(destinationFolder)));
         }
         catch (Exception)
         {
@@ -258,9 +258,9 @@ public sealed class FileMoves(ApertureDatabase database)
     /// Whether Windows' usual path rules (GetFullPath's) read <paramref name="path"/> as other names than it gives: they
     /// drop the last name's dots and spaces, and a folder name's one last dot (round 16, R F-3), so the move would take
     /// another file, or go into another folder; such names are made only with \\?\. Its names are compared with what
-    /// those rules read, so what else they change is refused too (a relative path, `.` and `..`, a device name, a short
-    /// 8.3 name; round 17, D F-2), but not case, which they change only by reading long names from the disk (round 18,
-    /// R F-1).
+    /// those rules read, so what else they change is refused too (a relative or drive-relative path, `.` and `..`, a
+    /// short 8.3 name; round 17, D F-2), but not case, which they change only by reading long names from the disk
+    /// (round 18, R F-1).
     /// </summary>
     public static bool IsReadAsAnotherName(string path) => NameReadAsAnother(path) is not null;
 
@@ -287,6 +287,12 @@ public sealed class FileMoves(ApertureDatabase database)
     }
 
     private static string[] NamesOf(string path) => path.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+
+    // A path in the spelling it was given, where GetFullPath's differs from it only in case: the tags are kept under the
+    // library's own spelling (the window looks them up by it), and with a "~" GetFullPath gives the disk's (round 19,
+    // D F-1; the library's SQL folds only ASCII letters' case).
+    private static string AsGiven(string given, string full) =>
+        string.Equals(given, full, StringComparison.OrdinalIgnoreCase) ? given : full;
 
     private const int MaxNameLength = 255;
 

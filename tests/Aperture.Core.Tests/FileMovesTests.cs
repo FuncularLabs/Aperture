@@ -936,6 +936,62 @@ public class FileMovesTests : IDisposable
         Assert.Equal(cut, FileMoves.CopyNameFor(longOne.ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(false)] // out of the folder kept as "été~Trip", on disk "Été~Trip"
+    [InlineData(true)] // into it
+    public void APathWithATilde_InAnotherCaseThanOnDisk_KeepsTheTagsUnderTheLibrarysSpelling(bool into)
+    {
+        // Round 19, D F-1: the move keyed the tags by GetFullPath's spelling, which a "~" gives in the disk's case; the
+        // library's SQL folds only ASCII letters' case, so "été" wasn't "Été": out of such a folder the tags stayed
+        // behind (it said Moved); into it they were kept under a spelling the window doesn't use (a second row next).
+        var onDisk = _scope.Library.Combine("Été~Trip");
+        Directory.CreateDirectory(onDisk);
+        var asKept = _scope.Library.Combine("été~Trip");
+        var a = into ? Photo("a.jpg") : Path.Combine(asKept, "a.jpg");
+        if (!into)
+            TestImages.Write(Path.Combine(onDisk, "a.jpg"), 32, 24);
+        _tags.Save(a, ["trip"], "");
+        var to = Path.Combine(into ? asKept : _to, "a.jpg");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, into ? asKept : _to).Outcome);
+
+        Assert.True(File.Exists(to));
+        Assert.Equal(["trip"], _tags.Get(to).Tags);
+        Assert.Empty(_tags.Get(a).Tags);
+        Assert.Single(_tags.GetAll()); // one row, under the spelling the window looks it up by
+    }
+
+    [Theory]
+    [InlineData("a commit that fails")] // a disk I/O error, after the move
+    [InlineData("a file in use")] // before it
+    public void AFailureThatIsntABusyLibrary_DoesntMakeLaterFilesSayItIs(string what)
+    {
+        // Round 19, D F-2: only a library found busy keeps later files that need the write from waiting for it; any
+        // other failure, in the move or in a write made again once the file has moved, is that file's alone.
+        var a = Photo("a.jpg");
+        var b = Photo("b.jpg");
+        _tags.Save(a, ["trip"], "");
+        _tags.Save(b, ["trip"], "");
+        FileStream? holding = null;
+        if (what == "a file in use")
+            holding = new FileStream(a, FileMode.Open, FileAccess.Read, FileShare.None);
+        else
+            _moves.Committing = () => throw new SqliteException("disk I/O error", 10);
+        try
+        {
+            Assert.Equal(what == "a file in use" ? MoveOutcome.InUse : MoveOutcome.MovedTagsBehind, _moves.Move(a, _to).Outcome);
+        }
+        finally
+        {
+            holding?.Dispose();
+        }
+        _moves.Committing = null;
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(b, _to).Outcome);
+
+        Assert.Equal(["trip"], _tags.Get(To("b.jpg")).Tags);
+    }
+
     [Fact]
     public void APathWithATilde_InAnotherCaseThanOnDisk_IsntReadAsAnotherName_AndMoves()
     {
@@ -1006,10 +1062,34 @@ public class FileMovesTests : IDisposable
     [InlineData(@"C:\x\to2.\sub", "to2.")] // the first name read as another, not the last (round 18, D-2)
     [InlineData(@"C:\x\to2.\sub.", "to2.")]
     [InlineData(@"C:\x\sp \sub", null)]
+    [InlineData(@"C:\x\.", ".")] // round 19, D N-1: a name the rules drop, at the end
+    [InlineData(@"C:\x\..\y", "x")] // the first name the rules don't keep (".." drops "x" with it)
+    [InlineData("C:", "C:")] // a drive's own folder, as it is now: read as another path
     public void NameReadAsAnother_IsTheFirstNameWindowsPathRulesChange(string path, string? name)
     {
         Assert.Equal(name, FileMoves.NameReadAsAnother(path));
     }
+
+    [Fact]
+    public void AShortName_IsReadAsAnother()
+    {
+        // Round 19, R F-2: GetFullPath reads a short (8.3) name as its long one, another name than given. Where the drive
+        // keeps no short names, Windows gives the long one back and there's nothing to read.
+        using var dir = new TempDir();
+        var longOne = dir.Combine("A folder with a long name");
+        Directory.CreateDirectory(longOne);
+        var buffer = new System.Text.StringBuilder(1024);
+        var length = GetShortPathName(longOne, buffer, buffer.Capacity);
+        var shortOne = length > 0 ? buffer.ToString() : longOne;
+
+        Assert.Equal(!string.Equals(Path.GetFileName(shortOne), Path.GetFileName(longOne), StringComparison.OrdinalIgnoreCase),
+            FileMoves.IsReadAsAnotherName(shortOne));
+        Assert.False(FileMoves.IsReadAsAnotherName(longOne));
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW",
+        CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern int GetShortPathName(string longPath, System.Text.StringBuilder shortPath, int length);
 
     [Theory]
     [InlineData("the file")] // "a.jpg " beside "a.jpg"
