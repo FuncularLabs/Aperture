@@ -70,6 +70,7 @@ public class LibraryServiceMoveTests
         Assert.All(files, f => Assert.True(File.Exists(f)));
         Assert.Empty(Directory.GetFiles(photos.Combine("to")));
         Assert.NotEqual(caller, callers[0]); // off the caller's thread
+        Assert.Single(callers); // once stopped, the move comes to no other file
     }
 
     [Fact]
@@ -103,6 +104,30 @@ public class LibraryServiceMoveTests
         Assert.Equal(MoveOutcome.Stopped, Assert.Single(move.Result).Outcome);
         Assert.True(File.Exists(a));
         Assert.Empty(Directory.GetFiles(photos.Combine("to")));
+    }
+
+    [Fact]
+    public async Task AFolderPickedInAnotherCase_GetsTheRowInTheDisksCase()
+    {
+        // Round 2 (dispositions lens), L-2c: MoveFilesAsync keys the moved row as a scan would.
+        using var data = new TempDir();
+        using var photos = new TempDir();
+        TestImages.Write(photos.Combine("a.jpg"), 32, 24);
+        Directory.CreateDirectory(photos.Combine("Trips"));
+        var library = new LibraryService(data.Path);
+        var root = library.AddRoot(photos.Path, "Photos");
+        library.IndexRoot(root);
+        var id = library.GetUnion().Single().Item.Id;
+
+        var moves = await library.MoveFilesAsync([new MoveRequest(photos.Combine("a.jpg"), root.Id, "a.jpg")],
+            photos.Combine("TRIPS"), root.Id);
+        var again = library.IndexRoot(root);
+
+        Assert.Equal(MoveOutcome.Moved, Assert.Single(moves).Outcome);
+        var row = Assert.Single(library.GetUnion());
+        Assert.Equal((id, Path.Combine("Trips", "a.jpg")), (row.Item.Id, row.Item.RelPath));
+        Assert.Equal((0, 0, 0), (again.Added, again.Updated, again.Removed)); // nothing read again
+        await library.ShutdownAsync();
     }
 
     [Fact]

@@ -28,7 +28,10 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// A question answered after longer than this counts the files again before reading them: the folder may have
     /// changed meanwhile, unwatched (round 1, lens 2, finding 10). Settable for tests.
     /// </summary>
-    internal TimeSpan RescanAfter { get; set; } = TimeSpan.FromSeconds(2);
+    internal TimeSpan RescanAfter { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Test seam: runs between the count and the reading of the folder's rows (a move can land there).</summary>
+    internal Action? AfterScan { get; set; }
 
     private readonly ApertureDatabase _db = database;
     private readonly ThumbnailGenerator _thumbnails = thumbnails;
@@ -81,6 +84,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         private static readonly int ExpectedThumbs = ThumbSizes.All.Length;
 
         public Root Root { get; } = root;
+        public bool IncludeVideos { get; init; } = true;
         public List<ScannedFile> Files { get; } = files;
         public Dictionary<string, ItemStore.ExistingItem> Existing { get; } = existing;
         public long NowTicks { get; } = nowTicks;
@@ -117,8 +121,12 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         // Count first, and say how the count climbs: a big tree (or one on a slow or cloud drive) takes a while to walk.
         var files = FileScanner.Scan(root.Path, includeVideos, ct, root.Recursive, t =>
             progress?.Report(new IndexProgress { RootAlias = root.Alias, Phase = IndexPhase.Scanning, Processed = t.Found }));
+        AfterScan?.Invoke();
 
-        return new Scan(root, files, new ItemStore(_db).GetExisting(root.Id), new ThumbnailStore(_db).GetInfo(), nowTicks);
+        return new Scan(root, files, new ItemStore(_db).GetExisting(root.Id), new ThumbnailStore(_db).GetInfo(), nowTicks)
+        {
+            IncludeVideos = includeVideos,
+        };
     }
 
     private IndexResult Execute(Scan scan, OnlineOnlyChoice choice, IProgress<IndexProgress>? progress, CancellationToken ct)
@@ -182,41 +190,58 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 ct.ThrowIfCancellationRequested();
                 seen.Add(file.RelPath);
                 processed++;
-
-                if (IsUnchanged(file, out var row))
+                var unchanged = IsUnchanged(file, out var row);
+                try
                 {
-                    // Unchanged file. Regenerate thumbnails only if the cache is incomplete
-                    // OR its source mtime no longer matches this file — the latter catches a
-                    // realigned cache (metadata rebuilt, ids now map to different files) that
-                    // would otherwise serve the wrong image for this item.
-                    if (!ThumbsFresh(row.Id, file))
+                    if ((!unchanged || !ThumbsFresh(row.Id, file)) && !File.Exists(file.FullPath))
                     {
+                        // Gone since it was counted (moved, deleted): not read, not kept (round 2, R2-4).
+                        seen.Remove(file.RelPath);
+                    }
+                    else if (unchanged)
+                    {
+                        // Unchanged file. Regenerate thumbnails only if the cache is incomplete
+                        // OR its source mtime no longer matches this file — the latter catches a
+                        // realigned cache (metadata rebuilt, ids now map to different files) that
+                        // would otherwise serve the wrong image for this item.
+                        if (!ThumbsFresh(row.Id, file))
+                        {
+                            Reading?.Invoke(file.RelPath);
+                            var set = GenerateThumbnails(file);
+                            if (set is null)
+                                failed++;
+                            else
+                                thumbsGenerated += StoreThumbs(upsertThumb, row.Id, file.MTimeTicks, set, nowTicks);
+                        }
+                        skipped++;
+                    }
+                    else
+                    {
+                        // Videos carry no EXIF we rely on; use file times.
                         Reading?.Invoke(file.RelPath);
+                        var md = file.Kind == MediaKind.Video ? default : _metadata.Read(file.FullPath);
                         var set = GenerateThumbnails(file);
                         if (set is null)
                             failed++;
+
+                        var itemId = UpsertItem(upsertItem, root.Id, file, md, set, nowTicks);
+                        if (set is not null)
+                            thumbsGenerated += StoreThumbs(upsertThumb, itemId, file.MTimeTicks, set, nowTicks);
+
+                        if (existing.ContainsKey(file.RelPath))
+                            updated++;
                         else
-                            thumbsGenerated += StoreThumbs(upsertThumb, row.Id, file.MTimeTicks, set, nowTicks);
+                            added++;
                     }
-                    skipped++;
                 }
-                else
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // Videos carry no EXIF we rely on; use file times.
-                    Reading?.Invoke(file.RelPath);
-                    var md = file.Kind == MediaKind.Video ? default : _metadata.Read(file.FullPath);
-                    var set = GenerateThumbnails(file);
-                    if (set is null)
-                        failed++;
-
-                    var itemId = UpsertItem(upsertItem, root.Id, file, md, set, nowTicks);
-                    if (set is not null)
-                        thumbsGenerated += StoreThumbs(upsertThumb, itemId, file.MTimeTicks, set, nowTicks);
-
-                    if (existing.ContainsKey(file.RelPath))
-                        updated++;
+                    // A file that can't be read just now (in use, gone mid-read) no longer ends the run (OOR-1): one gone
+                    // isn't kept; one still there keeps its row as it was, for the next run to read.
+                    if (!File.Exists(file.FullPath))
+                        seen.Remove(file.RelPath);
                     else
-                        added++;
+                        failed++;
                 }
 
                 if (processed % BatchSize == 0)
@@ -260,8 +285,16 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         {
             RootAlias = root.Alias, Phase = IndexPhase.Pruning, OnlineOnly = onlineOnly, OnlineOnlyLast = onlineOnlyLast,
         });
+        // A row not seen is pruned unless its file is there after all, in the run's scope: moved in by Move to… after the
+        // count passed its folder (round 2, R2-4). Out of scope (a folder without subfolders, videos left out) it goes.
+        var rootThere = Directory.Exists(root.Path);
+        bool StillThere(string relPath) =>
+            rootThere
+            && (root.Recursive || !relPath.Contains(Path.DirectorySeparatorChar))
+            && SupportedFormats.IsSupported(Path.GetExtension(relPath).ToLowerInvariant(), scan.IncludeVideos)
+            && File.Exists(Path.Combine(root.Path, relPath));
         var removedIds = existing
-            .Where(kv => !seen.Contains(kv.Key))
+            .Where(kv => !seen.Contains(kv.Key) && !StillThere(kv.Key))
             .Select(kv => kv.Value.Id)
             .ToList();
         if (removedIds.Count > 0)

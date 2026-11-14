@@ -127,8 +127,9 @@ public sealed class VideoPlayback : ObservableObject
 
     /// <summary>
     /// Moves the video to <paramref name="seconds"/> (clamped to its length), playing or paused; a paused video then
-    /// shows the frame there. Moved to its end, the next play starts again; moved back from its end, it plays from
-    /// there. Nothing happens before it has opened, or when its length isn't known.
+    /// shows the frame there and stays there, and play goes on from there (MediaElementPlayer keeps the MediaElement's
+    /// quirks out of it: round 2, R2-1). Moved to its end, the next play starts again; moved back from its end, it plays
+    /// from there. Nothing happens before it has opened, or when its length isn't known.
     /// </summary>
     public void Seek(double seconds)
     {
@@ -136,8 +137,11 @@ public sealed class VideoPlayback : ObservableObject
             return;
         var at = Math.Clamp(seconds, 0, length.TotalSeconds);
         player.Position = TimeSpan.FromSeconds(at);
-        if (!_isPlaying)
-            player.Pause(); // after the seek: a Manual MediaElement left "playing" at its end would go on from here (V12)
+        // After the seek, a video not playing is paused there: one ended and not paused would go on from here (V12); one
+        // already paused is left as it is (MediaElementPlayer.Pause). Not at its very end: a MediaElement paused at its
+        // end sends the next seek back to 0:00 (round 2, P2); left there, it plays nothing.
+        if (!_isPlaying && at < length.TotalSeconds)
+            player.Pause();
         _position = at;
         _atEnd = at >= length.TotalSeconds;
         _started = true;

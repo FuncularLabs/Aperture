@@ -68,6 +68,8 @@ public class ContextMenuTests
             Assert.Equal("Data.CopyShownFileCommand", PathOf(items.Single(i => i.Header as string == "Copy"), MenuItem.CommandProperty));
             Assert.Equal("Data.CutShownFileCommand", PathOf(items.Single(i => i.Header as string == "Cut"), MenuItem.CommandProperty));
             Assert.DoesNotContain(items, i => i.Header as string == "Move to…");
+            // No keys shown: Ctrl+C / Ctrl+X act on the grid's selection, not the item shown (round 1, A-N4).
+            Assert.All(items.Where(i => i.Header as string is "Copy" or "Cut"), i => Assert.True(string.IsNullOrEmpty(i.InputGestureText)));
             window.Close();
         });
     }

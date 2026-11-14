@@ -238,6 +238,33 @@ public class QuickViewVideoTests
     }
 
     [Fact]
+    public void AStillArrivingAfterTheFrameShows_TakesItsPlace_UntilPlayed()
+    {
+        // Round 2 (dispositions lens), L-2a: the frame shown for want of a still gives way once the still comes.
+        var release = new ManualResetEventSlim();
+        WithQuickView(["v0.mp4"], v =>
+        {
+            v.Player.RaiseOpened(1280, 720);
+            Settle();
+            Assert.Equal(Visibility.Visible, v.VideoHost.Visibility); // no still yet: its own frame
+
+            release.Set();
+            Assert.True(Sta.PumpUntil(() => v.Vm.QuickLookImage is not null, Wait));
+            Settle();
+            Assert.Equal(Visibility.Visible, v.Still.Visibility);
+            Assert.NotEqual(Visibility.Visible, v.VideoHost.Visibility);
+
+            v.Window.QuickLookKey(Key.Space, ModifierKeys.None);
+            Settle();
+            Assert.Equal(Visibility.Visible, v.VideoHost.Visibility);
+        }, still: () =>
+        {
+            release.Wait(Wait);
+            return Still16By9();
+        });
+    }
+
+    [Fact]
     public void ArrowKeys_StillMove_WithTheSeekBarShown()
     {
         WithQuickView(["v0.mp4", "p1.jpg"], v =>

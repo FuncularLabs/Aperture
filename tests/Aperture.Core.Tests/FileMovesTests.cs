@@ -409,6 +409,31 @@ public class FileMovesTests : IDisposable
     }
 
     [Fact]
+    public void ACopyStopped_PartWay_StopsThere_NotAtItsEnd()
+    {
+        // Round 2 (dispositions lens), M-2: a photo fits in one chunk, so only the check after the copy was ever reached.
+        var big = _scope.Library.Combine("from", "big.mp4");
+        var bytes = new byte[24 << 20];
+        new Random(7).NextBytes(bytes);
+        File.WriteAllBytes(big, bytes);
+        _moves.ForceCopy = true;
+        using var stop = new CancellationTokenSource();
+        var chunks = new List<long>();
+        _moves.CopyingChunk = done =>
+        {
+            chunks.Add(done);
+            stop.Cancel();
+        };
+
+        Assert.Equal(MoveOutcome.Stopped, _moves.Move(big, _to, stop.Token).Outcome);
+
+        Assert.Single(chunks); // stopped at the first chunk it heard
+        Assert.True(chunks[0] < bytes.Length, $"the whole file was copied first ({chunks[0]} bytes)");
+        Assert.Empty(Directory.GetFiles(_to));
+        Assert.Equal(bytes.Length, new FileInfo(big).Length);
+    }
+
+    [Fact]
     public void ACopy_KeepsTheFilesTimes()
     {
         var a = Photo("a.jpg");
@@ -580,10 +605,12 @@ public class FileMovesTests : IDisposable
     }
 
     [Fact]
-    public void AnUntaggedFile_WithTheLibraryBusy_StillMoves_AndItsRowFollowsByTheNextRun()
+    public void ALocalUntaggedFile_WithTheLibraryBusy_StillMoves_AndTheNextRunReadsItAsNew()
     {
+        // The row is an aid for a local file with no tags (round 2, R2-2 / M-1, accepted): without it, the next run reads
+        // the file again, as a new one (a new row; its old one pruned).
         var a = Photo("a.jpg");
-        var (root, _) = Indexed("a.jpg");
+        var (root, id) = Indexed("a.jpg");
         var watch = Stopwatch.StartNew();
         using (HoldTheLibrary())
         {
@@ -592,8 +619,166 @@ public class FileMovesTests : IDisposable
 
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2.5), $"it waited {watch.Elapsed}");
         Assert.Equal(Path.Combine("from", "a.jpg"), Assert.Single(_scope.Items.GetForRoot(root.Id)).RelPath); // not moved
+        var next = _scope.Indexer.IndexRoot(root);
+        var row = Assert.Single(_scope.Items.GetForRoot(root.Id));
+        Assert.Equal(Path.Combine("to", "a.jpg"), row.RelPath);
+        Assert.NotEqual(id, row.Id);
+        Assert.Equal((1, 1), (next.Added, next.Removed));
+    }
+
+    [Fact]
+    public void AnOnlineOnlyFile_WithTheLibraryBusy_Stays_AndKeepsItsRow()
+    {
+        // Round 2, R2-2: moved without its row, an online-only file is new to the next run: downloaded again, or left out
+        // under Skip. It waits for the write as a tagged file does, and stays if it can't be had.
+        var a = Photo("a.jpg");
+        File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline);
+        var (root, _) = Indexed("a.jpg");
+        _moves.BusyTimeout = TimeSpan.FromMilliseconds(200);
+        using (HoldTheLibrary())
+        {
+            Assert.Equal(MoveOutcome.LibraryBusy, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+        }
+
+        Assert.True(File.Exists(a));
+        Assert.Empty(Directory.GetFiles(_to));
+        Assert.Equal(Path.Combine("from", "a.jpg"), Assert.Single(_scope.Items.GetForRoot(root.Id)).RelPath);
+    }
+
+    [Fact]
+    public void ATaggedFile_TakesItsRowWithItsTags()
+    {
+        var a = Photo("a.jpg");
+        var (root, id) = Indexed("a.jpg");
+        _tags.Save(a, ["trip"], "");
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        var row = Assert.Single(_scope.Items.GetForRoot(root.Id));
+        Assert.Equal((id, Path.Combine("to", "a.jpg")), (row.Id, row.RelPath));
+        Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
+    }
+
+    [Fact]
+    public void ATagWriteThatFails_AfterTheFileMoved_TakesTheRowToo()
+    {
+        var a = Photo("a.jpg");
+        var (root, id) = Indexed("a.jpg");
+        _tags.Save(a, ["trip"], "");
+        var commits = 0;
+        _moves.Committing = () =>
+        {
+            if (++commits == 1)
+                throw new SqliteException("disk I/O error", 10);
+        };
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.Equal((id, Path.Combine("to", "a.jpg")), (_scope.Items.GetForRoot(root.Id).Single().Id,
+            _scope.Items.GetForRoot(root.Id).Single().RelPath));
+        Assert.Equal(["trip"], _tags.Get(To("a.jpg")).Tags);
+    }
+
+    [Fact]
+    public void OnceTheLibraryIsBusy_LaterUntaggedFiles_DontTryAgain()
+    {
+        var files = new[] { Photo("a.jpg"), Photo("b.jpg"), Photo("c.jpg") };
+        var root = _scope.AddLibraryRoot();
         _scope.Indexer.IndexRoot(root);
-        Assert.Equal(Path.Combine("to", "a.jpg"), Assert.Single(_scope.Items.GetForRoot(root.Id)).RelPath);
+        var watch = Stopwatch.StartNew();
+        using (HoldTheLibrary())
+        {
+            foreach (var file in files)
+                Assert.Equal(MoveOutcome.Moved, _moves.Move(file, _to, default, Row(root, Path.GetFileName(file))).Outcome);
+        }
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2.5), $"it waited {watch.Elapsed}"); // about 1 s, once
+    }
+
+    [Fact]
+    public void AnUntaggedFile_WhoseRowCantBeWritten_StillMoves()
+    {
+        // Round 2, R2-5: with nothing kept under either path, the row is an aid, not a condition.
+        var a = Photo("a.jpg");
+        var (root, _) = Indexed("a.jpg");
+
+        var move = _moves.Move(a, _to, default, new ItemMove(root.Id, Path.Combine("from", "a.jpg"), 999_999, "a.jpg")); // no such folder
+
+        Assert.Equal(MoveOutcome.Moved, move.Outcome);
+        Assert.True(File.Exists(To("a.jpg")));
+    }
+
+    [Fact]
+    public void AnUntaggedFile_WhoseRowsCommitFails_IsMoved_NotMovedWithoutTags()
+    {
+        var a = Photo("a.jpg");
+        var (root, _) = Indexed("a.jpg");
+        _moves.Committing = () => throw new SqliteException("disk I/O error", 10);
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+        Assert.True(File.Exists(To("a.jpg")));
+    }
+
+    [Fact]
+    public void ACopy_DoesntCarryTheSourcesCloudState()
+    {
+        // Round 2, R2-6: Offline, Pinned and Unpinned stick on an ordinary file, and Aperture reads Offline as online only.
+        var a = ReadOnlyPhoto("a.jpg");
+        File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline | (FileAttributes)0x80000);
+        _moves.ForceCopy = true;
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        var attributes = File.GetAttributes(To("a.jpg"));
+        Assert.True((attributes & FileAttributes.ReadOnly) != 0);
+        Assert.Equal((FileAttributes)0, attributes & (FileAttributes.Offline | (FileAttributes)0x80000 | (FileAttributes)0x100000));
+    }
+
+    [Fact]
+    public void ACopy_KeepsTheFilesOtherStreams()
+    {
+        // Round 2, R2-7: a stream copy lost what File.Copy kept (alternate data streams; EFS likewise).
+        var a = Photo("a.jpg");
+        File.WriteAllText(a + ":aperture.test", "kept");
+        _moves.ForceCopy = true;
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.Equal("kept", File.ReadAllText(To("a.jpg") + ":aperture.test"));
+    }
+
+    [Fact]
+    public void TheWrite_LeavesNoQuickGiveUpBehind_ForTheLibrarysOtherWrites()
+    {
+        // Round 2, nit 5: the untagged file's try sets busy_timeout 0 on a pooled connection.
+        var a = Photo("a.jpg");
+        var (root, _) = Indexed("a.jpg");
+        _moves.Move(a, _to, default, Row(root, "a.jpg"));
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _scope.Database.MetadataPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = true, ForeignKeys = true,
+        }.ToString());
+        connection.Open(); // from the pool, as FunkyORM's own connections are
+        using var read = connection.CreateCommand();
+        read.CommandText = "PRAGMA busy_timeout;";
+        Assert.Equal(5000L, Convert.ToInt64(read.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void AStaleRowsThumbnails_GoWithIt()
+    {
+        // Round 2, nit 7: the row left where the file goes gives way; its cached thumbnails went nowhere.
+        var a = Photo("a.jpg");
+        var stale = Photo("a.jpg", "to");
+        var (root, _) = Indexed("a.jpg");
+        var staleId = _scope.Items.GetForRoot(root.Id).Single(i => i.RelPath == Path.Combine("to", "a.jpg")).Id;
+        File.Delete(stale);
+        Assert.True(_scope.Thumbnails.GetInfo().ContainsKey(staleId));
+
+        _moves.Move(a, _to, default, Row(root, "a.jpg"));
+
+        Assert.False(_scope.Thumbnails.GetInfo().ContainsKey(staleId));
     }
 
     [OtherDriveFact]

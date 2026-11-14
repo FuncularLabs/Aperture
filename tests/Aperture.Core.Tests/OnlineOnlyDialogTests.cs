@@ -128,6 +128,7 @@ public class OnlineOnlyDialogTests
 
         Assert.Equal(headline, text);
         Assert.Contains("downloads each one", body);
-        Assert.Contains("Skipped, they stay out of Aperture until you choose otherwise", body); // what Enter and Esc do
+        Assert.Contains("Skipped, none is downloaded", body); // what Enter and Esc do
+        Assert.Contains("until you choose otherwise from the folder's right-click menu", body);
     }
 }

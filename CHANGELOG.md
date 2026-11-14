@@ -10,7 +10,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   can click or drag to move along it, playing or paused, and its time ("0:12 / 1:23").
 - **Move to…** Right-click a photo or video (or several selected) and choose **Move to…** to
   move the files to another folder. A folder this library indexes takes them straight away,
-  thumbnails and all (an online-only file isn't downloaded again). If it's another library's
+  with their thumbnails (an online-only file isn't downloaded again). If it's another library's
   folder, isn't indexed, or isn't in any of your libraries, Aperture asks first, and says why.
   A file is never put over another of the same name; one that can't be moved (in use, say)
   stays where it is, and you're told how many weren't moved and why. Tags and notes go with

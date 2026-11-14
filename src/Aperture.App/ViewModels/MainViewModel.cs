@@ -1508,7 +1508,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// The files an action on <paramref name="tile"/> is for (Cut, Copy, Move to…): the whole selection when the tile is
     /// part of it (the keys pass the grid's current tile, one of the selection), that tile alone otherwise (a
-    /// right-click outside the selection). Files no longer on disk are left out (0.9.2 X1).
+    /// right-click outside the selection). With <paramref name="onDisk"/> (Cut, Copy), files no longer on disk are left
+    /// out (0.9.2 X1); Move to… leaves that to the move, which says which were gone (round 1, A-F6).
     /// </summary>
     private List<TileVm> ActionTargets(TileVm? tile, bool onDisk = true)
     {
@@ -3068,7 +3069,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The folder's menu (C6): a choice is kept, as Remember keeps one; Ask each time forgets the kept and the session
-    /// answer. A choice that now reads what the last answer skipped re-indexes the folder.
+    /// answer. A choice that now reads what the last answer skipped re-indexes the folder, unless it's paused (its
+    /// Resume reads them).
     /// </summary>
     private void OnOnlineOnlyChosen(RootVm rootVm, OnlineOnlyChoice? choice)
     {

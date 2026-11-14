@@ -50,22 +50,31 @@ public sealed record ItemMove(long FromRootId, string FromRelPath, long ToRootId
 public sealed record MoveRequest(string Path, long? RootId = null, string? RelPath = null);
 
 /// <summary>
-/// Moves files into a folder, one at a time, with their tags and notes (0.9.2 M3, M4, M7). Never over another file. A
-/// file's tags are moved in one short write on the library, made before the file is moved and kept only once it has
-/// been: when the library can't be written (a run holds it for a batch), the file stays; when the file can't be moved,
-/// the write is undone; when the write fails once the file has moved, it's made again, and if that fails too the file
-/// is <see cref="MoveOutcome.MovedTagsBehind"/>. A file with no tags, and nothing kept under its new path, never waits
-/// on the library, and once the library has been found busy, later tagged files given to the same instance aren't
-/// waited for either. Across drives a file is copied first, in chunks on the move's token, to
-/// <c>&lt;name&gt;.aperture-moving</c> (which no scan picks up), keeping its times and attributes, then renamed and
-/// the original deleted (a read-only one too); a failure or a stop removes the copy, and an original that can't be
-/// deleted keeps it from moving (the copy removed). Raw SQL on the tags' rows: a move changes no tag's recency or
-/// count.
+/// Moves files into a folder, one at a time, with their tags and notes (0.9.2 M3, M4, M5, M7). Never over another file.
+/// A file's tags, and its row in the library when it goes to a folder of this library, are moved in one short write on
+/// the library, made before the file is moved and kept only once it has been: when the library can't be written (a run
+/// holds it for a batch), a tagged or online-only file stays; when the file can't be moved, the write is undone; when
+/// the write fails once the file has moved, it's made again, and if that fails too a tagged file is
+/// <see cref="MoveOutcome.MovedTagsBehind"/>. For a local file with no tags (nothing kept under either path) the row is
+/// an aid, not a condition: the write is tried briefly (about a second, and not again once the library has been found
+/// busy), and without it the file moves anyway and the next run of the destination reads it as new. Once the library
+/// has been found busy, later files that need the write aren't waited for either. Across drives a file is copied first
+/// (CopyFileEx, so its other streams and encryption go with it; stopped on the move's token) to
+/// <c>&lt;name&gt;.aperture-moving</c> (which no scan picks up), keeping its times and its plain attributes (read-only,
+/// hidden, system, archive; not a cloud placeholder's), then renamed and the original deleted (a read-only one too); a
+/// failure or a stop removes the copy, and an original that can't be deleted keeps it from moving (the copy removed).
+/// Raw SQL on the tags' rows: a move changes no tag's recency or count.
 /// </summary>
 public sealed class FileMoves(ApertureDatabase database)
 {
-    private const int ChunkBytes = 1 << 20;
-    private bool _busy; // found busy once: later tagged files aren't waited for (review round 1, F5)
+    private const int DefaultBusyTimeoutMs = 5000; // what ApertureDatabase gives every connection: restored before one goes back
+
+    // The attributes a moved file keeps; not Offline, Pinned, Unpinned and the like, a sync client's (round 2, R2-6).
+    private const FileAttributes PlainAttributes =
+        FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive
+        | FileAttributes.NotContentIndexed;
+
+    private bool _busy; // found busy once: later files that need the write aren't waited for (round 1, F5)
 
     /// <summary>What a copy across drives is called until it's renamed to its own name.</summary>
     public const string CopySuffix = ".aperture-moving";
@@ -79,16 +88,14 @@ public sealed class FileMoves(ApertureDatabase database)
     /// <summary>Test seam: hears the temporary copy's path once it's made, before it's renamed.</summary>
     internal Action<string>? Copied { get; set; }
 
-    /// <summary>Test seam: hears the bytes copied so far after each chunk of a copy across drives.</summary>
+    /// <summary>Test seam: hears the bytes copied so far as a copy across drives goes (on the copying thread).</summary>
     internal Action<long>? CopyingChunk { get; set; }
 
-    /// <summary>Test seam: runs just before the tags' write is committed (and before it's made again).</summary>
+    /// <summary>Test seam: runs just before the write is committed (and before it's made again).</summary>
     internal Action? Committing { get; set; }
 
     /// <param name="item">
-    /// The file's row, to move with it when both places are this library's. Moved in the same write as its tags; for a
-    /// file with no tags the write isn't waited for (a run holds the library): the file moves, and the next run of its
-    /// folders moves its row instead.
+    /// The file's row, to move with it when both places are this library's (M5). Moved in the same write as its tags.
     /// </param>
     public FileMove Move(string source, string destinationFolder, CancellationToken ct = default, ItemMove? item = null)
     {
@@ -105,6 +112,8 @@ public sealed class FileMoves(ApertureDatabase database)
         var to = Path.Combine(folder, Path.GetFileName(from));
         FileMove Result(MoveOutcome outcome) => new(from, to, outcome);
 
+        if (ct.IsCancellationRequested)
+            return Result(MoveOutcome.Stopped); // not begun: nothing read, the library's files not touched
         if (string.Equals(Path.GetDirectoryName(from), folder, StringComparison.OrdinalIgnoreCase))
             return Result(MoveOutcome.AlreadyThere);
         if (!File.Exists(from))
@@ -120,11 +129,16 @@ public sealed class FileMoves(ApertureDatabase database)
         var copyMade = false;
         var placed = false;
         var moved = false;
+        var tagged = false;
+        var needsWrite = false;
         Rekey? rekey = null;
         try
         {
-            var tagged = HasTags(from, to);
-            if (tagged && _busy)
+            tagged = HasTags(from, to);
+            // A tagged file needs its write; so does an online-only one with a row (moved without it, the next run would
+            // download it again, or leave it out under Skip: round 2, R2-2).
+            needsWrite = tagged || (item is not null && Indexing.CloudFiles.IsOnlineOnly(File.GetAttributes(from)));
+            if (needsWrite && _busy)
                 return Result(MoveOutcome.LibraryBusy); // found busy already: neither copied nor waited for
             if (acrossDrives)
             {
@@ -133,7 +147,7 @@ public sealed class FileMoves(ApertureDatabase database)
                 Copied?.Invoke(copy);
             }
             ct.ThrowIfCancellationRequested();
-            rekey = tagged ? BeginRekey(from, to, item, wait: true)
+            rekey = needsWrite ? BeginRekey(from, to, item, wait: true)
                 : item is not null && !_busy ? TryBeginRekey(from, to, item)
                 : null;
             if (acrossDrives)
@@ -141,7 +155,7 @@ public sealed class FileMoves(ApertureDatabase database)
                 File.Move(copy, to, overwrite: false);
                 copyMade = false;
                 placed = true;
-                File.SetAttributes(to, File.GetAttributes(from)); // read-only stays read-only, and so on
+                File.SetAttributes(to, File.GetAttributes(from) & PlainAttributes);
                 DeleteOriginal(from);
             }
             else
@@ -156,10 +170,10 @@ public sealed class FileMoves(ApertureDatabase database)
         }
         catch (Exception ex)
         {
-            rekey?.Dispose(); // rolled back: the tags stay where they were
+            rekey?.Dispose(); // rolled back: the tags and the row stay where they were
             rekey = null;
-            if (moved)
-                return Result(RekeyAgain(from, to, item)); // the file has moved: its tags are made to follow, once more
+            if (moved) // the file has moved: what needs to follow it is made to, once more; a mere aid is let go
+                return Result(needsWrite ? RekeyAgain(from, to, item, tagged) : MoveOutcome.Moved);
             if (copyMade)
                 TryDelete(copy);
             if (placed && File.Exists(from))
@@ -174,9 +188,9 @@ public sealed class FileMoves(ApertureDatabase database)
         }
     }
 
-    // The tags' write failed once the file had moved (a full disk, an I/O error): made again in a write of its own (the
-    // row too, if it was to move; if that fails, the next run of its folders moves it).
-    private MoveOutcome RekeyAgain(string from, string to, ItemMove? item)
+    // The write failed once the file had moved (a full disk, an I/O error): made again in a write of its own. Failing
+    // again, a tagged file's tags stay under its old path (said); an online-only file's row is moved by the next run.
+    private MoveOutcome RekeyAgain(string from, string to, ItemMove? item, bool tagged)
     {
         try
         {
@@ -187,31 +201,53 @@ public sealed class FileMoves(ApertureDatabase database)
         }
         catch (Exception)
         {
-            return MoveOutcome.MovedTagsBehind;
+            return tagged ? MoveOutcome.MovedTagsBehind : MoveOutcome.Moved;
         }
     }
 
-    // A copy across drives, in chunks so the move's token stops it; the file's times kept.
+    // --- Copying across drives (CopyFileEx: its other streams, encryption and times go with it; stopped on the token)
+
+    private delegate uint CopyProgressRoutine(
+        long totalFileSize, long totalBytesTransferred, long streamSize, long streamBytesTransferred, uint streamNumber,
+        uint callbackReason, IntPtr sourceFile, IntPtr destinationFile, IntPtr data);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CopyFileExW",
+        CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CopyFileEx(
+        string existingFileName, string newFileName, CopyProgressRoutine? progress, IntPtr data, ref int cancel, uint flags);
+
+    private const uint ProgressContinue = 0, ProgressCancel = 1, CallbackChunkFinished = 0;
+    private const int ErrorRequestAborted = 1235, ErrorAccessDenied = 5, ErrorFileNotFound = 2, ErrorPathNotFound = 3;
+
     private void CopyTo(string from, string copy, CancellationToken ct)
     {
-        if (File.Exists(copy))
-            File.SetAttributes(copy, FileAttributes.Normal); // a read-only leftover would refuse to be replaced
-        using (var source = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkBytes))
-        using (var target = new FileStream(copy, FileMode.Create, FileAccess.Write, FileShare.None, ChunkBytes))
+        TryDelete(copy); // a copy left by a move that was killed (read-only or not) is replaced
+        var cancel = 0;
+        CopyProgressRoutine progress = (_, transferred, _, _, _, reason, _, _, _) =>
         {
-            var buffer = new byte[ChunkBytes];
-            long copied = 0;
-            int read;
-            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            if (reason == CallbackChunkFinished)
+                CopyingChunk?.Invoke(transferred);
+            return ct.IsCancellationRequested ? ProgressCancel : ProgressContinue; // cancelled: the copy is deleted
+        };
+        var copied = CopyFileEx(from, copy, progress, IntPtr.Zero, ref cancel, 0);
+        var error = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+        GC.KeepAlive(progress);
+        if (!copied)
+        {
+            ct.ThrowIfCancellationRequested();
+            var message = new System.ComponentModel.Win32Exception(error).Message;
+            throw error switch
             {
-                ct.ThrowIfCancellationRequested();
-                target.Write(buffer, 0, read);
-                copied += read;
-                CopyingChunk?.Invoke(copied);
-            }
+                ErrorRequestAborted => new OperationCanceledException(message),
+                ErrorAccessDenied => new UnauthorizedAccessException(message),
+                ErrorFileNotFound => new FileNotFoundException(message, from),
+                ErrorPathNotFound => new DirectoryNotFoundException(message),
+                _ => new IOException(message, unchecked((int)0x80070000 | error)),
+            };
         }
         ct.ThrowIfCancellationRequested();
-        File.SetCreationTimeUtc(copy, File.GetCreationTimeUtc(from));
+        File.SetCreationTimeUtc(copy, File.GetCreationTimeUtc(from)); // CopyFileEx keeps the last-write time, not this
         File.SetLastWriteTimeUtc(copy, File.GetLastWriteTimeUtc(from));
     }
 
@@ -271,19 +307,30 @@ public sealed class FileMoves(ApertureDatabase database)
 
     private sealed class LibraryBusyException(Exception inner) : Exception("The library couldn't be written.", inner);
 
-    // The tags' row moved from one path to the other in a write of its own: kept by Commit, undone by Dispose.
-    private sealed class Rekey(SqliteConnection connection, SqliteTransaction transaction) : IDisposable
+    // The write that moves a file's tags (and row) from one path to the other: kept by Commit, undone by Dispose. Its
+    // connection goes back to the pool with the library's usual busy timeout (round 2, nit 5).
+    private sealed class Rekey(ApertureDatabase database, SqliteConnection connection, SqliteTransaction transaction, long? staleId)
+        : IDisposable
     {
         private bool _done;
+        private bool _closed;
 
         public void Commit()
         {
             transaction.Commit();
             _done = true;
+            if (staleId is { } id)
+            {
+                try { new ThumbnailStore(database).DeleteForItems([id]); } // the stale row's thumbnails go with it
+                catch (Exception) { /* best effort: the cache's own pruning finds them in time */ }
+            }
         }
 
         public void Dispose()
         {
+            if (_closed)
+                return;
+            _closed = true;
             if (!_done)
             {
                 try { transaction.Rollback(); }
@@ -291,8 +338,24 @@ public sealed class FileMoves(ApertureDatabase database)
                 _done = true;
             }
             transaction.Dispose();
-            connection.Dispose();
+            Release(connection);
         }
+    }
+
+    // Back to the pool as ApertureDatabase gives it: this one's busy timeout was changed for the write.
+    private static void Release(SqliteConnection connection)
+    {
+        try
+        {
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText = $"PRAGMA busy_timeout={DefaultBusyTimeoutMs};";
+            pragma.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // A connection that can't run a pragma is broken; disposing it below is all that's left.
+        }
+        connection.Dispose();
     }
 
     // Whether anything is kept under either path: if not, there's nothing to move, and no wait on a library a run holds
@@ -307,7 +370,8 @@ public sealed class FileMoves(ApertureDatabase database)
         return Convert.ToInt64(count.ExecuteScalar()) > 0;
     }
 
-    // An untagged file's row: the write tried once, briefly; busy, the file moves without it (and later ones don't try).
+    // A local, untagged file's row: the write tried once, briefly. Busy, or failing in any way (round 2, R2-5), the file
+    // moves without it (and later ones don't try once busy).
     private Rekey? TryBeginRekey(string from, string to, ItemMove item)
     {
         try
@@ -317,6 +381,10 @@ public sealed class FileMoves(ApertureDatabase database)
         catch (LibraryBusyException)
         {
             _busy = true;
+            return null;
+        }
+        catch (Exception)
+        {
             return null;
         }
     }
@@ -349,8 +417,16 @@ public sealed class FileMoves(ApertureDatabase database)
             move.Parameters.AddWithValue("@from", from);
             move.Parameters.AddWithValue("@to", to);
             move.ExecuteNonQuery();
+            long? staleId = null;
             if (item is not null)
             {
+                using var stale = connection.CreateCommand();
+                stale.Transaction = transaction;
+                stale.CommandText = "SELECT id FROM items WHERE root_id = @toRoot AND rel_path = @toRel " +
+                                    "AND NOT (root_id = @fromRoot AND rel_path = @fromRel);";
+                Bind(stale, item);
+                if (stale.ExecuteScalar() is long id)
+                    staleId = id;
                 using var row = connection.CreateCommand();
                 row.Transaction = transaction;
                 // A row left where the file goes (a file once there, not pruned yet) gives way; then the file's own row
@@ -360,19 +436,24 @@ public sealed class FileMoves(ApertureDatabase database)
                     "AND NOT (root_id = @fromRoot AND rel_path = @fromRel); " +
                     "UPDATE items SET root_id = @toRoot, rel_path = @toRel, file_name = @name " +
                     "WHERE root_id = @fromRoot AND rel_path = @fromRel;";
-                row.Parameters.AddWithValue("@fromRoot", item.FromRootId);
-                row.Parameters.AddWithValue("@fromRel", item.FromRelPath);
-                row.Parameters.AddWithValue("@toRoot", item.ToRootId);
-                row.Parameters.AddWithValue("@toRel", item.ToRelPath);
+                Bind(row, item);
                 row.Parameters.AddWithValue("@name", Path.GetFileName(item.ToRelPath));
                 row.ExecuteNonQuery();
             }
-            return new Rekey(connection, transaction);
+            return new Rekey(database, connection, transaction, staleId);
         }
         catch
         {
-            connection.Dispose();
+            Release(connection);
             throw;
         }
+    }
+
+    private static void Bind(SqliteCommand command, ItemMove item)
+    {
+        command.Parameters.AddWithValue("@fromRoot", item.FromRootId);
+        command.Parameters.AddWithValue("@fromRel", item.FromRelPath);
+        command.Parameters.AddWithValue("@toRoot", item.ToRootId);
+        command.Parameters.AddWithValue("@toRel", item.ToRelPath);
     }
 }

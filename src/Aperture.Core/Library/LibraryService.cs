@@ -458,7 +458,8 @@ public sealed class LibraryService : IDisposable
     /// <summary>
     /// Moves the files into <paramref name="destinationFolder"/>, one at a time, with their tags (<see cref="FileMoves"/>),
     /// on a pool thread, tracked as an index run is: a switch or exit waits for it, and its token (or the shutdown) stops
-    /// it between files; those not come to are <see cref="MoveOutcome.Stopped"/>. One outcome per file, in order.
+    /// it between files and during a copy across drives (the copy removed); those not moved for it are
+    /// <see cref="MoveOutcome.Stopped"/>. One outcome per file, in order.
     /// </summary>
     public Task<IReadOnlyList<FileMove>> MoveFilesAsync(
         IReadOnlyList<string> sources, string destinationFolder, CancellationToken ct = default) =>

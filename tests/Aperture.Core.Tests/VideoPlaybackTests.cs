@@ -200,6 +200,20 @@ public class VideoPlaybackTests
     }
 
     [Fact]
+    public void ASeekToTheVeryEnd_DoesNotPauseThePlayer()
+    {
+        // Round 2, P2: a MediaElement paused at its end sends the next seek back to 0:00; left there it plays nothing.
+        var playback = Playback();
+        playback.Show(@"C:\v\a.mp4");
+        _players[0].RaiseOpened(seconds: 83);
+
+        playback.Seek(83);
+
+        Assert.Equal("seek:83", _players[0].Calls[^1]);
+        Assert.False(playback.IsPlaying);
+    }
+
+    [Fact]
     public void ASeekWhilePlaying_DoesNotPause()
     {
         var playback = Playback();

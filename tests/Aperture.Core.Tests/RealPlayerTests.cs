@@ -151,6 +151,131 @@ public class RealPlayerTests
     }
 
     [MediaFact]
+    public void OpenedPaused_ASeek_HoldsThere_AndPlaysOnFromThere()
+    {
+        // Round 2, R2-1: quick view opens every video paused; a seek before it was ever played went back to 0:00 (a
+        // second pause on a MediaElement opened by a pause rewinds it), and its first play started from 0:00.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+
+            playback.Seek(2);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            playback.Tick();
+
+            Assert.InRange(player.Position.TotalSeconds, 1.9, 2.1);
+            Assert.InRange(playback.PositionSeconds, 1.9, 2.1); // the bar stays where it was put
+            playback.Toggle();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            Assert.True(player.Position > TimeSpan.FromSeconds(2.3), $"it didn't play on from the seek: {player.Position}");
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
+    public void OpenedPaused_TwoSeeks_HoldTheSecond()
+    {
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+
+            playback.Seek(1);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+            playback.Seek(3);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+
+            Assert.InRange(player.Position.TotalSeconds, 2.9, 3.1);
+            playback.Toggle();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            Assert.True(player.Position > TimeSpan.FromSeconds(3.3), $"it didn't play on from the seek: {player.Position}");
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
+    public void OpenedPaused_ADrag_HoldsWhereItEnds()
+    {
+        // A drag on the bar: many seeks in a row, the window's clock ticking, then let go.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+
+            playback.BeginScrub();
+            for (var at = 0.5; at <= 3.0; at += 0.25)
+            {
+                playback.PositionSeconds = at;
+                Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(40));
+                playback.Tick();
+            }
+            playback.EndScrub();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            playback.Tick();
+
+            Assert.InRange(player.Position.TotalSeconds, 2.9, 3.1);
+            Assert.InRange(playback.PositionSeconds, 2.9, 3.1);
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
+    public void OpenedPaused_ASeekToTheEnd_ThenBack_HoldsThere()
+    {
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+
+            playback.Seek(playback.DurationSeconds);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+            playback.Seek(2);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            playback.Tick();
+
+            Assert.InRange(player.Position.TotalSeconds, 1.9, 2.1);
+            Assert.False(playback.IsPlaying);
+            playback.Toggle();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            Assert.True(player.Position > TimeSpan.FromSeconds(2.3), $"it didn't play on from the seek: {player.Position}");
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
+    public void AfterTheEnd_ASeekToTheEnd_ThenBack_HoldsThere()
+    {
+        // Round 2 (dispositions lens), P2: after the end, the bar pulled to its very end and back.
+        WithPlayer((player, host, clip, pump) =>
+        {
+            var playback = new VideoPlayback(PlaybackPrefsStore.InMemory(), () => player);
+            playback.Show(clip);
+            Assert.True(pump(() => playback.IsReady), "the sample clip didn't open");
+            playback.Toggle();
+            playback.Seek(playback.DurationSeconds - 0.3);
+            Assert.True(pump(() => !playback.IsPlaying), "no end");
+
+            playback.Seek(playback.DurationSeconds);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+            playback.Seek(2);
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            playback.Tick();
+
+            Assert.InRange(player.Position.TotalSeconds, 1.9, 2.1);
+            Assert.InRange(playback.PositionSeconds, 1.9, 2.1);
+            playback.Toggle();
+            Sta.PumpUntil(() => false, TimeSpan.FromMilliseconds(700));
+            Assert.True(player.Position > TimeSpan.FromSeconds(2.3), $"it didn't play on from the seek: {player.Position}");
+            playback.Leave();
+        });
+    }
+
+    [MediaFact]
     public void PlayStraightAfterASeek_PlaysOn()
     {
         // The pause a seek defers (MediaElementPlayer.Pause) is cancelled by a play straight after it.
