@@ -52,8 +52,19 @@ public class IndexerAbsenceTests
         Junction.Create(W("lists", "tofile"), W("afile2")); // round 7, R7-2
         Junction.Create(W("lists", "tolink"), W("lists", "tofile")); // round 8, F-2: a link to a link to a file
         Junction.Create(W("lists", "tolocked"), W("locked")); // round 8, F-1: a link to a folder this user may not list
-        File.WriteAllText(W("filelink"), "read as a file-type symbolic link (to a folder)");
-        Junction.Create(W("lists", "tofilelink"), W("filelink")); // round 8, R's observation
+        File.WriteAllText(W("lists", "placeholder"), "read as a reparse point that isn't a link: a cloud placeholder");
+        File.WriteAllText(W("placeholder2"), "the same, a link's target");
+        Junction.Create(W("lists", "toplaceholder"), W("placeholder2")); // round 9, R9-1
+        Directory.CreateDirectory(W("elsewhere", "Gone2"));
+        Junction.Create(W("locked", "linkgone"), W("elsewhere", "Gone2")); // round 9, R9-2: a link inside a folder that won't list
+        Directory.Delete(W("elsewhere", "Gone2"));
+        File.WriteAllText(W("filelink"), "read as a file-type symbolic link, to a folder deleted");
+        Junction.Create(W("lists", "tofilelink"), W("filelink")); // round 8, R's observation; round 9, N9-2
+        File.WriteAllText(W("lists", "afilelink"), "read as a file-type symbolic link, to a volume that isn't there");
+        Directory.CreateDirectory(W("elsewhere", "GoneR"));
+        Junction.Create(W("lists", "raced"), W("elsewhere", "GoneR")); // its resolutions made to fail: round 9, N9-3
+        Junction.Create(W("lists", "raced2"), W("elsewhere", "GoneR"));
+        Directory.Delete(W("elsewhere", "GoneR"));
         File.WriteAllText(W("locked", "Trip"), "a file where a folder was, in a folder that can't be listed");
         Directory.CreateDirectory(W("elsewhere", "Gone"));
         Directory.CreateDirectory(W("chain"));
@@ -65,13 +76,29 @@ public class IndexerAbsenceTests
         // made to fail as Windows fails it (round 7, F-1).
         Indexer.Absence New() => new()
         {
+            IsALink = path => string.Equals(path, W("filelink"), StringComparison.OrdinalIgnoreCase)
+                || string.Equals(path, W("lists", "afilelink"), StringComparison.OrdinalIgnoreCase)
+                || new FileInfo(path).LinkTarget is not null,
+            ResolveLink = (link, final) =>
+                string.Equals(link, W("filelink"), StringComparison.OrdinalIgnoreCase) ? W("elsewhere", "GoneF")
+                : string.Equals(link, W("lists", "afilelink"), StringComparison.OrdinalIgnoreCase) ? @"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos"
+                : string.Equals(link, W("lists", "raced"), StringComparison.OrdinalIgnoreCase)
+                    ? throw new IOException("The specified network name is no longer available.", unchecked((int)0x80070040))
+                : string.Equals(link, W("lists", "raced2"), StringComparison.OrdinalIgnoreCase)
+                    ? (final ? throw new IOException("The name of the file cannot be resolved by the system.", unchecked((int)0x80070781))
+                        : throw new UnauthorizedAccessException($"Access to the path '{link}' is denied."))
+                : Directory.ResolveLinkTarget(link, final)?.FullName,
             ReadAttributes = path =>
                 string.Equals(path, W("refused"), StringComparison.OrdinalIgnoreCase)
                     ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
                     : string.Equals(path, W("lists", "refused.jpg"), StringComparison.OrdinalIgnoreCase)
                         ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
                     : string.Equals(path, W("filelink"), StringComparison.OrdinalIgnoreCase)
+                      || string.Equals(path, W("lists", "afilelink"), StringComparison.OrdinalIgnoreCase)
                         ? FileAttributes.Archive | FileAttributes.ReparsePoint // what a file-type symbolic link reads as
+                    : string.Equals(path, W("lists", "placeholder"), StringComparison.OrdinalIgnoreCase)
+                      || string.Equals(path, W("placeholder2"), StringComparison.OrdinalIgnoreCase)
+                        ? FileAttributes.Archive | FileAttributes.ReparsePoint | FileAttributes.Offline // a cloud placeholder
                     : string.Equals(path, W("share"), StringComparison.OrdinalIgnoreCase) || path.StartsWith(W("lists", "flaky"), StringComparison.OrdinalIgnoreCase)
                         ? throw new IOException("The specified network name is no longer available.", unchecked((int)0x80070040))
                         : File.GetAttributes(path),
@@ -107,7 +134,13 @@ public class IndexerAbsenceTests
                 (W("lists", "tolocked", "gone.jpg"), Look.OutOfReach, "a file gone, behind such a link"),
                 (W("lists", "tolocked", "open", "there.jpg"), Look.There, "a file there, in a folder that lists behind such a link (R8-1)"),
                 (W("lists", "tolocked", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists behind such a link"),
-                (W("lists", "tofilelink", "a.jpg"), Look.OutOfReach, "a link to a file-type link: not taken for a file (round 8, R)"),
+                (W("lists", "tofilelink", "a.jpg"), Look.Gone, "a link to a file-type link to a folder deleted: followed (round 9, N9-2)"),
+                (W("lists", "afilelink", "a.jpg"), Look.OutOfReach, "a file-type link to a volume that isn't there, in a folder's place"),
+                (W("lists", "raced", "a.jpg"), Look.OutOfReach, "a link whose both resolutions fail (round 9, N9-3)"),
+                (W("lists", "raced2", "a.jpg"), Look.OutOfReach, "a link whose first target is refused"),
+                (W("lists", "placeholder", "a.jpg"), Look.Gone, "a reparse point that isn't a link (a cloud placeholder) in a folder's place (round 9, R9-1)"),
+                (W("lists", "toplaceholder", "a.jpg"), Look.Gone, "a link to a reparse point that isn't a link"),
+                (W("locked", "linkgone", "a.jpg"), Look.Gone, "a link to a folder deleted, inside a folder this user may not list (round 9, R9-2)"),
                 (W("lists", "refused.jpg"), Look.OutOfReach, "a file whose look is refused (round 8, F-5)"),
                 (W("locked", "Trip", "a.jpg"), Look.Gone, "a file where its folder was, in a folder that can't be listed (R7-3)"),
                 (W("chain", "j1", "a.jpg"), Look.Gone, "ten links deep to a folder deleted (R7-4)"),
@@ -270,6 +303,20 @@ public class IndexerAbsenceTests
         Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "day 1", "c.jpg")));
         Assert.Equal(looks, absence.Looks);
         Assert.Equal(Look.There, new Indexer.Absence().At(dir.Combine("Trip", "day 1", "c.jpg"))); // the next prune looks
+    }
+
+    [Fact]
+    public void ALinkWindowsCantFollow_CountsBothResolutions()
+    {
+        // Round 9, R9-3.
+        using var dir = new TempDir();
+        File.WriteAllText(dir.Combine("afile"), "a file a link points at");
+        Junction.Create(dir.Combine("tofile"), dir.Combine("afile"));
+        var absence = new Indexer.Absence();
+
+        Assert.Equal(Look.Gone, absence.At(dir.Combine("tofile", "a.jpg")));
+        // The link's attributes and listing, its final resolution (it ends at a file: refused), its first, the file's look.
+        Assert.Equal(5, absence.Looks);
     }
 
     [Fact]
