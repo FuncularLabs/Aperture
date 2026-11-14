@@ -410,8 +410,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// Where a row's file is, for the prune (I2): there; gone, and that can be told; or out of reach, where that can't be
     /// told. A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder
     /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1; a file in a folder's place
-    /// is seen, so the folder below it is gone whatever is above (a file that's a reparse point too, unless it's a link:
-    /// a file-type link is followed as any link is; a cloud placeholder is a file: round 9, R9-1, N9-2). A link (a
+    /// is seen, so the folder below it is gone whatever is above, unless it's a reparse point: a file-type link may point
+    /// to a folder, and a cloud placeholder, an app alias or a WSL link can't be told from one, so it tells nothing
+    /// (round 10: accepted, such a file put where a folder was keeps the folder's rows). A link (a
     /// junction or symbolic link) that won't list is what its final target is: deleted on a drive that's there, its rows
     /// go (round 6, L-4); on an unplugged drive or a dropped share, they stay. A link Windows can't follow to its end (to
     /// a file, round in a loop, to a share that times out, inside a folder this user may not list) is what the folder it
@@ -439,14 +440,14 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         private readonly Dictionary<string, (Reach Reach, bool CanTell)> _known = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase); // folders being decided
 
-        /// <summary>Test seam: how often this prune has looked at the disk: a path's attributes, a folder's listing, a link's resolution.</summary>
+        /// <summary>
+        /// Test seam: how often this prune has looked at the disk: a path's attributes, a folder's listing, a link's
+        /// resolution.
+        /// </summary>
         internal int Looks { get; private set; }
 
         /// <summary>Test seam: how a path's attributes are read (a refused look, or a dropped call, can't be made with ACLs).</summary>
         internal Func<string, FileAttributes> ReadAttributes { get; init; } = File.GetAttributes;
-
-        /// <summary>Test seam: whether a file that's a reparse point is a link (symbolic links need rights tests lack).</summary>
-        internal Func<string, bool> IsALink { get; init; } = path => new FileInfo(path).LinkTarget is not null;
 
         /// <summary>Test seam: a link's target, its final one or the one it points to first (null: not a link).</summary>
         internal Func<string, bool, string?> ResolveLink { get; init; } =
@@ -489,8 +490,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                     Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
                     Found.Yes when !attributes.HasFlag(FileAttributes.Directory) && !attributes.HasFlag(FileAttributes.ReparsePoint)
                         => (Reach.Missing, true), // a file in its place
-                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) // a reparse point: a file-type link, maybe to
-                        => IsAFileLink(folder) ? BehindALink(folder) : (Reach.Missing, true), // a folder; else a file
+                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) // a reparse point in its place: tells nothing
+                        => (Reach.NotListed, false), // (a file-type link, a cloud placeholder, an alias, a WSL link: round 10)
                     Found.Yes when Lists(folder) => (Reach.Listed, true),
                     Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => BehindALink(folder),
                     Found.Yes => (Reach.NotListed, false),
@@ -516,7 +517,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         // A link that won't list is what its final target is: missing (deleted on a drive that's there: its files gone,
         // round 6, L-4; on a drive or share that's gone: out of reach), or a look that failed; and that's answered for
         // every folder below the link without a look (round 7, R7-5). One Windows can't follow to its end (to a file, to a
-        // link to one, round in a loop, to a share that times out) is what the folder it points to first is, decided as
+        // link to one, round in a loop, to a share that times out, inside a folder this user may not list: round 9, R9-2)
+        // is what the folder it points to first is, decided as
         // any folder is: a file there is a folder gone (round 7, R7-2; round 8, F-2), a loop comes back to a folder being
         // decided and can't tell, a share that times out is a look that failed (round 8, F-4).
         private (Reach Reach, bool CanTell) BehindALink(string link)
@@ -576,22 +578,6 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             catch (IOException)
             {
                 return Found.CantTell;
-            }
-        }
-
-        // A file that's a reparse point is a link only if it has a link's target: a file-type symbolic link may point to a
-        // folder, and is followed as any link is (round 9, N9-2); a cloud placeholder, an app alias or a deduplicated file
-        // is a file (round 9, R9-1).
-        private bool IsAFileLink(string path)
-        {
-            Looks++;
-            try
-            {
-                return IsALink(path);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                return true; // can't tell: not taken for a file
             }
         }
 
