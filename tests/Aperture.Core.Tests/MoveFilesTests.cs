@@ -159,6 +159,9 @@ public class MoveFilesTests
 
         Assert.Contains($"“{name}”", message);
         Assert.Equal(ends, message.Contains("ends in a dot or a space"));
+        // True of a device's name too (round 21: not "as another folder's"; pinned, round 22, R F-4).
+        Assert.Contains("doesn't read the name", message);
+        Assert.DoesNotContain("another folder", message);
     }
 
     [Fact]

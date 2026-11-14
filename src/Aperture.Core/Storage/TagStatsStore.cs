@@ -48,9 +48,26 @@ public sealed class TagStatsStore(ApertureDatabase database)
         }
     }
 
-    public Dictionary<string, TagStat> GetAll() =>
-        _db.Provider.GetList<TagStatRow>()
-            .ToDictionary(r => r.Name, r => new TagStat(r.Name, r.LastUsedTicks, r.UseCount), Ci);
+    /// <summary>
+    /// Every tag's use, keyed as the window compares tags (every letter's case folded). The column folds only ASCII
+    /// letters', so "Österreich" and "österreich" can be two rows: they're one tag here (the latest use, the uses added
+    /// up, under the latest spelling), and the load never fails on them, which closed the window and stopped the library
+    /// opening (0.9.2 review round 22, R F-1).
+    /// </summary>
+    public Dictionary<string, TagStat> GetAll()
+    {
+        var all = new Dictionary<string, TagStat>(Ci);
+        foreach (var r in _db.Provider.GetList<TagStatRow>())
+        {
+            var stat = new TagStat(r.Name, r.LastUsedTicks, r.UseCount);
+            if (all.Remove(r.Name, out var other))
+                stat = r.LastUsedTicks > other.LastUsedTicks
+                    ? stat with { UseCount = r.UseCount + other.UseCount }
+                    : other with { UseCount = r.UseCount + other.UseCount };
+            all[stat.Name] = stat;
+        }
+        return all;
+    }
 
     /// <summary>
     /// One-time backfill for libraries that already had tags before stats existed:

@@ -1518,7 +1518,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IEnumerable<TileVm> targets = _selectedTiles.Contains(tile) ? _selectedTiles : [tile];
         if (onDisk)
             targets = targets.Where(t => File.Exists(t.FullPath)); // the clipboard's: a check per file, as a drag's
-        return [.. targets.DistinctBy(t => t.FullPath, StringComparer.OrdinalIgnoreCase)];
+        return [.. targets.DistinctBy(t => t.FullPath, AsciiCase.Comparer)]; // "σ.jpg" and "ς.jpg" are two files (round 22)
     }
 
     private static List<TileVm> OnDisk(TileVm? tile) => tile is not null && File.Exists(tile.FullPath) ? [tile] : [];

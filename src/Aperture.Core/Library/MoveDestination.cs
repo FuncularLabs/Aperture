@@ -86,10 +86,10 @@ public sealed record MoveDestination(MoveDestinationKind Kind, string FolderPath
     private static bool Contains(string parent, string child, out string inside)
     {
         inside = "";
-        if (string.Equals(parent, child, StringComparison.OrdinalIgnoreCase))
+        if (AsciiCase.Same(parent, child)) // as the library's columns compare, not .NET's wider fold (round 22)
             return true;
         var prefix = Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar;
-        if (!child.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (!AsciiCase.StartsWith(child, prefix))
             return false;
         inside = child[prefix.Length..];
         return true;
