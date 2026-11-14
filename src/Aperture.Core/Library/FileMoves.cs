@@ -69,8 +69,8 @@ public sealed record MoveRequest(string Path, long? RootId = null, string? RelPa
 /// <c>&lt;name&gt;.aperture-moving</c> (which no scan picks up), keeping its times and its plain attributes (read-only,
 /// hidden, system, archive; not a cloud placeholder's), then renamed and the original deleted (a read-only one too); a
 /// failure or a stop removes the copy, and an original that can't be deleted keeps it from moving (the copy removed).
-/// Tags added as a file moves, with no write made for it, follow it once it has. A name ending in a dot or a space
-/// (which Windows' path rules read as another name) isn't moved. Raw SQL on the tags' rows: a move changes no tag's
+/// Tags added as a file moves, with no write kept for it, follow it once it has. A path Windows' path rules read as
+/// another name (<see cref="IsReadAsAnotherName"/>) isn't moved. Raw SQL on the tags' rows: a move changes no tag's
 /// recency or count.
 /// </summary>
 public sealed class FileMoves(ApertureDatabase database)
@@ -236,7 +236,7 @@ public sealed class FileMoves(ApertureDatabase database)
     // The write failed once the file had moved (a full disk, an I/O error): made again in a write of its own. Failing
     // again, a tagged file's tags stay under its old path (said: MovedTagsBehind); an untagged online-only file is just
     // Moved, and the next run of its destination reads it as new (downloads it; under Skip, leaves it out) — accepted.
-    // (round 3, L-4: no run moves a row.)
+    // (round 3, L-4: no run moves a row.) Found busy, later files that need the write aren't waited for (round 18, R N-3).
     private MoveOutcome RekeyAgain(string from, string to, ItemMove? item, bool tagged)
     {
         try
@@ -246,27 +246,44 @@ public sealed class FileMoves(ApertureDatabase database)
             again.Commit();
             return MoveOutcome.Moved;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            if (ex is LibraryBusyException)
+                _busy = true;
             return tagged ? MoveOutcome.MovedTagsBehind : MoveOutcome.Moved;
         }
     }
 
     /// <summary>
-    /// Whether Windows' usual path rules (GetFullPath's) read <paramref name="path"/> as another name. They drop the last
-    /// name's dots and spaces and a folder name's last dot (round 16, R F-3), and only those are refused (round 17,
-    /// D F-2): the move would take another file, or go into another folder. Such names are made only with \\?\.
+    /// Whether Windows' usual path rules (GetFullPath's) read <paramref name="path"/> as other names than it gives: they
+    /// drop the last name's dots and spaces, and a folder name's one last dot (round 16, R F-3), so the move would take
+    /// another file, or go into another folder; such names are made only with \\?\. Its names are compared with what
+    /// those rules read, so what else they change is refused too (a relative path, `.` and `..`, a device name, a short
+    /// 8.3 name; round 17, D F-2), but not case, which they change only by reading long names from the disk (round 18,
+    /// R F-1).
     /// </summary>
-    public static bool IsReadAsAnotherName(string path)
+    public static bool IsReadAsAnotherName(string path) => NameReadAsAnother(path) is not null;
+
+    /// <summary>
+    /// The first name in <paramref name="path"/> that Windows' usual path rules read as another (see
+    /// <see cref="IsReadAsAnotherName"/>), to be named in what's said (round 18, D-2); null when there's none.
+    /// </summary>
+    public static string? NameReadAsAnother(string path)
     {
+        string[] given, read;
         try
         {
-            return !NamesOf(path).SequenceEqual(NamesOf(Path.GetFullPath(path)), StringComparer.Ordinal);
+            given = NamesOf(path);
+            read = NamesOf(Path.GetFullPath(path));
         }
         catch (Exception)
         {
-            return false; // not a path Windows takes at all: said where it's used
+            return null; // not a path Windows takes at all: said where it's used
         }
+        for (var i = 0; i < given.Length; i++)
+            if (i >= read.Length || !string.Equals(given[i], read[i], StringComparison.OrdinalIgnoreCase))
+                return given[i];
+        return read.Length == given.Length ? null : path;
     }
 
     private static string[] NamesOf(string path) => path.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
@@ -281,16 +298,21 @@ public sealed class FileMoves(ApertureDatabase database)
     internal static string CopyNameFor(string to)
     {
         var name = Path.GetFileName(to);
-        if (name.Length + CopySuffix.Length <= MaxNameLength)
+        if (Fits(name + CopySuffix))
             return to + CopySuffix;
         var whole = name.ToUpperInvariant(); // one mark for what one folder takes for one name
         var mark = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Runtime.InteropServices.MemoryMarshal.AsBytes(whole.AsSpan())), 0, 4);
-        var keep = MaxNameLength - CopySuffix.Length - mark.Length - 1;
-        if (char.IsHighSurrogate(name[keep - 1]))
+        var keep = Math.Min(name.Length, MaxNameLength - CopySuffix.Length - mark.Length - 1);
+        while (keep > 0 && (char.IsHighSurrogate(name[keep - 1]) || !Fits(name[..keep] + "~" + mark + CopySuffix)))
             keep--;
         return Path.Combine(Path.GetDirectoryName(to)!, name[..keep] + "~" + mark + CopySuffix);
     }
+
+    // Within a name's 255 as NTFS, FAT and exFAT count it (UTF-16 units) and as some other drives do (a Samba share on
+    // ext4, as many NAS boxes are: UTF-8 bytes; round 18, D-4).
+    private static bool Fits(string name) =>
+        name.Length <= MaxNameLength && System.Text.Encoding.UTF8.GetByteCount(name) <= MaxNameLength;
 
     // The rename, and only that: Windows isn't let copy the file itself, nor put it over another (round 15, R F-2 /
     // D F-1). False: Windows can't make it a rename ("not the same device": another drive, or another route to this one),

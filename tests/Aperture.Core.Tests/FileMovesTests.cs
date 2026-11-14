@@ -848,6 +848,31 @@ public class FileMovesTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // across drives
+    public void AnOnlineOnlyFile_WhoseWriteFailsOnceItHasMoved_IsTriedAgain_AndTakesItsRow(bool acrossDrives)
+    {
+        // Round 18, D-1: an untagged online-only file with a row needs its write (moved without its row, the next run
+        // would download it again, or leave it out under Skip: M5). Failing once the file has moved, it's made again.
+        var a = Photo("a.jpg");
+        File.SetAttributes(a, File.GetAttributes(a) | FileAttributes.Offline);
+        var (root, id) = Indexed("a.jpg");
+        _moves.ForceCopy = acrossDrives;
+        var commits = 0;
+        _moves.Committing = () =>
+        {
+            if (++commits == 1)
+                throw new SqliteException("disk I/O error", 10);
+        };
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to, default, Row(root, "a.jpg")).Outcome);
+
+        Assert.Equal(2, commits);
+        var row = Assert.Single(_scope.Items.GetForRoot(root.Id));
+        Assert.Equal((id, Path.Combine("to", "a.jpg")), (row.Id, row.RelPath));
+    }
+
+    [Theory]
     [InlineData(239)] // the copy's name, 16 longer, still fits
     [InlineData(245)]
     [InlineData(255)] // the longest a name may be
@@ -868,6 +893,8 @@ public class FileMovesTests : IDisposable
 
         Assert.Equal([leftover], copies);
         Assert.True(Path.GetFileName(leftover).Length <= 255);
+        if (length == 239)
+            Assert.Equal(To(name) + FileMoves.CopySuffix, leftover); // not cut (round 18, D)
         Assert.True(File.Exists(To(name)));
         Assert.False(File.Exists(a));
         Assert.Empty(Directory.EnumerateFiles(_to, "*" + FileMoves.CopySuffix));
@@ -893,6 +920,95 @@ public class FileMovesTests : IDisposable
         var name = Path.GetFileName(FileMoves.CopyNameFor(faces));
         Assert.True(name.Length <= 255);
         Assert.Equal(name, System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(name))); // no half left
+        // Round 18, D-4: some drives (a Samba share on ext4, so many NAS boxes) count a name's 255 in UTF-8 bytes:
+        // 85 such characters are 259 bytes and 89 characters, so the copy's name is cut by its bytes too.
+        var wide = Path.Combine(folder, new string('写', 85) + ".jpg");
+        var bytesCut = Path.GetFileName(FileMoves.CopyNameFor(wide));
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(bytesCut) <= 255, $"{System.Text.Encoding.UTF8.GetByteCount(bytesCut)} bytes");
+        Assert.EndsWith(FileMoves.CopySuffix, bytesCut);
+        Assert.Equal(bytesCut, Path.GetFileName(FileMoves.CopyNameFor(wide)));
+        // 227 letters, then one character of two halves: by its bytes the cut first fits between the halves.
+        var edge = Path.Combine(folder, new string('a', 227) + "😀" + new string('a', 20) + ".jpg");
+        var edged = Path.GetFileName(FileMoves.CopyNameFor(edge));
+        Assert.Equal(edged, System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(edged)));
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(edged) <= 255);
+        // Round 18, R N-2: one mark for one name, whatever its case (a folder that takes "A" for "a" finds the leftover).
+        Assert.Equal(cut, FileMoves.CopyNameFor(longOne.ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void APathWithATilde_InAnotherCaseThanOnDisk_IsntReadAsAnotherName_AndMoves()
+    {
+        // Round 18, R F-1: with a "~" in a path, GetFullPath asks Windows for its long names, which come back in the
+        // disk's case: compared by case, a library folder renamed only in case ("photos" kept, "Photos" on disk) made
+        // every file under a "~" unmovable, and every move into it.
+        var onDisk = _scope.Library.Combine("My~Trip");
+        Directory.CreateDirectory(onDisk);
+        var a = Photo("a.jpg", "My~Trip");
+        var asKept = _scope.Library.Combine("my~trip");
+        Assert.False(FileMoves.IsReadAsAnotherName(Path.Combine(asKept, "a.jpg")));
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(Path.Combine(asKept, "a.jpg"), _to).Outcome);
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(To("a.jpg"), asKept).Outcome);
+
+        Assert.True(File.Exists(a));
+    }
+
+    [Fact]
+    public void AMovedFile_WhoseTagsCantBeReadOnceItHas_IsMoved_NotSaidToHaveLostThem()
+    {
+        // Round 18, R N-2: once a file with no write has moved, its old path is read for tags added meanwhile; a library
+        // that can't be read then is taken for none (the write would fail too), not for tags left behind.
+        var a = Photo("a.jpg");
+        _moves.BeforeRenaming = () => _scope.Database.Dispose(); // the library closed under the move
+
+        Assert.Equal(MoveOutcome.Moved, _moves.Move(a, _to).Outcome);
+
+        Assert.True(File.Exists(To("a.jpg")));
+    }
+
+    [Fact]
+    public void ALateTagsWrite_FoundBusy_TellsTheNextFileTheLibraryIsBusy()
+    {
+        // Round 18, R N-3: once a file's tags couldn't follow it for a busy library, later files that need the write
+        // aren't waited for (they stay, LibraryBusy, at once), as after any write found busy.
+        var a = Photo("a.jpg");
+        var b = Photo("b.jpg");
+        _tags.Save(b, ["trip"], "");
+        _moves.ForceCopy = true;
+        _moves.BusyTimeout = TimeSpan.FromSeconds(1);
+        IDisposable? held = null;
+        _moves.Copied = _ =>
+        {
+            _tags.Save(a, ["late"], "");
+            held ??= HoldTheLibrary(); // a run takes the library as the first file is copied
+        };
+        try
+        {
+            Assert.Equal(MoveOutcome.MovedTagsBehind, _moves.Move(a, _to).Outcome);
+            var watch = Stopwatch.StartNew();
+
+            Assert.Equal(MoveOutcome.LibraryBusy, _moves.Move(b, _to).Outcome);
+
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(0.6), $"it waited {watch.Elapsed}");
+        }
+        finally
+        {
+            held?.Dispose();
+        }
+        Assert.True(File.Exists(b));
+        Assert.Equal(["trip"], _tags.Get(b).Tags);
+    }
+
+    [Theory]
+    [InlineData(@"C:\x\a.jpg", null)]
+    [InlineData(@"C:\x\a.jpg ", "a.jpg ")]
+    [InlineData(@"C:\x\to2.\sub", "to2.")] // the first name read as another, not the last (round 18, D-2)
+    [InlineData(@"C:\x\to2.\sub.", "to2.")]
+    [InlineData(@"C:\x\sp \sub", null)]
+    public void NameReadAsAnother_IsTheFirstNameWindowsPathRulesChange(string path, string? name)
+    {
+        Assert.Equal(name, FileMoves.NameReadAsAnother(path));
     }
 
     [Theory]

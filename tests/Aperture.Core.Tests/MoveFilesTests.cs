@@ -112,28 +112,34 @@ public class MoveFilesTests
     }
 
     [Theory]
-    [InlineData(".")]
-    [InlineData(" ")]
-    public void AFolderPicked_ThatWindowsReadsAsAnother_TakesNothing(string end)
+    [InlineData(".", false)]
+    [InlineData(" ", false)]
+    [InlineData(".", true)] // the folder picked is "Trips.\sub", read as "Trips\sub" (round 18, D-2)
+    public void AFolderPicked_ThatWindowsReadsAsAnother_TakesNothing(string end, bool below)
     {
         // Round 17, R F-1 / D F-1: Windows' path rules read "Trips." (or "Trips ") as "Trips", and the picked folder was
         // read that way before the move's own check saw it: the files went into "Trips". Such a folder takes nothing,
-        // and the summary says why.
+        // and the summary says why, naming the name read as another (round 18, D-2: not the last one picked).
         Sta.Run(() =>
         {
             using var f = new Fixture();
             var odd = f.Trips + end;
-            Directory.CreateDirectory(@"\\?\" + odd);
+            var picked = below ? Path.Combine(odd, "sub") : odd;
+            Directory.CreateDirectory(@"\\?\" + picked);
+            if (below)
+                Directory.CreateDirectory(Path.Combine(f.Trips, "sub"));
             try
             {
-                f.MoveTo(odd, "a.jpg");
+                f.MoveTo(picked, "a.jpg");
 
                 Assert.True(File.Exists(f.Photos.Combine("Photos", "a.jpg")));
                 Assert.Equal(["t.jpg"], Directory.GetFiles(f.Trips).Select(Path.GetFileName));
-                Assert.Empty(Directory.EnumerateFileSystemEntries(@"\\?\" + odd));
+                Assert.Empty(Directory.EnumerateFiles(f.Trips, "*", SearchOption.AllDirectories).Where(p => !p.EndsWith("t.jpg")));
+                Assert.Empty(Directory.EnumerateFiles(@"\\?\" + odd, "*", SearchOption.AllDirectories));
                 Assert.Empty(f.Questions);
                 var summary = Assert.Single(f.Summaries);
                 Assert.Contains($"“Trips{end}”", summary);
+                Assert.DoesNotContain("“sub”", summary);
                 Assert.Contains("Nothing was moved", summary);
             }
             finally
