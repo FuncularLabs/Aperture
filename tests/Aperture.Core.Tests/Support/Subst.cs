@@ -8,16 +8,18 @@ namespace Aperture.Core.Tests.Support;
 /// </summary>
 public static class Subst
 {
-    /// <summary>A letter no drive (local, mapped or substituted) has now, from Z: down.</summary>
+    /// <summary>
+    /// A letter no drive (local, mapped or substituted) has now, from H: to Z:, chosen at random: two test runs on one PC
+    /// (a mutation sweep and a review, say) rarely want the same one, even when one has just let its own go (round 6,
+    /// N6-6).
+    /// </summary>
     public static string FreeLetter()
     {
         var used = DriveInfo.GetDrives().Select(d => char.ToUpperInvariant(d.Name[0])).ToHashSet();
-        for (var letter = 'Z'; letter >= 'H'; letter--)
-        {
-            if (!used.Contains(letter))
-                return $"{letter}:";
-        }
-        throw new InvalidOperationException("no free drive letter");
+        var free = Enumerable.Range('H', 'Z' - 'H' + 1).Select(c => (char)c).Where(c => !used.Contains(c)).ToList();
+        if (free.Count == 0)
+            throw new InvalidOperationException("no free drive letter");
+        return $"{free[Random.Shared.Next(free.Count)]}:";
     }
 
     public static void Create(string drive, string target) => Run($"{drive} \"{target}\"");

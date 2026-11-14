@@ -145,7 +145,8 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         var seen = new HashSet<string>(StringComparer.Ordinal);
         // The files whose rows this run wrote or kept as they are, in any case: a row under another case of one of these
         // is the old name's, and goes. Not the files skipped, nor those whose read threw (in use, say): their old rows
-        // stay (round 4, F3). A file whose thumbnails couldn't be made still has its row written, so it counts.
+        // stay (round 4, F3). A file whose thumbnails couldn't be made counts when its row is written (not when it was
+        // gone as it was read).
         var indexed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skippedOnlineOnly = 0;
         var work = files;
@@ -398,45 +399,121 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     }
 
     /// <summary>
-    /// Where a row's file is, for the prune: there; gone, and that can be told; or out of reach, where that can't be told.
-    /// A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder deleted
-    /// or renamed on a drive that's there can be told, and its rows go, as in 0.9.1. An unplugged drive, a dropped share,
-    /// a junction or link to either (it's there, and won't list), or a folder this user may not list can't be: its files
-    /// keep their rows for when it's back (round 4, F1, F2). A look is a verdict only when Windows says "not found"; any
-    /// other error (a share dropping a call) is out of reach (round 5, F-4). "There" is the path, not the volume: another
-    /// drive given an unplugged drive's letter is the drive that's there (round 5, L-4, an accepted residual). Each
-    /// folder is looked at once per prune; a file only in a folder that lists, and nothing below a folder found missing
-    /// or not listed: a share that's gone is looked for once, not once per folder or file of it (each look at a server
-    /// that doesn't answer can take seconds).
+    /// Where a row's file is, for the prune (I2): there; gone, and that can be told; or out of reach, where that can't be
+    /// told. A missing file is gone when its folder, or the nearest one above it that's there, can be listed: a folder
+    /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1. A link (a junction or symbolic
+    /// link) that won't list is decided by its target: a link to a folder deleted on a drive that's there loses its rows
+    /// (round 6, L-4); one to an unplugged drive or a dropped share keeps them. So does a folder this user may not list
+    /// (its files only: a folder below it is looked at itself, and may list: round 6, L-2), and a look that fails for any
+    /// reason but "not found" (round 5, F-4). "There" is the path, not the volume: another drive given an unplugged
+    /// drive's letter is the drive that's there (round 5, L-4, an accepted residual). Each folder is looked at once per
+    /// prune; nothing below a folder that's missing, or whose look failed, is looked at; no file in a folder that can't be
+    /// listed is looked for. So a drive or share that's gone is looked for once per level above the first row's folder,
+    /// not once per folder or file of it (each look at a server that doesn't answer can take seconds).
     /// </summary>
     internal sealed class Absence
     {
         internal enum Look { There, Gone, OutOfReach }
 
-        private enum Reach { Listed, NotListed, Missing }
+        // A folder: listed; there and not listed (this user may not, or a link whose target won't); missing; or a look
+        // that failed. With each, whether a file missing from it can be told gone.
+        private enum Reach { Listed, NotListed, Missing, Failed }
 
-        // A folder: listed (a missing file in it is gone), there but not listed, or missing; and, for a missing one,
-        // whether the nearest folder above it that's there is listed.
+        private enum Found { Yes, No, CantTell }
+
+        private const int MostLinksFollowed = 8;
+
         private readonly Dictionary<string, (Reach Reach, bool CanTell)> _known = new(StringComparer.OrdinalIgnoreCase);
+        private int _following;
+
+        /// <summary>Test seam: how often this prune has looked at the disk (a path's attributes, or a folder's listing).</summary>
+        internal int Looks { get; private set; }
 
         public Look At(string path)
         {
             var (reach, canTell) = Folder(Path.GetDirectoryName(path));
-            return reach switch
+            if (reach != Reach.Listed)
+                return canTell ? Look.Gone : Look.OutOfReach; // not looked for: it can't be there, or its folder won't say
+            return LookFor(path, out var attributes) switch
             {
-                Reach.Missing => canTell ? Look.Gone : Look.OutOfReach, // the file can't be there: not looked for
-                Reach.NotListed => Look.OutOfReach, // what's in it can't be told (a scan couldn't read it either): round 5, N-1
-                _ => LookFor(path, out _) switch { Found.Yes => Look.There, Found.No => Look.Gone, _ => Look.OutOfReach },
+                Found.Yes when attributes.HasFlag(FileAttributes.Directory) => Look.Gone, // a folder in its place: L-1
+                Found.Yes => Look.There,
+                Found.No => Look.Gone,
+                _ => Look.OutOfReach,
             };
         }
 
-        private enum Found { Yes, No, CantTell }
-
-        // There, not there, or a look that failed for another reason (a share dropping a call, a drive not ready): a
-        // failed look is no verdict (round 5, F-4; taxonomy 13). File.Exists and Directory.Exists say false for both of
-        // the last two.
-        private static Found LookFor(string path, out FileAttributes attributes)
+        private (Reach Reach, bool CanTell) Folder(string? folder)
         {
+            if (folder is null)
+                return (Reach.Missing, false); // above a drive's or share's root: nothing there to list
+            if (_known.TryGetValue(folder, out var known))
+                return known;
+            for (var above = Path.GetDirectoryName(folder); above is not null; above = Path.GetDirectoryName(above))
+            {
+                if (!_known.TryGetValue(above, out var that))
+                    continue;
+                if (that.Reach is Reach.Missing or Reach.Failed)
+                    return _known[folder] = that; // below a folder missing, or whose look failed: the same, unlooked
+                break; // below one that's there: looked at itself (it may list below one that doesn't: L-2)
+            }
+            var answer = LookFor(folder, out var attributes) switch
+            {
+                Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
+                Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, true), // a file in its place
+                Found.Yes when Lists(folder) => (Reach.Listed, true),
+                Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => (Reach.NotListed, ItsTargetIsGone(folder)),
+                Found.Yes => (Reach.NotListed, false),
+                _ => (Reach.Failed, Climb(folder)),
+            };
+            return _known[folder] = answer;
+        }
+
+        // A failed look: the folders above are looked at too, as for a missing one, so a share that's gone answers for
+        // every folder of it (round 6, N6-2). This one's answer stays "can't tell".
+        private bool Climb(string folder)
+        {
+            Folder(Path.GetDirectoryName(folder));
+            return false;
+        }
+
+        // A link that won't list: gone, if its final target was deleted on a drive that's there (round 6, L-4); out of
+        // reach if that's on a drive or share that's gone, can't be listed, or can't be found out.
+        private bool ItsTargetIsGone(string link)
+        {
+            if (_following >= MostLinksFollowed)
+                return false;
+            string? target;
+            try
+            {
+                target = Directory.ResolveLinkTarget(link, returnFinalTarget: true)?.FullName;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+            if (target is null)
+                return false;
+            target = Path.TrimEndingDirectorySeparator(target);
+            if (string.Equals(target, link, StringComparison.OrdinalIgnoreCase))
+                return false;
+            _following++;
+            try
+            {
+                return Folder(target) is (Reach.Missing, true);
+            }
+            finally
+            {
+                _following--;
+            }
+        }
+
+        // There, not there, or a look that failed for another reason (a share dropping a call, a drive not ready, access
+        // refused): a failed look is no verdict (round 5, F-4; taxonomy 13). File.Exists and Directory.Exists say false
+        // for both of the last two.
+        private Found LookFor(string path, out FileAttributes attributes)
+        {
+            Looks++;
             attributes = default;
             try
             {
@@ -453,28 +530,10 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             }
         }
 
-        private (Reach Reach, bool CanTell) Folder(string? folder)
+        private bool Lists(string folder)
         {
-            if (folder is null)
-                return (Reach.Missing, false); // above a drive's or share's root: nothing there to list
-            if (_known.TryGetValue(folder, out var known))
-                return known;
-            for (var above = Path.GetDirectoryName(folder); above is not null; above = Path.GetDirectoryName(above))
-            {
-                if (!_known.TryGetValue(above, out var that))
-                    continue;
-                if (that.Reach != Reach.Listed)
-                    return _known[folder] = that; // below a folder missing or not listed: the same answer, no look (F-3)
-                break; // below one that lists: looked at itself
-            }
-            var answer = LookFor(folder, out var attributes) switch
-            {
-                Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
-                Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
-                Found.Yes => CatalogRegistry.FolderIsReachable(folder) ? (Reach.Listed, true) : (Reach.NotListed, false),
-                _ => (Reach.NotListed, false), // the look failed: out of reach
-            };
-            return _known[folder] = answer;
+            Looks++;
+            return CatalogRegistry.FolderIsReachable(folder);
         }
     }
 

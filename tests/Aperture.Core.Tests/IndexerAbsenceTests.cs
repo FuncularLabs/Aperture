@@ -5,90 +5,164 @@ using Look = Aperture.Core.Indexing.Indexer.Absence.Look;
 namespace Aperture.Core.Tests;
 
 /// <summary>
-/// The prune's rule (review round 4, F1, F2), on its own: a row's file is there; gone, when that can be told (its folder,
-/// or the nearest one above it that's there, can be listed); or out of reach (an unplugged drive, a link to one, a folder
-/// this user may not list). <see cref="IndexerRaceTests"/> shows the same through a run.
+/// The prune's rule (I2), on its own: a row's file is there; gone, when that can be told (its folder, or the nearest one
+/// above it that's there, can be listed; a link's target decides for the link); or out of reach (an unplugged drive, a
+/// link to one, a folder this user may not list, a look that failed). <see cref="IndexerRaceTests"/> shows the same
+/// through a run.
 /// </summary>
+/// <remarks>
+/// Round 6 redesign (the third round whose findings came from the last round's fixes): every case the rule must tell
+/// apart is in one table, and each is asked alone, then all in one prune in order and in reverse, so an answer can't hang
+/// on what the prune asked first (round 6, L-2) and a fix for one case that breaks another fails here. What a prune looks
+/// at is counted (<c>Looks</c>), so what it costs is a test, not a claim.
+/// </remarks>
 public class IndexerAbsenceTests
 {
-    private static Look At(string path) => new Indexer.Absence().At(path);
-
     [Fact]
-    public void AFileThere_IsThere()
+    public void EachCase_GetsItsAnswer_AskedAlone_InOrder_AndInReverse()
     {
         using var dir = new TempDir();
-        TestImages.Write(dir.Combine("a.jpg"), 8, 8);
+        string W(params string[] parts) => dir.Combine(parts);
+        TestImages.Write(W("lists", "there.jpg"), 8, 8);
+        Directory.CreateDirectory(W("lists", "afolder.jpg"));
+        File.WriteAllText(W("lists", "afile"), "a file where a folder was");
+        Directory.CreateDirectory(W("elsewhere", "Trip"));
+        Junction.Create(W("lists", "todeleted"), W("elsewhere", "Trip"));
+        Directory.Delete(W("elsewhere", "Trip"));
+        Directory.CreateDirectory(W("card", "Photos"));
+        var letter = Subst.CreateOnAFreeLetter(W("card"));
+        try
+        {
+            Junction.Create(W("lists", "tocard"), letter + @"\Photos");
+        }
+        finally
+        {
+            Subst.Remove(letter);
+        }
+        TestImages.Write(W("locked", "x.jpg"), 8, 8);
+        TestImages.Write(W("locked", "open", "there.jpg"), 8, 8);
+        Directory.CreateDirectory(W("locked", "noattrs"));
+        Acl.DenyReadAttributes(W("locked", "noattrs"));
+        Acl.DenyListing(W("locked"));
+        try
+        {
+            (string Path, Look Answer, string Case)[] cases =
+            [
+                (W("lists", "there.jpg"), Look.There, "a file there"),
+                (W("lists", "gone.jpg"), Look.Gone, "a file gone from a folder that lists"),
+                (W("lists", "afolder.jpg"), Look.Gone, "a folder where the file was (round 6, L-1)"),
+                (W("lists", "deleted", "deeper", "a.jpg"), Look.Gone, "a file in a folder deleted, two down"),
+                (W("lists", "afile", "a.jpg"), Look.Gone, "a file where its folder was"),
+                (W("lists", "todeleted", "a.jpg"), Look.Gone, "a link to a folder deleted on a drive that's there (L-4)"),
+                (W("lists", "todeleted", "sub", "b.jpg"), Look.Gone, "below such a link"),
+                (W("lists", "tocard", "a.jpg"), Look.OutOfReach, "a link to a drive that's gone"),
+                (W("lists", "tocard", "sub", "b.jpg"), Look.OutOfReach, "below a link to a drive that's gone"),
+                (W("locked", "x.jpg"), Look.OutOfReach, "a file there, in a folder this user may not list"),
+                (W("locked", "gone.jpg"), Look.OutOfReach, "a file gone, in a folder this user may not list"),
+                (W("locked", "open", "there.jpg"), Look.There, "a file there, below a folder that can't be listed (L-2)"),
+                (W("locked", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists below one that doesn't (L-2)"),
+                (W("locked", "noattrs", "a.jpg"), Look.OutOfReach, "a folder whose look is refused (access denied)"),
+                (W("lists", "bad|name", "a.jpg"), Look.OutOfReach, "a folder whose look failed (round 5, F-4)"),
+                (W("lists", "bad|1.jpg"), Look.OutOfReach, "a file whose look failed"),
+                (@"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos\a.jpg", Look.OutOfReach, "a volume that isn't there"),
+            ];
+            var wrong = new List<string>();
+            foreach (var (path, answer, what) in cases)
+            {
+                if (new Indexer.Absence().At(path) is var alone && alone != answer)
+                    wrong.Add($"alone: {what}: {alone}, not {answer}");
+            }
+            foreach (var (order, name) in new[] { (cases, "in order"), (cases.Reverse().ToArray(), "in reverse") })
+            {
+                var absence = new Indexer.Absence();
+                foreach (var (path, answer, what) in order)
+                {
+                    if (absence.At(path) is var told && told != answer)
+                        wrong.Add($"{name}: {what}: {told}, not {answer}");
+                }
+            }
 
-        Assert.Equal(Look.There, At(dir.Combine("a.jpg")));
+            Assert.True(wrong.Count == 0, string.Join("\n", wrong));
+        }
+        finally
+        {
+            Acl.RestoreListing(W("locked"));
+            Acl.RestoreReadAttributes(W("locked", "noattrs"));
+        }
     }
 
-    [Fact]
-    public void AFileMissing_FromAFolderThatLists_IsGone()
-    {
-        using var dir = new TempDir();
-        TestImages.Write(dir.Combine("b.jpg"), 8, 8);
-
-        Assert.Equal(Look.Gone, At(dir.Combine("a.jpg")));
-    }
+    // --- What a prune looks at (round 4's design, round 6, N6-2): each folder once; nothing below one missing or whose
+    // look failed; no file in a folder that can't be listed.
 
     [Fact]
-    public void AFileInAFolderDeleted_OnADriveThatsThere_IsGone()
+    public void ADriveThatsGone_IsLookedForOnce_NotOncePerFolderOrFile()
     {
-        using var dir = new TempDir();
-
-        Assert.Equal(Look.Gone, At(dir.Combine("trip", "day 1", "a.jpg"))); // two folders up to one that lists
-    }
-
-    [Fact]
-    public void AFileWhereItsFolderWas_IsGone()
-    {
-        using var dir = new TempDir();
-        File.WriteAllText(dir.Combine("trip"), "a file where the folder was");
-
-        Assert.Equal(Look.Gone, At(dir.Combine("trip", "a.jpg")));
-    }
-
-    [Fact]
-    public void AFileOnAVolumeThatIsntThere_IsOutOfReach()
-    {
-        // A drive that isn't there (IndexerRaceTests unplugs a drive letter; a free letter here could be taken by
-        // another test run on this PC meanwhile: round 5, F-9).
-        Assert.Equal(Look.OutOfReach, At(@"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos\a.jpg"));
-    }
-
-    [Fact]
-    public void AFolderThatCantBeLookedAt_ForAReasonOtherThanNotThere_IsOutOfReach()
-    {
-        // A failed look isn't a verdict (round 5, F-4; taxonomy 13): a share that drops a call for a moment reads as an
-        // error, not as "not there", and must not take a subtree's rows. An invalid name stands in for that error here
-        // (Windows: ERROR_INVALID_NAME, not "not found"); Directory.Exists and File.Exists say false for both.
-        using var dir = new TempDir();
-        TestImages.Write(dir.Combine("b.jpg"), 8, 8);
-
-        Assert.Equal(Look.OutOfReach, At(dir.Combine("trip|1", "a.jpg")));
-        Assert.Equal(Look.OutOfReach, At(dir.Combine("a|1.jpg")));
-    }
-
-    [Fact]
-    public void BelowAFolderThatCantBeListed_NothingIsLookedAt()
-    {
-        // Round 5, F-3 / N-1: behind a link to a share that's gone, each look is a call to a server that doesn't answer;
-        // a folder below one that can't be listed takes its answer, as one below a missing folder does. Shown by what
-        // the same prune's later answers don't see once the link's target is back.
-        using var dir = new TempDir();
-        Directory.CreateDirectory(dir.Combine("drive"));
-        Junction.Create(dir.Combine("USB"), dir.Combine("drive"));
-        Directory.Move(dir.Combine("drive"), dir.Combine("drive-away"));
         var absence = new Indexer.Absence();
-        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("USB", "a.jpg")));
+        const string Gone = @"\\?\Volume{00000000-0000-0000-0000-000000000000}\Photos";
+        Assert.Equal(Look.OutOfReach, absence.At(Gone + @"\2019\a.jpg"));
+        var first = absence.Looks;
 
-        Directory.Move(dir.Combine("drive-away"), dir.Combine("drive"));
-        TestImages.Write(dir.Combine("drive", "b.jpg"), 8, 8);
-        TestImages.Write(dir.Combine("drive", "trip", "c.jpg"), 8, 8);
+        foreach (var name in new[] { @"\2019\b.jpg", @"\2020\c.jpg", @"\2021\May\d.jpg" })
+            Assert.Equal(Look.OutOfReach, absence.At(Gone + name));
 
-        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("USB", "b.jpg"))); // not looked for
-        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("USB", "trip", "c.jpg"))); // nor anything below
-        Assert.Equal(Look.There, new Indexer.Absence().At(dir.Combine("USB", "trip", "c.jpg"))); // the next prune looks
+        Assert.Equal(first, absence.Looks);
+    }
+
+    [Fact]
+    public void AFailedLook_AnswersForTheFoldersBesideAndBelowIt()
+    {
+        // N6-2: a failed look climbs, as a missing folder's does; the folders beside it are then not looked at, each a
+        // call to a server that doesn't answer.
+        using var dir = new TempDir();
+        var absence = new Indexer.Absence();
+        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("share|gone", "2019", "a.jpg")));
+        var first = absence.Looks;
+
+        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("share|gone", "2020", "b.jpg")));
+        Assert.Equal(Look.OutOfReach, absence.At(dir.Combine("share|gone", "2019", "May", "c.jpg")));
+
+        Assert.Equal(first, absence.Looks);
+    }
+
+    [Fact]
+    public void AFolderFoundMissing_IsntLookedAtAgain_NorAnythingBelowIt()
+    {
+        // Shown by what the same prune's later answers don't see, and by its count of looks.
+        using var dir = new TempDir();
+        var absence = new Indexer.Absence();
+        var file = dir.Combine("trip", "a.jpg");
+        var deeper = dir.Combine("trip", "day 1", "b.jpg");
+        Assert.Equal(Look.Gone, absence.At(file));
+        var first = absence.Looks;
+
+        TestImages.Write(file, 8, 8);
+        TestImages.Write(deeper, 8, 8);
+
+        Assert.Equal(Look.Gone, absence.At(file)); // its folder isn't looked at again, nor the file in it
+        Assert.Equal(Look.Gone, absence.At(deeper)); // nor a folder below it
+        Assert.Equal(first, absence.Looks);
+        Assert.Equal(Look.There, new Indexer.Absence().At(deeper)); // the next prune looks again
+    }
+
+    [Fact]
+    public void InALinkThatWontList_NoFileIsLookedFor_ButEachFolderBelowIs()
+    {
+        // Round 5, N-1: no file in a folder that can't be listed is looked for. Round 6, L-2: a folder below it is looked
+        // at itself (it may list).
+        using var dir = new TempDir();
+        Directory.CreateDirectory(dir.Combine("elsewhere", "Trip"));
+        Junction.Create(dir.Combine("Trip"), dir.Combine("elsewhere", "Trip"));
+        Directory.Delete(dir.Combine("elsewhere", "Trip"));
+        var absence = new Indexer.Absence();
+        Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "a.jpg"))); // its target was deleted (L-4)
+
+        TestImages.Write(dir.Combine("elsewhere", "Trip", "b.jpg"), 8, 8);
+        TestImages.Write(dir.Combine("elsewhere", "Trip", "day 1", "c.jpg"), 8, 8);
+        var looks = absence.Looks;
+
+        Assert.Equal(Look.Gone, absence.At(dir.Combine("Trip", "b.jpg"))); // not looked for
+        Assert.Equal(looks, absence.Looks);
+        Assert.Equal(Look.There, absence.At(dir.Combine("Trip", "day 1", "c.jpg"))); // looked at
     }
 
     [Fact]
@@ -103,57 +177,5 @@ public class IndexerAbsenceTests
 
         Assert.Equal(Look.There, absence.At(dir.Combine("trip", "c.jpg")));
         Assert.Equal(Look.Gone, absence.At(dir.Combine("trip", "d.jpg")));
-    }
-
-    [Fact]
-    public void AFileBehindALinkToAFolderThatsGone_IsOutOfReach()
-    {
-        using var dir = new TempDir();
-        Directory.CreateDirectory(dir.Combine("drive"));
-        Junction.Create(dir.Combine("USB"), dir.Combine("drive"));
-        Directory.Delete(dir.Combine("drive"));
-
-        Assert.True(Directory.Exists(dir.Combine("USB"))); // the premise: it says it's there
-        Assert.Equal(Look.OutOfReach, At(dir.Combine("USB", "a.jpg")));
-        Assert.Equal(Look.OutOfReach, At(dir.Combine("USB", "trip", "a.jpg")));
-    }
-
-    [Fact]
-    public void InAFolderThatCantBeListed_AFile_IsOutOfReach_ThereOrNot()
-    {
-        // Can't tell what's in it, so its files aren't looked for one by one (round 5, N-1: behind a link to a share
-        // that's gone, each look is a call to a server that doesn't answer). A scan couldn't have read them either.
-        using var dir = new TempDir();
-        TestImages.Write(dir.Combine("locked", "a.jpg"), 8, 8);
-        Acl.DenyListing(dir.Combine("locked"));
-        try
-        {
-            Assert.Equal(Look.OutOfReach, At(dir.Combine("locked", "a.jpg")));
-            Assert.Equal(Look.OutOfReach, At(dir.Combine("locked", "b.jpg")));
-        }
-        finally
-        {
-            Acl.RestoreListing(dir.Combine("locked"));
-        }
-    }
-
-    [Fact]
-    public void AFolderFoundMissing_IsntLookedAtAgain_NorAnythingBelowIt()
-    {
-        // One look per folder per prune, and none below a folder found missing: a share that's gone is looked for once,
-        // not once per folder or file of it (each look at a server that doesn't answer can take seconds). Shown by what
-        // the same prune's later answers don't see.
-        using var dir = new TempDir();
-        var absence = new Indexer.Absence();
-        var file = dir.Combine("trip", "a.jpg");
-        var deeper = dir.Combine("trip", "day 1", "b.jpg");
-        Assert.Equal(Look.Gone, absence.At(file));
-
-        TestImages.Write(file, 8, 8);
-        TestImages.Write(deeper, 8, 8);
-
-        Assert.Equal(Look.Gone, absence.At(file)); // its folder isn't looked at again, nor the file in it
-        Assert.Equal(Look.Gone, absence.At(deeper)); // nor a folder below it
-        Assert.Equal(Look.There, new Indexer.Absence().At(deeper)); // the next prune looks again
     }
 }

@@ -60,10 +60,57 @@ public class IndexerRaceTests
         File.WriteAllText(scope.Library.Combine("v.mp4"), "a video");
         var root = scope.AddLibraryRoot();
         scope.Indexer.AfterScan = () => File.Delete(scope.Library.Combine("v.mp4"));
+        var read = new List<string>();
+        scope.Indexer.Reading = read.Add;
 
         scope.Indexer.IndexRoot(root);
 
         Assert.Equal(["a.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.FileName));
+        Assert.Equal(["a.jpg"], read); // I1: one not there is never read (round 6, L-3: the after-read check hid this)
+    }
+
+    [Fact]
+    public void AVideoDeletedAsItsReadBegins_LosesItsRow()
+    {
+        // Round 6, N6-4a: not written as it was read (its read doesn't throw), and left to the prune: on a drive that's
+        // there, it's gone.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("a.jpg"), 32, 24);
+        var v = scope.Library.Combine("v.mp4");
+        File.WriteAllText(v, "a video");
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        File.SetLastWriteTimeUtc(v, DateTime.UtcNow.AddMinutes(-3)); // to be read again
+        scope.Indexer.Reading = rel =>
+        {
+            if (rel == "v.mp4")
+                File.Delete(v);
+        };
+
+        var result = scope.Indexer.IndexRoot(root);
+        scope.Indexer.Reading = null;
+
+        Assert.Equal(1, result.Removed);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AnUnchangedVideoGoneBeforeItsThumbnailsAreRemade_LosesItsRow()
+    {
+        // The check before a read, for a file kept as it is whose thumbnails are to be made again: a video's thumbnails
+        // fail quietly for a missing file, so without it the row stayed until the next run (round 5's sweep).
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("a.jpg"), 32, 24);
+        File.WriteAllText(scope.Library.Combine("v.mp4"), "a video");
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        scope.Thumbnails.DeleteForItems([scope.Items.GetForRoot(root.Id).Single(i => i.IsVideo).Id]); // to be made again
+        scope.Indexer.AfterScan = () => File.Delete(scope.Library.Combine("v.mp4"));
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal((1, 0), (result.Removed, result.Failed));
+        Assert.Equal(["a.jpg"], scope.Items.GetForRoot(root.Id).Select(i => i.RelPath));
     }
 
     [Fact]
@@ -203,26 +250,30 @@ public class IndexerRaceTests
     // that's there goes, as in 0.9.1; one whose drive or share is gone, or reached through a link to one, keeps its rows
     // for when it's back. (Round 3 kept them for any folder missing, deleted ones too, and pruned them behind a link.)
 
-    // A folder on a drive that can be unplugged and plugged back in: a junction to a folder moved away and back. Away,
-    // the junction is what Windows shows for a link to a drive that's gone: it's there, and it won't list.
-    private sealed class Drive
+    // A folder reached through a link (a junction) to a drive that can be unplugged and plugged back in: a drive letter
+    // (subst) taken away and given back. Away, the link is what Windows shows for a link to a drive that's gone: it's
+    // there, and it won't list. (Round 6, L-4: a link to a folder moved away on a drive that's there is a folder deleted,
+    // and loses its rows; round 4's tests unplugged that way.)
+    private sealed class Drive : IDisposable
     {
-        private readonly string _target;
+        private readonly LetterDrive _drive;
 
         public Drive(string link, string target)
         {
-            Directory.CreateDirectory(target);
-            Junction.Create(link, target);
-            (Link, _target) = (link, target);
+            _drive = new LetterDrive(target, "Photos");
+            Junction.Create(link, _drive.Link);
+            Link = link;
         }
 
         public string Link { get; }
 
         public string Combine(string name) => Path.Combine(Link, name);
 
-        public void Unplug() => Directory.Move(_target, _target + "-unplugged");
+        public void Unplug() => _drive.Unplug();
 
-        public void PlugBackIn() => Directory.Move(_target + "-unplugged", _target);
+        public void PlugBackIn() => _drive.PlugBackIn();
+
+        public void Dispose() => _drive.Dispose();
     }
 
     private static Root AddRoot(ApertureScope scope, string path) =>
@@ -234,7 +285,7 @@ public class IndexerRaceTests
         // M-3 (round 3), and F2: the drive goes as the run reads; behind a link it said the folder was there, and the
         // files it hadn't read yet were "gone".
         using var scope = new ApertureScope();
-        var drive = new Drive(scope.Library.Combine("Photos"), scope.Library.Combine("drive"));
+        using var drive = new Drive(scope.Library.Combine("Photos"), scope.Library.Combine("drive"));
         foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" })
             TestImages.Write(drive.Combine(name), 32, 24);
         var root = AddRoot(scope, drive.Link);
@@ -261,7 +312,7 @@ public class IndexerRaceTests
     {
         // C0 (from before 0.9.2), and F2: the count came back empty and the prune took every row.
         using var scope = new ApertureScope();
-        var drive = new Drive(scope.Library.Combine("USB"), scope.Library.Combine("drive"));
+        using var drive = new Drive(scope.Library.Combine("USB"), scope.Library.Combine("drive"));
         foreach (var name in new[] { "a.jpg", "b.jpg" })
             TestImages.Write(drive.Combine(name), 32, 24);
         var root = AddRoot(scope, drive.Link);
@@ -342,7 +393,7 @@ public class IndexerRaceTests
         // F2, one level down: a folder of the root that's a link to a drive, unplugged.
         using var scope = new ApertureScope();
         TestImages.Write(scope.Library.Combine("Photos", "a.jpg"), 32, 24);
-        var camera = new Drive(scope.Library.Combine("Photos", "Camera"), scope.Library.Combine("camera-drive"));
+        using var camera = new Drive(scope.Library.Combine("Photos", "Camera"), scope.Library.Combine("camera-drive"));
         foreach (var name in new[] { "b.jpg", "c.jpg" })
             TestImages.Write(camera.Combine(name), 32, 24);
         var root = AddRoot(scope, scope.Library.Combine("Photos"));
@@ -355,6 +406,70 @@ public class IndexerRaceTests
         Assert.Equal(0, result.Removed);
         Assert.Equal(3, scope.Items.GetForRoot(root.Id).Count);
         camera.PlugBackIn();
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFolderBehindALinkToAFolderDeleted_LosesItsRows()
+    {
+        // Round 6, L-4: the link is there and won't list; its target was deleted on a drive that's there, so its rows go,
+        // as in 0.9.1 (round 4 kept them for good).
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("Photos", "b.jpg"), 32, 24);
+        TestImages.Write(scope.Library.Combine("elsewhere", "Trip", "a.jpg"), 32, 24);
+        Junction.Create(scope.Library.Combine("Photos", "Trip"), scope.Library.Combine("elsewhere", "Trip"));
+        var root = AddRoot(scope, scope.Library.Combine("Photos"));
+        scope.Indexer.IndexRoot(root);
+        Assert.Equal(2, scope.Items.GetForRoot(root.Id).Count);
+        Directory.Delete(scope.Library.Combine("elsewhere", "Trip"), recursive: true);
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal(1, result.Removed);
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFileReplacedByAFolderOfItsName_LosesItsRow()
+    {
+        // Round 6, L-1: round 5's look took the folder for the file, and the row stayed for good.
+        using var scope = new ApertureScope();
+        foreach (var name in new[] { "a.jpg", "b.jpg" })
+            TestImages.Write(scope.Library.Combine(name), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        File.Delete(scope.Library.Combine("a.jpg"));
+        TestImages.Write(scope.Library.Combine("a.jpg", "c.jpg"), 32, 24);
+
+        scope.Indexer.IndexRoot(root);
+
+        AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AFileGone_FromAFolderThatListsUnderOneThatDoesnt_LosesItsRow()
+    {
+        // Round 6, L-2: round 5 gave every folder below one this user may not list that one's answer; a folder below it
+        // that lists (traverse is allowed by default) can tell a missing file is gone.
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("locked", "x.jpg"), 32, 24);
+        foreach (var name in new[] { "a.jpg", "gone.jpg" })
+            TestImages.Write(scope.Library.Combine("locked", "open", name), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        File.Delete(scope.Library.Combine("locked", "open", "gone.jpg"));
+        Acl.DenyListing(scope.Library.Combine("locked"));
+        IndexResult result;
+        try
+        {
+            result = scope.Indexer.IndexRoot(root);
+        }
+        finally
+        {
+            Acl.RestoreListing(scope.Library.Combine("locked"));
+        }
+
+        Assert.Equal(1, result.Removed);
         AssertTheRowsAreTheFiles(scope, root);
     }
 
@@ -404,7 +519,7 @@ public class IndexerRaceTests
         // L-2: the same if the drive went as the video's own read began.
         using var scope = new ApertureScope();
         using var letter = itsLetter ? new LetterDrive(scope.Library.Combine("camera-card"), "Camera") : null;
-        var link = itsLetter ? null : new Drive(scope.Library.Combine("Camera"), scope.Library.Combine("drive"));
+        using var link = itsLetter ? null : new Drive(scope.Library.Combine("Camera"), scope.Library.Combine("drive"));
         Action unplug = itsLetter ? letter!.Unplug : link!.Unplug, plugBackIn = itsLetter ? letter!.PlugBackIn : link!.PlugBackIn;
         string In(string name) => itsLetter ? letter!.Combine(name) : link!.Combine(name);
         TestImages.Write(In("a.jpg"), 32, 24);
