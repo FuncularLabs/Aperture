@@ -279,8 +279,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (!ShowAnnotationDialog(vm))
             return;
 
-        // Each under its tile's own path, never the row shown for it (M4: for "σ.jpg" and "ς.jpg", two files the window
-        // takes for one path, that's the other file's).
+        // Each under its tile's own path, not the path of the row shown for it, which (M4: "σ.jpg" and "ς.jpg", two files
+        // the window takes for one path) can be the other file's.
         foreach (var input in inputs)
         {
             var (tags, note) = vm.ResolveFor(input);
