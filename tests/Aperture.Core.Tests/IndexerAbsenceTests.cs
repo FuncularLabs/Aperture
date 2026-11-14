@@ -46,9 +46,14 @@ public class IndexerAbsenceTests
         Junction.Create(W("lists", "toshare"), W("share"));
         Directory.Delete(W("share"));
         Junction.Create(W("lists", "loop"), W("x", "y")); // round and round: loop → x\y, x → loop\z
+        Junction.Create(W("lists", "toloop"), W("lists", "loop")); // made before the loop closes (after, mklink can't)
         Junction.Create(W("x"), W("lists", "loop", "z"));
         File.WriteAllText(W("afile2"), "a file a link points at");
         Junction.Create(W("lists", "tofile"), W("afile2")); // round 7, R7-2
+        Junction.Create(W("lists", "tolink"), W("lists", "tofile")); // round 8, F-2: a link to a link to a file
+        Junction.Create(W("lists", "tolocked"), W("locked")); // round 8, F-1: a link to a folder this user may not list
+        File.WriteAllText(W("filelink"), "read as a file-type symbolic link (to a folder)");
+        Junction.Create(W("lists", "tofilelink"), W("filelink")); // round 8, R's observation
         File.WriteAllText(W("locked", "Trip"), "a file where a folder was, in a folder that can't be listed");
         Directory.CreateDirectory(W("elsewhere", "Gone"));
         Directory.CreateDirectory(W("chain"));
@@ -63,6 +68,10 @@ public class IndexerAbsenceTests
             ReadAttributes = path =>
                 string.Equals(path, W("refused"), StringComparison.OrdinalIgnoreCase)
                     ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
+                    : string.Equals(path, W("lists", "refused.jpg"), StringComparison.OrdinalIgnoreCase)
+                        ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
+                    : string.Equals(path, W("filelink"), StringComparison.OrdinalIgnoreCase)
+                        ? FileAttributes.Archive | FileAttributes.ReparsePoint // what a file-type symbolic link reads as
                     : string.Equals(path, W("share"), StringComparison.OrdinalIgnoreCase) || path.StartsWith(W("lists", "flaky"), StringComparison.OrdinalIgnoreCase)
                         ? throw new IOException("The specified network name is no longer available.", unchecked((int)0x80070040))
                         : File.GetAttributes(path),
@@ -92,6 +101,14 @@ public class IndexerAbsenceTests
                 (W("lists", "flaky", "2019", "a.jpg"), Look.OutOfReach, "a folder of a share that dropped the call"),
                 (W("lists", "loop", "a.jpg"), Look.OutOfReach, "a link round in a loop (round 7, F-3)"),
                 (W("lists", "tofile", "a.jpg"), Look.Gone, "a link to a file: a folder gone (round 7, R7-2)"),
+                (W("lists", "tolink", "a.jpg"), Look.Gone, "a link to a link to a file (round 8, F-2)"),
+                (W("lists", "toloop", "a.jpg"), Look.OutOfReach, "a link to a link round in a loop (round 8, F-1)"),
+                (W("lists", "tolocked", "x.jpg"), Look.OutOfReach, "a file there, behind a link to a folder this user may not list (F-1)"),
+                (W("lists", "tolocked", "gone.jpg"), Look.OutOfReach, "a file gone, behind such a link"),
+                (W("lists", "tolocked", "open", "there.jpg"), Look.There, "a file there, in a folder that lists behind such a link (R8-1)"),
+                (W("lists", "tolocked", "open", "gone.jpg"), Look.Gone, "a file gone, in a folder that lists behind such a link"),
+                (W("lists", "tofilelink", "a.jpg"), Look.OutOfReach, "a link to a file-type link: not taken for a file (round 8, R)"),
+                (W("lists", "refused.jpg"), Look.OutOfReach, "a file whose look is refused (round 8, F-5)"),
                 (W("locked", "Trip", "a.jpg"), Look.Gone, "a file where its folder was, in a folder that can't be listed (R7-3)"),
                 (W("chain", "j1", "a.jpg"), Look.Gone, "ten links deep to a folder deleted (R7-4)"),
                 (W("chain", "j5", "sub", "b.jpg"), Look.Gone, "five links deep, below"),
@@ -148,6 +165,33 @@ public class IndexerAbsenceTests
         var first = absence.Looks;
 
         foreach (var path in new[] { dir.Combine("Camera", "2020", "b.jpg"), dir.Combine("Camera", "c.jpg"), dir.Combine("Camera", "2021", "May", "d.jpg") })
+            Assert.Equal(Look.OutOfReach, absence.At(path));
+
+        Assert.Equal(first, absence.Looks);
+    }
+
+    [Theory]
+    [InlineData("loop")] // Windows can't follow it to its end: round 8, F-4 (b)
+    [InlineData("toshare")] // its target's look fails: F-4 (a)
+    public void BehindALinkThatCantTell_NoFolderIsLookedAtTwice(string link)
+    {
+        using var dir = new TempDir();
+        string W(params string[] parts) => dir.Combine(parts);
+        Directory.CreateDirectory(W("share"));
+        Junction.Create(W("toshare"), W("share"));
+        Directory.Delete(W("share"));
+        Junction.Create(W("loop"), W("x", "y"));
+        Junction.Create(W("x"), W("loop", "z"));
+        var absence = new Indexer.Absence
+        {
+            ReadAttributes = path => string.Equals(path, W("share"), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException("The semaphore timeout period has expired.", unchecked((int)0x80070079))
+                : File.GetAttributes(path),
+        };
+        Assert.Equal(Look.OutOfReach, absence.At(W(link, "2019", "a.jpg")));
+        var first = absence.Looks;
+
+        foreach (var path in new[] { W(link, "2020", "b.jpg"), W(link, "c.jpg"), W(link, "2021", "May", "d.jpg") })
             Assert.Equal(Look.OutOfReach, absence.At(path));
 
         Assert.Equal(first, absence.Looks);

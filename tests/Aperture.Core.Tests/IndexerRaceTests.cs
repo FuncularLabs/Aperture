@@ -134,8 +134,29 @@ public class IndexerRaceTests
         var result = scope.Indexer.IndexRoot(root);
         scope.Indexer.Reading = null;
 
-        Assert.Equal((1, 0), (result.Removed, result.Failed));
+        Assert.Equal((1, 0, 1), (result.Removed, result.Failed, result.Skipped)); // the video isn't counted kept (round 8, F-6)
         AssertTheRowsAreTheFiles(scope, root);
+    }
+
+    [Fact]
+    public void AnUnchangedFileWhoseThumbnailsCantBeRemade_KeepsItsRow_CountedFailed()
+    {
+        // Round 8, F-6: the unchanged branch's other half — there, and its thumbnails can't be made (it doesn't decode).
+        using var scope = new ApertureScope();
+        TestImages.Write(scope.Library.Combine("a.jpg"), 32, 24);
+        var root = scope.AddLibraryRoot();
+        scope.Indexer.IndexRoot(root);
+        var row = scope.Items.GetForRoot(root.Id).Single();
+        scope.Thumbnails.DeleteForItems([row.Id]);
+        var a = scope.Library.Combine("a.jpg");
+        var written = File.GetLastWriteTimeUtc(a);
+        File.WriteAllBytes(a, new byte[new FileInfo(a).Length]); // same size and time: unchanged, and no image in it
+        File.SetLastWriteTimeUtc(a, written);
+
+        var result = scope.Indexer.IndexRoot(root);
+
+        Assert.Equal((0, 1, 1), (result.Removed, result.Failed, result.Skipped));
+        Assert.Equal(row.Id, scope.Items.GetForRoot(root.Id).Single().Id);
     }
 
     [Fact]

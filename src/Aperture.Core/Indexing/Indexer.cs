@@ -412,8 +412,9 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
     /// deleted or renamed on a drive that's there can be told, and its rows go, as in 0.9.1; a file in a folder's place
     /// is seen, so the folder below it is gone whatever is above. A link (a junction or symbolic link) that won't list is
     /// what its final target is: deleted on a drive that's there, its rows go (round 6, L-4); on an unplugged drive or a
-    /// dropped share, they stay; a link Windows can't follow to its end is decided by where it points first (a file:
-    /// gone; a loop: can't tell). A folder this user may not list keeps its files' rows (a folder below it is looked at
+    /// dropped share, they stay; a link Windows can't follow to its end (to a file, round in a loop, to a share that
+    /// times out) is what the folder it points to first is, decided as any folder is (a file: gone; a link: that link's
+    /// answer; a loop: can't tell; a file-type link: can't tell). A folder this user may not list keeps its files' rows (a folder below it is looked at
     /// itself, and may list: round 6, L-2), and so does a look that fails or is refused (round 5, F-4; round 7). "There"
     /// is the path, not the volume: another drive given an unplugged drive's letter is the drive that's there (round 5,
     /// L-4, an accepted residual). Each folder is looked at at most once per prune: once a folder is found missing, or
@@ -436,7 +437,7 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
         private readonly Dictionary<string, (Reach Reach, bool CanTell)> _known = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase); // folders being decided
 
-        /// <summary>Test seam: how often this prune has looked at the disk (a path's attributes, or a folder's listing).</summary>
+        /// <summary>Test seam: how often this prune has looked at the disk: a path's attributes, a folder's listing, a link's resolution.</summary>
         internal int Looks { get; private set; }
 
         /// <summary>Test seam: how a path's attributes are read (a refused look, or a dropped call, can't be made with ACLs).</summary>
@@ -471,13 +472,16 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 break; // below one that's there, or whose look was refused: looked at itself (it may list: L-2, round 7)
             }
             if (!_open.Add(folder))
-                return (Reach.Failed, false); // links round in a loop: can't tell, and not kept (round 7, R7-4)
+                return (Reach.Failed, false); // links round in a loop came back here: can't tell, not kept (R7-4, F-3)
             try
             {
                 var answer = LookFor(folder, out var attributes) switch
                 {
                     Found.No => (Reach.Missing, Folder(Path.GetDirectoryName(folder)).CanTell),
-                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) => (Reach.Missing, true), // a file in its place
+                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory) && !attributes.HasFlag(FileAttributes.ReparsePoint)
+                        => (Reach.Missing, true), // a file in its place
+                    Found.Yes when !attributes.HasFlag(FileAttributes.Directory)
+                        => (Reach.NotListed, false), // a file-type link, maybe to a folder: not taken for a file (round 8)
                     Found.Yes when Lists(folder) => (Reach.Listed, true),
                     Found.Yes when attributes.HasFlag(FileAttributes.ReparsePoint) => BehindALink(folder),
                     Found.Yes => (Reach.NotListed, false),
@@ -502,8 +506,10 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
 
         // A link that won't list is what its final target is: missing (deleted on a drive that's there: its files gone,
         // round 6, L-4; on a drive or share that's gone: out of reach), or a look that failed; and that's answered for
-        // every folder below the link without a look (round 7, R7-5). One Windows can't follow to its end (to a file, or
-        // round in a loop) is decided by where it points first: a file there is a folder gone (round 7, R7-2).
+        // every folder below the link without a look (round 7, R7-5). One Windows can't follow to its end (to a file, to a
+        // link to one, round in a loop, to a share that times out) is what the folder it points to first is, decided as
+        // any folder is: a file there is a folder gone (round 7, R7-2; round 8, F-2), a loop comes back to a folder being
+        // decided and can't tell, a share that times out is a look that failed (round 8, F-4).
         private (Reach Reach, bool CanTell) BehindALink(string link)
         {
             string? target;
@@ -514,7 +520,15 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                return PointsAtAFile(link) ? (Reach.Missing, true) : (Reach.NotListed, false);
+                try
+                {
+                    Looks++;
+                    target = Directory.ResolveLinkTarget(link, returnFinalTarget: false)?.FullName;
+                }
+                catch (Exception f) when (f is IOException or UnauthorizedAccessException)
+                {
+                    return (Reach.Failed, false);
+                }
             }
             if (target is null)
                 return (Reach.NotListed, false); // a reparse point that isn't a link (a cloud or deduplicated folder)
@@ -524,21 +538,6 @@ public sealed class Indexer(ApertureDatabase database, ThumbnailGenerator thumbn
                 (Reach.Failed, _) => (Reach.Failed, false),
                 _ => (Reach.NotListed, false), // there and not listed, refused, or listed a moment later: can't tell
             };
-        }
-
-        private bool PointsAtAFile(string link)
-        {
-            try
-            {
-                Looks++;
-                var first = Directory.ResolveLinkTarget(link, returnFinalTarget: false)?.FullName;
-                return first is not null && LookFor(first, out var attributes) == Found.Yes
-                    && !attributes.HasFlag(FileAttributes.Directory);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                return false;
-            }
         }
 
         // There, not there, a look that failed for another reason (a share dropping a call, a drive not ready), or one
