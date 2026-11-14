@@ -64,8 +64,9 @@ public class AnnotationTransferTests
     [Fact]
     public void AnImportForOneOfTwoNamesOnlyDotNetFoldsTogether_LeavesTheOtherFilesRow()
     {
-        // Round 28, D F-1: an import reaches the row its entry's path resolves to (M4), never the row the window shows
-        // for it: for "ς.jpg" beside a tagged "σ.jpg" (two files on NTFS, one path to the window), that's another file's.
+        // Round 28, D F-1: an import reaches the row its entry's path resolves to (M4), not through the row the window
+        // shows for it, which can be another file's: for "ς.jpg" beside a tagged "σ.jpg" (two files on NTFS, one path to
+        // the window), it's σ.jpg's.
         using var export = new TempDir();
         var exportFile = export.Combine("tags.json");
         using var b = new ApertureScope();
