@@ -3,6 +3,8 @@
 All notable changes to Aperture Image Browser are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
 ## [0.9.2] - 2026-11-15
 
 ### Added
@@ -32,7 +34,7 @@ All notable changes to Aperture Image Browser are documented here. The format fo
   `Ctrl`+`X` / `Ctrl`+`C`) put them all on the clipboard; before, only one went. In quick view
   and the inspector pane, their right-click menu's Cut and Copy act on the item shown.
 - Renaming the folder you're in no longer leaves nothing selected in the folder list.
-- A library opens even when two of its tags (“Österreich” and “österreich”) differ only in the
+- A library opens even when two of its tags ("Österreich" and "österreich") differ only in the
   case of an accented or non-Latin letter, or a file was tagged under two spellings of its path
   that differ so (its folder renamed that way in Explorer, say); before, Aperture closed as the
   tags were saved, and the library wouldn't open again.
