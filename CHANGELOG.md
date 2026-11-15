@@ -3,7 +3,7 @@
 All notable changes to Aperture Image Browser are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.9.2] - 2026-11-15
 
 ### Added
 - **A seek bar and the time for videos.** In quick view, a video's controls now have a bar you
